@@ -1,0 +1,44 @@
+name: E2E
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Install Playwright browser
+        # We only test in Chromium; saves ~80% of the install size.
+        run: npx playwright install --with-deps chromium
+
+      - name: Run Playwright tests
+        # AUTH_SECRET keeps Auth.js from refusing to boot; no real auth flow.
+        run: npm run test:e2e
+        env:
+          AUTH_SECRET: e2e-placeholder-secret-aaaaaaaaaaaaaaaaa
+          NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
+
+      - name: Upload Playwright report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

@@ -1,0 +1,21 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "nodenext",
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM"],
+    "jsx": "preserve",
+    "outDir": "./dist",
+    "rootDir": "..",
+    "declaration": false,
+    "noEmit": false,
+    "isolatedModules": false,
+    "verbatimModuleSyntax": false,
+    "paths": {
+      "@/*": ["../src/*"]
+    }
+  },
+  "include": ["./**/*.ts", "../src/lib/db/**/*.ts", "../src/lib/scanner/**/*.ts", "../src/lib/queue.ts"],
+  "exclude": ["node_modules", "../node_modules", "dist"]
+}

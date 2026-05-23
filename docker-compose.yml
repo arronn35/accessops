@@ -1,0 +1,71 @@
+# =============================================================
+# maitrico AccessOps AI — local development services
+# =============================================================
+# Brings up Postgres + Redis so you can run `npm run dev` and
+# `npm run worker:dev` against real services. The web app and
+# worker are intentionally run on host Node (not in containers)
+# during local dev for fast hot reload — only the data services
+# live in compose.
+#
+# Production runs none of this; Vercel + Neon + Upstash + Railway
+# replace these services.
+# =============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: accessops-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: accessops
+      POSTGRES_PASSWORD: accessops
+      POSTGRES_DB: accessops
+    volumes:
+      - accessops-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U accessops -d accessops"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: accessops-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - accessops-redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional: full stack in containers. Uncomment to bring up the
+  # worker too. Useful when verifying the production Docker image
+  # locally before deploying to Railway.
+  #
+  # worker:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.worker
+  #   container_name: accessops-worker
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   environment:
+  #     DATABASE_URL: postgresql://accessops:accessops@postgres:5432/accessops
+  #     REDIS_URL: redis://redis:6379
+  #     WORKER_CONCURRENCY: 1
+  #     SCAN_TIMEOUT_MS: 60000
+  #     NODE_ENV: development
+  #   ports:
+  #     - "8080:8080"
+
+volumes:
+  accessops-pgdata:
+  accessops-redisdata:

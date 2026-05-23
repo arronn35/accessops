@@ -1,0 +1,42 @@
+# =============================================================
+# maitrico AccessOps AI — scan worker
+# =============================================================
+# Single Dockerfile that produces a Railway-ready image.
+# Build:  docker build -f Dockerfile.worker -t accessops-worker .
+# Run:    docker run --env-file .env --rm accessops-worker
+#
+# Base image is Playwright's official Node + Chromium build so we
+# don't have to install Chromium dependencies by hand. The image is
+# bigger (~1.5 GB) but Railway charges by usage hours, not size.
+# =============================================================
+
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy AS base
+WORKDIR /app
+ENV NODE_ENV=production
+ENV WORKER_PROCESS=1
+ENV WORKER_HEALTH_PORT=8080
+
+# ---------- 1. install deps ----------
+# The worker runs TypeScript directly via `tsx`, so it needs the full
+# dependency tree (tsx + drizzle-kit live in devDependencies). We pass
+# --include=dev explicitly and override NODE_ENV for the install step
+# only, since `npm ci` honors NODE_ENV=production by skipping devDeps.
+COPY package.json package-lock.json* ./
+RUN NODE_ENV=development npm ci --include=dev --no-audit --no-fund
+
+# ---------- 2. copy source ----------
+COPY tsconfig.json drizzle.config.ts ./
+COPY src ./src
+COPY worker ./worker
+COPY drizzle ./drizzle
+
+EXPOSE 8080
+
+# Container-level healthcheck so orchestrators can restart a hung worker.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.WORKER_HEALTH_PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+
+# Drop privileges. The Playwright image already ships with a `pwuser`.
+USER pwuser
+
+CMD ["npx", "tsx", "worker/index.ts"]
