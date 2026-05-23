@@ -19,6 +19,7 @@ export {
 export { analyzeHtml, runStaticScanJob } from "./static-runner";
 export { inlineScanFallbackEnabled, processScanInline } from "./inline-runner";
 export { resolveScanSourcePlan, canonicalizeUrl, sameOriginCanonicalUrl } from "./sources";
+export { calculateScanScore, SCORING_VERSION } from "./scoring";
 
 export type {
   ScanInput,
@@ -27,6 +28,12 @@ export type {
   NormalizedIssue,
   Severity,
   Impact,
+  ScanViewportName,
+  ScanState,
+  ScanViewport,
+  IssueContext,
+  ResultConfidence,
+  ScanScoreSummary,
   ProgressStep,
   ProgressUpdate,
   ProgressCallback,

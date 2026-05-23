@@ -8,6 +8,7 @@ import {
   scanJobs,
   scanPages,
   accessibilityIssues,
+  scanSummaries,
 } from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
 
@@ -41,19 +42,53 @@ export async function GET(
       .where(eq(accessibilityIssues.scanJobId, id))
       .groupBy(accessibilityIssues.severity);
 
+    const impact = await db
+      .select({
+        impact: accessibilityIssues.impact,
+        count: sql<number>`count(*)::int`,
+      })
+      .from(accessibilityIssues)
+      .where(eq(accessibilityIssues.scanJobId, id))
+      .groupBy(accessibilityIssues.impact);
+
+    const [summary] = await db
+      .select()
+      .from(scanSummaries)
+      .where(eq(scanSummaries.scanJobId, id))
+      .limit(1);
+
     const counts = {
       critical: 0,
+      serious: 0,
       moderate: 0,
       minor: 0,
       passed: 0,
       review: 0,
     } as Record<string, number>;
     for (const row of severity) counts[row.severity] = row.count;
+    for (const row of impact) {
+      if (row.impact === "serious") counts.serious = row.count;
+    }
 
     return Response.json({
       scan: job,
       pagesCount: pagesCount[0]?.count ?? 0,
       counts,
+      scoreSummary: summary
+        ? {
+            overallScore: summary.overallScore,
+            grade: summary.grade,
+            riskLevel: summary.riskLevel,
+            issueCounts: summary.issueCountsJson,
+            wcagIssueCount: summary.wcagIssueCount,
+            bestPracticeIssueCount: summary.bestPracticeIssueCount,
+            manualReviewCount: summary.manualReviewCount,
+            categoryScores: summary.categoryScoresJson,
+            pageScores: summary.pageScoresJson,
+            scoringVersion: summary.scoringVersion,
+            createdAt: summary.createdAt,
+          }
+        : null,
     });
   } catch (err) {
     return apiError(err);

@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { analyzeHtml } from "./static-runner";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { analyzeHtml, runStaticScanJob } from "./static-runner";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("analyzeHtml", () => {
   it("reports core static accessibility failures", () => {
@@ -68,5 +72,40 @@ describe("analyzeHtml", () => {
 
     expect(out.links).toContain("https://accessops.example/pricing");
     expect(out.links.some((link) => link.startsWith("mailto:"))).toBe(false);
+  });
+
+  it("marks static fallback findings with degraded context metadata", () => {
+    const out = analyzeHtml("<html><head></head><body><img src='/x.png'></body></html>");
+    expect(out.issues.length).toBeGreaterThan(0);
+    expect(out.issues[0].contexts).toEqual([{ viewport: "desktop", state: "initial" }]);
+  });
+
+  it("marks static scan pages as low-confidence fallback results", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        url: "http://93.184.216.34/",
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () => "<html><head><title>Example</title></head><body><main>Ok</main></body></html>",
+      }))
+    );
+
+    const out = await runStaticScanJob({
+      jobId: "test",
+      url: "http://93.184.216.34/",
+      maxPages: 1,
+      scanType: "single",
+      includeScreenshots: false,
+      storeScreenshots: false,
+      timeoutMs: 1000,
+    });
+
+    expect(out.pages[0].rawMetadata).toMatchObject({
+      engine: "static-html-fallback",
+      fallbackMode: true,
+      resultConfidence: "low",
+    });
   });
 });

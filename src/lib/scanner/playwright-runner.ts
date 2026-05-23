@@ -34,17 +34,31 @@ import {
 } from "./sources";
 import { scanRenderProfile, type RenderProfile } from "../config";
 import type {
+  IssueContext,
   NormalizedIssue,
   NormalizedPage,
   ProgressCallback,
   ScanInput,
   ScanOutcome,
+  ScanState,
+  ScanViewport,
 } from "./types";
 
 const USER_AGENT =
   "Mozilla/5.0 (compatible; AccessOpsBot/1.0; +https://maitrico.com/bots)";
 
-const VIEWPORT = { width: 1280, height: 800 };
+const VIEWPORTS: ScanViewport[] = [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "mobile", width: 390, height: 844 },
+];
+const INTERACTIVE_STATES: Exclude<ScanState, "initial">[] = [
+  "menu-open",
+  "dialog-open",
+  "accordion-open",
+  "tab-open",
+  "form-focus",
+];
+const STATE_CANDIDATE_LIMIT = 2;
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB cap per page
 const NAV_TIMEOUT_MS = 30_000;
 const AXE_TIMEOUT_MS = 25_000;
@@ -85,10 +99,13 @@ export async function launchBrowser(): Promise<Browser> {
   });
 }
 
-async function newHardenedContext(browser: Browser): Promise<BrowserContext> {
+async function newHardenedContext(
+  browser: Browser,
+  viewport: ScanViewport = VIEWPORTS[0]
+): Promise<BrowserContext> {
   return browser.newContext({
     userAgent: USER_AGENT,
-    viewport: VIEWPORT,
+    viewport: { width: viewport.width, height: viewport.height },
     bypassCSP: false,
     javaScriptEnabled: true,
     ignoreHTTPSErrors: false,
@@ -149,17 +166,102 @@ export async function scanSinglePage(
   const profile = scanRenderProfile();
   const blocklist = resourceBlocklist(profile);
   const pageStartedAt = Date.now();
+  const variants: Array<{
+    finalUrl: string;
+    title: string | null;
+    statusCode: number | null;
+    issues: NormalizedIssue[];
+    metadata: Record<string, unknown>;
+  }> = [];
 
-  const context = await newHardenedContext(browser);
+  for (const viewport of VIEWPORTS) {
+    const initial = await scanPageVariant({
+      browser,
+      url: validated.normalized,
+      validated,
+      profile,
+      blocklist,
+      viewport,
+      state: "initial",
+    });
+    variants.push(initial);
+
+    for (const state of INTERACTIVE_STATES) {
+      for (let candidateIndex = 0; candidateIndex < STATE_CANDIDATE_LIMIT; candidateIndex += 1) {
+        const result = await scanPageVariant({
+          browser,
+          url: validated.normalized,
+          validated,
+          profile,
+          blocklist,
+          viewport,
+          state,
+          candidateIndex,
+        }).catch(() => null);
+        if (!result) break;
+        variants.push(result);
+      }
+    }
+  }
+
+  const first = variants[0];
+  const issues = dedupeIssues(variants.flatMap((variant) => variant.issues));
+  const metadata = variants.map((variant) => variant.metadata);
+
+  let screenshotPath: string | undefined;
+  if (options.includeScreenshots) {
+    screenshotPath = undefined;
+  }
+
+  return {
+    url: first.finalUrl,
+    title: first.title,
+    statusCode: first.statusCode,
+    scannedAt: new Date(),
+    screenshotPath,
+    rawMetadata: {
+      axeVersion: metadata.find((m) => typeof m.axeVersion === "string")?.axeVersion ?? null,
+      renderProfile: profile,
+      resourcePolicy: Array.from(blocklist).sort(),
+      viewports: VIEWPORTS,
+      viewport: VIEWPORTS[0],
+      states: ["initial", ...INTERACTIVE_STATES],
+      userAgent: USER_AGENT,
+      engine: "playwright-axe",
+      scanner: "playwright-axe",
+      fallbackMode: false,
+      resultConfidence: "high",
+      domHash: metadata.find((m) => typeof m.domHash === "string")?.domHash ?? null,
+      scannedUrl: first.finalUrl,
+      durationMs: Date.now() - pageStartedAt,
+      variants: metadata,
+    },
+    issues,
+  };
+}
+
+async function scanPageVariant(args: {
+  browser: Browser;
+  url: string;
+  validated: Awaited<ReturnType<typeof validateUrl>>;
+  profile: RenderProfile;
+  blocklist: Set<string>;
+  viewport: ScanViewport;
+  state: ScanState;
+  candidateIndex?: number;
+}): Promise<{
+  finalUrl: string;
+  title: string | null;
+  statusCode: number | null;
+  issues: NormalizedIssue[];
+  metadata: Record<string, unknown>;
+}> {
+  const { browser, url, validated, profile, blocklist, viewport, state } = args;
+  const context = await newHardenedContext(browser, viewport);
   const page = await context.newPage();
   await configurePage(page, validated.host, blocklist);
-
-  let response;
   let bytesSeen = 0;
 
-  // Body-size cap: we don't have a direct hook for this in Playwright,
-  // but we approximate via response.body() length checks (deferred to
-  // axe phase) and the navigation-timeout safety net.
   page.on("response", async (resp) => {
     try {
       const cl = resp.headers()["content-length"];
@@ -170,14 +272,13 @@ export async function scanSinglePage(
   });
 
   try {
-    response = await page.goto(validated.normalized, {
+    const response = await page.goto(url, {
       waitUntil: "domcontentloaded",
       timeout: NAV_TIMEOUT_MS,
     });
 
-    // Re-validate after potential redirects.
     const finalUrl = page.url();
-    if (finalUrl !== validated.normalized) {
+    if (finalUrl !== url) {
       try {
         await validateFinalUrl(finalUrl, validated.origin);
       } catch (err) {
@@ -189,9 +290,16 @@ export async function scanSinglePage(
       throw new Error(`Response body too large (${bytesSeen} bytes)`);
     }
 
-    // Give the page a moment for late-mounted React/Vue/Angular content
-    // to settle, then run axe.
     await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
+
+    if (state !== "initial") {
+      const applied = await applyState(page, state, args.candidateIndex ?? 0);
+      if (!applied) {
+        throw new Error("state_not_available");
+      }
+      await page.waitForTimeout(350).catch(() => undefined);
+      await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
+    }
 
     const axeBuilder = new AxeBuilder({ page }).withTags([
       "wcag2a",
@@ -210,55 +318,141 @@ export async function scanSinglePage(
     ])) as Awaited<ReturnType<AxeBuilder["analyze"]>>;
 
     const domHtml = await page.content().catch(() => "");
-    const heuristicIssues = domHtml ? staticExpertHeuristics(domHtml) : [];
-    const issues: NormalizedIssue[] = dedupeIssues([
-      ...normalizeAxeResults({
-        violations: axeResult.violations,
-        incomplete: axeResult.incomplete,
-      }),
-      ...heuristicIssues,
-    ]);
-
-    const title = await page.title().catch(() => null);
-    const statusCode = response?.status() ?? null;
-
-    let screenshotPath: string | undefined;
-    if (options.includeScreenshots) {
-      // We capture to buffer here but DO NOT persist unless the worker
-      // explicitly enables screenshot storage. The worker decides what
-      // to do with the buffer based on workspace privacy settings.
-      // For MVP we expose only the path placeholder.
-      screenshotPath = undefined;
-    }
+    const contextMeta: IssueContext = { viewport: viewport.name, state };
+    const issues = withContext(
+      [
+        ...normalizeAxeResults({
+          violations: axeResult.violations,
+          incomplete: axeResult.incomplete,
+        }),
+        ...(domHtml ? staticExpertHeuristics(domHtml) : []),
+      ],
+      contextMeta
+    );
 
     return {
-      url: finalUrl,
-      title,
-      statusCode,
-      scannedAt: new Date(),
-      screenshotPath,
-      rawMetadata: {
-        axeTestEngine: axeResult.testEngine,
-        axeTestRunner: axeResult.testRunner,
+      finalUrl,
+      title: await page.title().catch(() => null),
+      statusCode: response?.status() ?? null,
+      issues,
+      metadata: {
         axeVersion: axeResult.testEngine?.version ?? null,
-        renderProfile: profile,
-        resourcePolicy: Array.from(blocklist).sort(),
-        viewport: VIEWPORT,
-        userAgent: USER_AGENT,
-        engine: "axe-core + AccessOps Expert Heuristics",
+        viewport,
+        state,
         domHash: domHtml ? hashHtml(domHtml) : null,
-        scannedUrl: finalUrl,
-        durationMs: Date.now() - pageStartedAt,
         passes: axeResult.passes.length,
         incomplete: axeResult.incomplete.length,
         violations: axeResult.violations.length,
+        renderProfile: profile,
       },
-      issues,
     };
   } finally {
     await page.close({ runBeforeUnload: false }).catch(() => undefined);
     await context.close().catch(() => undefined);
   }
+}
+
+async function applyState(
+  page: Page,
+  state: Exclude<ScanState, "initial">,
+  candidateIndex: number
+): Promise<boolean> {
+  return page.evaluate(
+    ({ state, candidateIndex }) => {
+      const danger =
+        /(checkout|payment|pay|purchase|buy|order|cart|delete|remove|destroy|submit|subscribe|sign\s?out|log\s?out)/i;
+      const visible = (el: Element) => {
+        const rect = el.getBoundingClientRect();
+        const style = window.getComputedStyle(el);
+        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+      };
+      const name = (el: Element) =>
+        [
+          el.getAttribute("aria-label"),
+          el.getAttribute("title"),
+          el.getAttribute("data-testid"),
+          el.getAttribute("id"),
+          el.textContent,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .trim();
+      const safe = (el: Element) => {
+        const label = name(el);
+        if (!visible(el) || danger.test(label)) return false;
+        if (el instanceof HTMLButtonElement) {
+          if (el.disabled || el.type === "submit" || el.closest("form")) return false;
+        }
+        if (el instanceof HTMLAnchorElement) {
+          const href = el.getAttribute("href") ?? "";
+          if (href && href !== "#" && !href.startsWith("#") && !href.startsWith("javascript:")) {
+            return false;
+          }
+        }
+        return true;
+      };
+      const click = (el: Element) => {
+        (el as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
+        (el as HTMLElement).click();
+        return true;
+      };
+      const buttonish = Array.from(
+        document.querySelectorAll<HTMLElement>("button,[role='button'],summary")
+      ).filter(safe);
+      let candidates: HTMLElement[] = [];
+
+      if (state === "menu-open") {
+        candidates = buttonish.filter((el) => {
+          const label = name(el);
+          return (
+            el.getAttribute("aria-expanded") === "false" &&
+            (/menu|navigation|nav|hamburger/i.test(label) ||
+              el.getAttribute("aria-haspopup") === "menu" ||
+              /menu|nav/i.test(el.getAttribute("aria-controls") ?? ""))
+          );
+        });
+      } else if (state === "dialog-open") {
+        candidates = buttonish.filter((el) => {
+          const label = name(el);
+          return (
+            el.getAttribute("aria-haspopup") === "dialog" ||
+            /modal|dialog/i.test(label) ||
+            /modal|dialog/i.test(el.getAttribute("aria-controls") ?? "")
+          );
+        });
+      } else if (state === "accordion-open") {
+        candidates = buttonish.filter((el) => {
+          if (el.tagName.toLowerCase() === "summary") return true;
+          const label = name(el);
+          return (
+            el.getAttribute("aria-expanded") === "false" &&
+            !/menu|navigation|nav|modal|dialog/i.test(label) &&
+            el.getAttribute("aria-haspopup") !== "menu" &&
+            el.getAttribute("aria-haspopup") !== "dialog"
+          );
+        });
+      } else if (state === "tab-open") {
+        candidates = Array.from(
+          document.querySelectorAll<HTMLElement>("[role='tab'][aria-selected='false']")
+        ).filter(safe);
+      } else if (state === "form-focus") {
+        candidates = Array.from(
+          document.querySelectorAll<HTMLElement>(
+            "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']),textarea,select,[contenteditable='true']"
+          )
+        ).filter((el) => visible(el) && !(el as HTMLInputElement).disabled);
+        const target = candidates[candidateIndex];
+        if (!target) return false;
+        target.scrollIntoView({ block: "center", inline: "center" });
+        target.focus({ preventScroll: true });
+        return document.activeElement === target;
+      }
+
+      const target = candidates[candidateIndex];
+      return target ? click(target) : false;
+    },
+    { state, candidateIndex }
+  );
 }
 
 /**
@@ -406,14 +600,61 @@ async function discoverLinksOnce(
   }
 }
 
+function withContext(
+  issues: NormalizedIssue[],
+  context: IssueContext
+): NormalizedIssue[] {
+  return issues.map((issue) => ({
+    ...issue,
+    contexts: mergeContexts(issue.contexts ?? [], [context]),
+  }));
+}
+
 function dedupeIssues(issues: NormalizedIssue[]): NormalizedIssue[] {
+  const byKey = new Map<string, NormalizedIssue>();
+  for (const issue of issues) {
+    const key = issueKey(issue);
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, {
+        ...issue,
+        wcagTags: Array.from(new Set(issue.wcagTags)),
+        contexts: mergeContexts(issue.contexts ?? [], []),
+      });
+      continue;
+    }
+    existing.wcagTags = Array.from(new Set([...existing.wcagTags, ...issue.wcagTags]));
+    existing.contexts = mergeContexts(existing.contexts ?? [], issue.contexts ?? []);
+    existing.humanReviewRequired =
+      existing.humanReviewRequired || issue.humanReviewRequired;
+    if (!existing.failureSummary && issue.failureSummary) {
+      existing.failureSummary = issue.failureSummary;
+    }
+  }
+  return Array.from(byKey.values());
+}
+
+function mergeContexts(a: IssueContext[], b: IssueContext[]): IssueContext[] {
   const seen = new Set<string>();
-  return issues.filter((issue) => {
-    const key = `${issue.ruleId}:${issue.target.join(",")}:${issue.htmlSnippet ?? ""}`;
-    if (seen.has(key)) return false;
+  const out: IssueContext[] = [];
+  for (const ctx of [...a, ...b]) {
+    const key = `${ctx.viewport}:${ctx.state}`;
+    if (seen.has(key)) continue;
     seen.add(key);
-    return true;
-  });
+    out.push(ctx);
+  }
+  return out;
+}
+
+function issueKey(issue: NormalizedIssue): string {
+  const target = issue.target.map((part) => part.replace(/\s+/g, " ").trim()).join("|");
+  const snippetHash = createHash("sha1")
+    .update(issue.htmlSnippet ?? "")
+    .digest("hex")
+    .slice(0, 10);
+  const reviewFlag =
+    issue.severity === "review" || issue.humanReviewRequired ? "review" : "violation";
+  return `${issue.ruleId}:${target}:${snippetHash}:${reviewFlag}`;
 }
 
 function hashHtml(html: string): string {

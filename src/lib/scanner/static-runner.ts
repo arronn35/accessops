@@ -11,6 +11,7 @@ import type {
   ScanOutcome,
   Severity,
   Impact,
+  IssueContext,
 } from "./types";
 import { staticExpertHeuristics } from "./expert-heuristics";
 import { resolveScanSourcePlan, sameOriginCanonicalUrl } from "./sources";
@@ -83,10 +84,13 @@ export async function runStaticScanJob(
       statusCode: fetched.statusCode,
       scannedAt: new Date(),
       rawMetadata: {
-        engine: "AccessOps Static Scanner",
+        engine: "static-html-fallback",
         scanner: "static-html",
         renderProfile: "static-fetch",
         fallbackMode: true,
+        resultConfidence: "low",
+        viewports: [],
+        states: ["initial"],
         contentType: fetched.contentType,
         pageCap: maxPages,
         discoverySource: plan.discoverySource,
@@ -274,7 +278,10 @@ export function analyzeHtml(html: string, pageUrl = "https://example.com/"): Htm
 
   return {
     title,
-    issues: dedupeIssues([...issues, ...staticExpertHeuristics(clipped)]),
+    issues: dedupeIssues([...issues, ...staticExpertHeuristics(clipped)]).map((i) => ({
+      ...i,
+      contexts: i.contexts ?? [{ viewport: "desktop", state: "initial" }],
+    })),
     links: extractLinks(clipped, pageUrl),
   };
 }
@@ -328,12 +335,14 @@ function issue(input: {
   target: string[];
   htmlSnippet?: string;
   humanReviewRequired?: boolean;
+  contexts?: IssueContext[];
 }): NormalizedIssue {
   return {
     ...input,
     htmlSnippet: input.htmlSnippet ? truncate(input.htmlSnippet) : undefined,
     failureSummary: input.help,
     humanReviewRequired: input.humanReviewRequired ?? false,
+    contexts: input.contexts ?? [{ viewport: "desktop", state: "initial" }],
   };
 }
 

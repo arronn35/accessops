@@ -36,6 +36,13 @@
       "when": 1779499000000,
       "tag": "0004_scan_source_urls",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1779581000000,
+      "tag": "0005_scan_summaries",
+      "breakpoints": true
     }
   ]
 }

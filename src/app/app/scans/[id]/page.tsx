@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 import { and, asc, eq } from "drizzle-orm";
 import {
-  ArrowLeft, Download, FileBarChart2, Filter, Globe, Sparkles,
+  AlertTriangle, ArrowLeft, Download, FileBarChart2, Filter, Globe, Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -16,6 +16,7 @@ import {
   scanJobs,
   scanPages,
   accessibilityIssues,
+  scanSummaries,
 } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { type IssueCategory } from "@/lib/mock/issues";
@@ -53,6 +54,8 @@ export default async function ScanResultsPage({
       help: accessibilityIssues.help,
       helpUrl: accessibilityIssues.helpUrl,
       wcagTagsJson: accessibilityIssues.wcagTagsJson,
+      targetJson: accessibilityIssues.targetJson,
+      contextsJson: accessibilityIssues.contextsJson,
       htmlSnippet: accessibilityIssues.htmlSnippet,
       humanReviewRequired: accessibilityIssues.humanReviewRequired,
       status: accessibilityIssues.status,
@@ -69,25 +72,33 @@ export default async function ScanResultsPage({
     .from(scanPages)
     .where(eq(scanPages.scanJobId, scan.id));
 
+  const [summary] = await db
+    .select()
+    .from(scanSummaries)
+    .where(eq(scanSummaries.scanJobId, scan.id))
+    .limit(1);
+
   const scanProfile = readScanProfile(pages);
 
   const counts = {
     critical: 0,
+    serious: 0,
     moderate: 0,
     minor: 0,
     review: 0,
     passed: 0,
   };
-  for (const i of issueRows) counts[i.severity as keyof typeof counts]++;
+  for (const i of issueRows) {
+    if (i.severity === "review") counts.review++;
+    else if (i.impact === "critical") counts.critical++;
+    else if (i.impact === "serious") counts.serious++;
+    else if (i.impact === "moderate") counts.moderate++;
+    else if (i.impact === "minor") counts.minor++;
+    else counts[i.severity as keyof typeof counts]++;
+  }
 
-  // Score: 100 - weighted findings, floored at 0.
-  const score = Math.max(
-    0,
-    Math.min(
-      100,
-      100 - counts.critical * 6 - counts.moderate * 3 - counts.minor * 1 - counts.review * 1
-    )
-  );
+  const score = summary?.overallScore ?? legacyScore(counts);
+  const contextSummary = summarizeContexts(issueRows);
 
   return (
     <div className="px-4 lg:px-8 py-8 space-y-6 max-w-[1400px]">
@@ -116,6 +127,14 @@ export default async function ScanResultsPage({
 
       <Card>
         <CardContent className="pt-5">
+          {scanProfile.fallbackMode && (
+            <div className="mb-5 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900 flex gap-2">
+              <AlertTriangle className="size-4 shrink-0 mt-0.5" aria-hidden />
+              <p>
+                This scan used a degraded static fallback and may miss JavaScript-rendered accessibility issues.
+              </p>
+            </div>
+          )}
           <div className="grid grid-cols-1 lg:grid-cols-[auto_1fr_auto] gap-6 items-start">
             <ScanScoreRing score={score} size="lg" />
             <div className="min-w-0">
@@ -141,10 +160,23 @@ export default async function ScanResultsPage({
                 </span>
                 <span className="text-ink-300">·</span>
                 <span>{formatScanEngine(scanProfile)}</span>
+                {summary && (
+                  <>
+                    <span className="text-ink-300">·</span>
+                    <span>
+                      Grade <strong className="text-ink-900 font-semibold">{summary.grade}</strong>
+                    </span>
+                    <span className="text-ink-300">·</span>
+                    <span>
+                      Risk <strong className="text-ink-900 font-semibold">{summary.riskLevel}</strong>
+                    </span>
+                  </>
+                )}
               </div>
             </div>
             <div className="flex gap-2 lg:flex-col w-full lg:w-auto">
               <SeverityStat severity="critical" count={counts.critical} />
+              <SeverityStat severity="serious" count={counts.serious} />
               <SeverityStat severity="moderate" count={counts.moderate} />
               <SeverityStat severity="minor" count={counts.minor} />
             </div>
@@ -181,46 +213,64 @@ export default async function ScanResultsPage({
             </span>
             <FilterChip label="All" count={issueRows.length} active />
             <FilterChip label="Critical" count={counts.critical} severity="critical" />
+            <FilterChip label="Serious" count={counts.serious} severity="serious" />
             <FilterChip label="Moderate" count={counts.moderate} severity="moderate" />
             <FilterChip label="Minor" count={counts.minor} severity="minor" />
             <FilterChip label="Needs review" count={counts.review} severity="review" />
           </div>
 
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
+              <Filter className="size-3.5" aria-hidden /> Viewport:
+            </span>
+            <FilterChip label="Desktop" count={contextSummary.desktop} />
+            <FilterChip label="Mobile" count={contextSummary.mobile} />
+            <FilterChip label="Both" count={contextSummary.both} />
+            <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700 ml-2">
+              State:
+            </span>
+            {Object.entries(contextSummary.states).map(([state, count]) => (
+              <FilterChip key={state} label={state} count={count} />
+            ))}
+          </div>
+
           <div className="space-y-2.5">
             {issueRows.map((issue) => (
-              <IssueCard
-                key={issue.id}
-                scanId={scan.id}
-                issue={{
-                  id: issue.id,
-                  title: issue.help,
-                  severity: issue.severity as "critical" | "moderate" | "minor" | "passed" | "review",
-                  category: inferCategory(issue.ruleId),
-                  page: issue.pageUrl ?? scan.baseUrl,
-                  pageTitle: issue.pageTitle ?? "",
-                  element: (issue as unknown as { targetJson?: string[] }).targetJson?.[0] ?? "",
-                  wcag: {
-                    criterion: (issue.wcagTagsJson ?? []).find((t: string) =>
-                      /^wcag\d/.test(t)
-                    ) ?? "—",
-                    level: (issue.wcagTagsJson ?? []).includes("wcag2aaa")
-                      ? "AAA"
-                      : (issue.wcagTagsJson ?? []).includes("wcag2aa")
-                      ? "AA"
-                      : "A",
-                    version: "2.2",
-                  },
-                  whyMatters: issue.description,
-                  whoAffects: [],
-                  howToFix: "",
-                  before: { language: "html", code: "" },
-                  after: { language: "html", code: "" },
-                  aiExplanation: "",
-                  humanReviewRequired: issue.humanReviewRequired,
-                  status: "to_review",
-                  manualChecks: [],
-                }}
-              />
+              <div key={issue.id} className="space-y-1">
+                <ContextLine contexts={issue.contextsJson ?? []} />
+                <IssueCard
+                  scanId={scan.id}
+                  issue={{
+                    id: issue.id,
+                    title: issue.help,
+                    severity: issue.severity as "critical" | "moderate" | "minor" | "passed" | "review",
+                    category: inferCategory(issue.ruleId),
+                    page: issue.pageUrl ?? scan.baseUrl,
+                    pageTitle: issue.pageTitle ?? "",
+                    element: issue.targetJson?.[0] ?? "",
+                    wcag: {
+                      criterion: (issue.wcagTagsJson ?? []).find((t: string) =>
+                        /^wcag\d/.test(t)
+                      ) ?? "—",
+                      level: (issue.wcagTagsJson ?? []).includes("wcag2aaa")
+                        ? "AAA"
+                        : (issue.wcagTagsJson ?? []).includes("wcag2aa")
+                        ? "AA"
+                        : "A",
+                      version: "2.2",
+                    },
+                    whyMatters: issue.description,
+                    whoAffects: [],
+                    howToFix: "",
+                    before: { language: "html", code: "" },
+                    after: { language: "html", code: "" },
+                    aiExplanation: "",
+                    humanReviewRequired: issue.humanReviewRequired,
+                    status: "to_review",
+                    manualChecks: [],
+                  }}
+                />
+              </div>
             ))}
           </div>
         </div>
@@ -249,7 +299,16 @@ export default async function ScanResultsPage({
                   }
                 />
                 <ProfileRow label="Engine" value={formatScanEngine(scanProfile)} />
-                <ProfileRow label="Viewport" value={scanProfile.viewport ?? "—"} />
+                <ProfileRow label="Confidence" value={scanProfile.resultConfidence ?? "—"} />
+                <ProfileRow label="Viewports" value={scanProfile.viewports ?? scanProfile.viewport ?? "—"} />
+                <ProfileRow label="States" value={scanProfile.states ?? "—"} />
+                {summary && (
+                  <>
+                    <ProfileRow label="WCAG findings" value={String(summary.wcagIssueCount)} />
+                    <ProfileRow label="Best practices" value={String(summary.bestPracticeIssueCount)} />
+                    <ProfileRow label="Manual review" value={String(summary.manualReviewCount)} />
+                  </>
+                )}
               </dl>
               <p className="text-[11px] text-ink-500 leading-relaxed mt-3 pt-3 border-t border-line/60">
                 Automated checks detect roughly 30–50% of accessibility issues.
@@ -304,11 +363,12 @@ function SeverityStat({
   severity,
   count,
 }: {
-  severity: "critical" | "moderate" | "minor";
+  severity: "critical" | "serious" | "moderate" | "minor";
   count: number;
 }) {
   const map = {
     critical: { bg: "bg-rose-50", text: "text-rose-700", ring: "ring-rose-50" },
+    serious: { bg: "bg-amber-50", text: "text-amber-700", ring: "ring-amber-50" },
     moderate: { bg: "bg-amber-50", text: "text-amber-700", ring: "ring-amber-50" },
     minor: { bg: "bg-blue-50", text: "text-blue-700", ring: "ring-blue-100" },
   };
@@ -329,7 +389,7 @@ function FilterChip({
   label: string;
   count: number;
   active?: boolean;
-  severity?: "critical" | "moderate" | "minor" | "review";
+  severity?: "critical" | "serious" | "moderate" | "minor" | "review";
 }) {
   const baseClasses = active
     ? "bg-navy-900 text-paper ring-navy-900"
@@ -346,6 +406,8 @@ function FilterChip({
             background:
               severity === "critical"
                 ? "var(--color-rose-500)"
+                : severity === "serious"
+                ? "var(--color-amber-500)"
                 : severity === "moderate"
                 ? "var(--color-amber-500)"
                 : severity === "minor"
@@ -375,6 +437,10 @@ interface ScanProfile {
   axeVersion: string | null;
   engine: string | null;
   viewport: string | null;
+  viewports: string | null;
+  states: string | null;
+  fallbackMode: boolean;
+  resultConfidence: string | null;
 }
 
 function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
@@ -383,6 +449,20 @@ function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
     if (m && typeof m === "object") {
       const meta = m as Record<string, unknown>;
       const vp = meta.viewport as { width?: number; height?: number } | undefined;
+      const viewports = Array.isArray(meta.viewports)
+        ? meta.viewports
+            .map((item) => {
+              const viewport = item as { name?: string; width?: number; height?: number };
+              return viewport.name && viewport.width && viewport.height
+                ? `${viewport.name} ${viewport.width}×${viewport.height}`
+                : null;
+            })
+            .filter(Boolean)
+            .join(", ")
+        : null;
+      const states = Array.isArray(meta.states)
+        ? meta.states.filter((item) => typeof item === "string").join(", ")
+        : null;
       return {
         renderProfile:
           typeof meta.renderProfile === "string" ? meta.renderProfile : null,
@@ -390,10 +470,24 @@ function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
         engine: typeof meta.engine === "string" ? meta.engine : null,
         viewport:
           vp?.width && vp?.height ? `${vp.width}×${vp.height}` : null,
+        viewports: viewports || null,
+        states: states || null,
+        fallbackMode: meta.fallbackMode === true,
+        resultConfidence:
+          typeof meta.resultConfidence === "string" ? meta.resultConfidence : null,
       };
     }
   }
-  return { renderProfile: null, axeVersion: null, engine: null, viewport: null };
+  return {
+    renderProfile: null,
+    axeVersion: null,
+    engine: null,
+    viewport: null,
+    viewports: null,
+    states: null,
+    fallbackMode: false,
+    resultConfidence: null,
+  };
 }
 
 function formatScanEngine(profile: ScanProfile): string {
@@ -407,5 +501,84 @@ function ProfileRow({ label, value }: { label: string; value: string }) {
       <dt className="text-ink-500 shrink-0">{label}</dt>
       <dd className="text-ink-800 text-right">{value}</dd>
     </div>
+  );
+}
+
+type IssueContext = {
+  viewport: "desktop" | "mobile";
+  state:
+    | "initial"
+    | "menu-open"
+    | "dialog-open"
+    | "accordion-open"
+    | "tab-open"
+    | "form-focus";
+};
+
+function legacyScore(counts: {
+  critical: number;
+  serious: number;
+  moderate: number;
+  minor: number;
+  review: number;
+}): number {
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      100 -
+        counts.critical * 10 -
+        counts.serious * 6 -
+        counts.moderate * 3 -
+        counts.minor -
+        counts.review * 2
+    )
+  );
+}
+
+function summarizeContexts(
+  issues: Array<{ contextsJson: IssueContext[] | null }>
+): {
+  desktop: number;
+  mobile: number;
+  both: number;
+  states: Record<IssueContext["state"], number>;
+} {
+  const summary = {
+    desktop: 0,
+    mobile: 0,
+    both: 0,
+    states: {
+      initial: 0,
+      "menu-open": 0,
+      "dialog-open": 0,
+      "accordion-open": 0,
+      "tab-open": 0,
+      "form-focus": 0,
+    },
+  };
+  for (const issue of issues) {
+    const contexts = issue.contextsJson ?? [];
+    const viewports = new Set(contexts.map((ctx) => ctx.viewport));
+    if (viewports.has("desktop")) summary.desktop++;
+    if (viewports.has("mobile")) summary.mobile++;
+    if (viewports.has("desktop") && viewports.has("mobile")) summary.both++;
+    for (const state of new Set(contexts.map((ctx) => ctx.state))) {
+      if (state in summary.states) {
+        summary.states[state as IssueContext["state"]]++;
+      }
+    }
+  }
+  return summary;
+}
+
+function ContextLine({ contexts }: { contexts: IssueContext[] }) {
+  if (!contexts.length) return null;
+  const viewports = Array.from(new Set(contexts.map((ctx) => ctx.viewport))).join(", ");
+  const states = Array.from(new Set(contexts.map((ctx) => ctx.state))).join(", ");
+  return (
+    <p className="text-[11px] text-ink-500 px-1">
+      Found on {viewports || "unknown viewport"} · {states || "initial"}
+    </p>
   );
 }

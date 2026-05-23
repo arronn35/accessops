@@ -47,6 +47,7 @@ export async function GET(
         help: accessibilityIssues.help,
         helpUrl: accessibilityIssues.helpUrl,
         targetJson: accessibilityIssues.targetJson,
+        contextsJson: accessibilityIssues.contextsJson,
         htmlSnippet: accessibilityIssues.htmlSnippet,
         humanReviewRequired: accessibilityIssues.humanReviewRequired,
         status: accessibilityIssues.status,

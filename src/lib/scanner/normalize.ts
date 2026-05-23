@@ -7,7 +7,7 @@
  *   axe.impact   →  severity
  *   ───────────     ────────
  *   critical     →  critical
- *   serious      →  critical   (axe's "serious" blocks real users)
+ *   serious      →  moderate   (impact remains "serious" for scoring)
  *   moderate     →  moderate
  *   minor        →  minor
  *   (missing)    →  review     (incomplete rule — needs human eyes)
@@ -31,7 +31,7 @@ const NEEDS_HUMAN_REVIEW = new Set<string>([
 
 const SEVERITY_BY_IMPACT: Record<NonNullable<NodeResult["impact"]>, Severity> = {
   critical: "critical",
-  serious: "critical",
+  serious: "moderate",
   moderate: "moderate",
   minor: "minor",
 };

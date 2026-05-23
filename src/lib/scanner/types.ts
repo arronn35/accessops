@@ -6,6 +6,26 @@
 
 export type Severity = "critical" | "moderate" | "minor" | "passed" | "review";
 export type Impact = "minor" | "moderate" | "serious" | "critical";
+export type ScanViewportName = "desktop" | "mobile";
+export type ScanState =
+  | "initial"
+  | "menu-open"
+  | "dialog-open"
+  | "accordion-open"
+  | "tab-open"
+  | "form-focus";
+export type ResultConfidence = "high" | "medium" | "low";
+
+export interface ScanViewport {
+  name: ScanViewportName;
+  width: number;
+  height: number;
+}
+
+export interface IssueContext {
+  viewport: ScanViewportName;
+  state: ScanState;
+}
 
 export interface ScanInput {
   jobId: string;
@@ -31,6 +51,7 @@ export interface NormalizedIssue {
   htmlSnippet?: string;
   failureSummary?: string;
   humanReviewRequired: boolean;
+  contexts?: IssueContext[];
 }
 
 export interface NormalizedPage {
@@ -41,6 +62,41 @@ export interface NormalizedPage {
   screenshotPath?: string;
   rawMetadata?: Record<string, unknown>;
   issues: NormalizedIssue[];
+}
+
+export interface ScanScoreSummary {
+  overallScore: number;
+  grade: "A" | "B" | "C" | "D" | "F";
+  riskLevel: "low" | "medium" | "high" | "critical";
+  issueCounts: {
+    critical: number;
+    serious: number;
+    moderate: number;
+    minor: number;
+    review: number;
+  };
+  wcagIssueCount: number;
+  bestPracticeIssueCount: number;
+  manualReviewCount: number;
+  categoryScores: Record<
+    | "colorContrast"
+    | "aria"
+    | "keyboard"
+    | "forms"
+    | "textAlternatives"
+    | "semanticStructure"
+    | "language"
+    | "media"
+    | "bestPractices",
+    number
+  >;
+  pageScores: Array<{
+    url: string;
+    title: string | null;
+    score: number;
+    issueCounts: ScanScoreSummary["issueCounts"];
+  }>;
+  scoringVersion: string;
 }
 
 export interface ScanOutcome {

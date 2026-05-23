@@ -15,6 +15,7 @@ import { db } from "@/lib/db";
 import {
   scanJobs,
   accessibilityIssues,
+  scanSummaries,
 } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { formatRelative } from "@/lib/utils";
@@ -48,6 +49,7 @@ export default async function DashboardPage() {
     : [];
 
   const counts = { critical: 0, moderate: 0, minor: 0, review: 0, passed: 0 };
+  let latestSummary: typeof scanSummaries.$inferSelect | null = null;
   if (latest) {
     const sevRows = await db
       .select({
@@ -60,22 +62,15 @@ export default async function DashboardPage() {
     for (const row of sevRows) {
       counts[row.severity as keyof typeof counts] = row.count;
     }
+    [latestSummary] = await db
+      .select()
+      .from(scanSummaries)
+      .where(eq(scanSummaries.scanJobId, latest.id))
+      .limit(1);
   }
 
   const total = counts.critical + counts.moderate + counts.minor + counts.review;
-  const score = latest
-    ? Math.max(
-        0,
-        Math.min(
-          100,
-          100 -
-            counts.critical * 6 -
-            counts.moderate * 3 -
-            counts.minor * 1 -
-            counts.review * 1
-        )
-      )
-    : null;
+  const score = latest ? latestSummary?.overallScore ?? legacyScore(counts) : null;
 
   return (
     <div className="px-4 lg:px-8 py-8 space-y-8">
@@ -292,6 +287,25 @@ export default async function DashboardPage() {
         </>
       )}
     </div>
+  );
+}
+
+function legacyScore(counts: {
+  critical: number;
+  moderate: number;
+  minor: number;
+  review: number;
+}): number {
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      100 -
+        counts.critical * 10 -
+        counts.moderate * 3 -
+        counts.minor -
+        counts.review * 2
+    )
   );
 }
 

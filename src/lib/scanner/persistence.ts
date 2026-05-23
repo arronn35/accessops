@@ -5,9 +5,11 @@ import {
   db,
   scanJobs,
   scanPages,
+  scanSummaries,
   usageLimits,
 } from "@/lib/db";
 import type { NormalizedIssue, NormalizedPage, ScanOutcome } from "./types";
+import { calculateScanScore } from "./scoring";
 
 export async function persistScanOutcome(
   scanJobId: string,
@@ -41,6 +43,7 @@ export async function persistScanOutcome(
         help: i.help,
         helpUrl: i.helpUrl,
         targetJson: i.target,
+        contextsJson: i.contexts,
         htmlSnippet: i.htmlSnippet,
         failureSummary: i.failureSummary,
         humanReviewRequired: i.humanReviewRequired,
@@ -70,6 +73,39 @@ export async function completeScanJob(
     workspaceId: string;
   }
 ) {
+  const summary = calculateScanScore(outcome.pages);
+
+  await db
+    .insert(scanSummaries)
+    .values({
+      scanJobId,
+      overallScore: summary.overallScore,
+      grade: summary.grade,
+      riskLevel: summary.riskLevel,
+      issueCountsJson: summary.issueCounts,
+      categoryScoresJson: summary.categoryScores,
+      pageScoresJson: summary.pageScores,
+      wcagIssueCount: summary.wcagIssueCount,
+      bestPracticeIssueCount: summary.bestPracticeIssueCount,
+      manualReviewCount: summary.manualReviewCount,
+      scoringVersion: summary.scoringVersion,
+    })
+    .onConflictDoUpdate({
+      target: scanSummaries.scanJobId,
+      set: {
+        overallScore: summary.overallScore,
+        grade: summary.grade,
+        riskLevel: summary.riskLevel,
+        issueCountsJson: summary.issueCounts,
+        categoryScoresJson: summary.categoryScores,
+        pageScoresJson: summary.pageScores,
+        wcagIssueCount: summary.wcagIssueCount,
+        bestPracticeIssueCount: summary.bestPracticeIssueCount,
+        manualReviewCount: summary.manualReviewCount,
+        scoringVersion: summary.scoringVersion,
+      },
+    });
+
   await db
     .update(scanJobs)
     .set({

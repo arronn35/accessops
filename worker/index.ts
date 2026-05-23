@@ -29,11 +29,13 @@ import {
   db,
   scanJobs,
   scanPages,
+  scanSummaries,
   accessibilityIssues,
   auditLogs,
   usageLimits,
 } from "../src/lib/db";
 import { runScanJob } from "../src/lib/scanner";
+import { calculateScanScore } from "../src/lib/scanner/scoring";
 import {
   scanQueueName,
   reportPdfQueueName,
@@ -224,6 +226,38 @@ async function processScanJob(job: Job<ScanJobPayload>) {
 
   await persistOutcome(scanJobId, outcome.pages);
 
+  const summary = calculateScanScore(outcome.pages);
+  await db
+    .insert(scanSummaries)
+    .values({
+      scanJobId,
+      overallScore: summary.overallScore,
+      grade: summary.grade,
+      riskLevel: summary.riskLevel,
+      issueCountsJson: summary.issueCounts,
+      categoryScoresJson: summary.categoryScores,
+      pageScoresJson: summary.pageScores,
+      wcagIssueCount: summary.wcagIssueCount,
+      bestPracticeIssueCount: summary.bestPracticeIssueCount,
+      manualReviewCount: summary.manualReviewCount,
+      scoringVersion: summary.scoringVersion,
+    })
+    .onConflictDoUpdate({
+      target: scanSummaries.scanJobId,
+      set: {
+        overallScore: summary.overallScore,
+        grade: summary.grade,
+        riskLevel: summary.riskLevel,
+        issueCountsJson: summary.issueCounts,
+        categoryScoresJson: summary.categoryScores,
+        pageScoresJson: summary.pageScores,
+        wcagIssueCount: summary.wcagIssueCount,
+        bestPracticeIssueCount: summary.bestPracticeIssueCount,
+        manualReviewCount: summary.manualReviewCount,
+        scoringVersion: summary.scoringVersion,
+      },
+    });
+
   // 5. Mark complete + bump usage.
   await db
     .update(scanJobs)
@@ -290,6 +324,7 @@ async function persistOutcome(
         help: i.help,
         helpUrl: i.helpUrl,
         targetJson: i.target,
+        contextsJson: i.contexts,
         htmlSnippet: i.htmlSnippet,
         failureSummary: i.failureSummary,
         humanReviewRequired: i.humanReviewRequired,

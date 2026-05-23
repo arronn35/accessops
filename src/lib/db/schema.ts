@@ -325,6 +325,18 @@ export const accessibilityIssues = pgTable(
     help: text("help").notNull(),
     helpUrl: text("help_url"),
     targetJson: jsonb("target_json").$type<string[]>(),
+    contextsJson: jsonb("contexts_json").$type<
+      Array<{
+        viewport: "desktop" | "mobile";
+        state:
+          | "initial"
+          | "menu-open"
+          | "dialog-open"
+          | "accordion-open"
+          | "tab-open"
+          | "form-focus";
+      }>
+    >(),
     htmlSnippet: text("html_snippet"),
     failureSummary: text("failure_summary"),
     humanReviewRequired: boolean("human_review_required").notNull().default(false),
@@ -337,6 +349,59 @@ export const accessibilityIssues = pgTable(
     index("issues_job_idx").on(t.scanJobId, t.severity),
     index("issues_page_idx").on(t.scanPageId),
     index("issues_rule_idx").on(t.ruleId),
+  ]
+);
+
+// ============================================================
+// Scan summaries
+// ============================================================
+export const scanSummaries = pgTable(
+  "scan_summaries",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    scanJobId: uuid("scan_job_id")
+      .notNull()
+      .references(() => scanJobs.id, { onDelete: "cascade" }),
+    overallScore: integer("overall_score").notNull(),
+    grade: varchar("grade", { length: 1 }).notNull(),
+    riskLevel: varchar("risk_level", { length: 20 }).notNull(),
+    issueCountsJson: jsonb("issue_counts_json")
+      .$type<{
+        critical: number;
+        serious: number;
+        moderate: number;
+        minor: number;
+        review: number;
+      }>()
+      .notNull(),
+    categoryScoresJson: jsonb("category_scores_json")
+      .$type<Record<string, number>>()
+      .notNull(),
+    pageScoresJson: jsonb("page_scores_json")
+      .$type<
+        Array<{
+          url: string;
+          title: string | null;
+          score: number;
+          issueCounts: {
+            critical: number;
+            serious: number;
+            moderate: number;
+            minor: number;
+            review: number;
+          };
+        }>
+      >()
+      .notNull(),
+    wcagIssueCount: integer("wcag_issue_count").notNull().default(0),
+    bestPracticeIssueCount: integer("best_practice_issue_count").notNull().default(0),
+    manualReviewCount: integer("manual_review_count").notNull().default(0),
+    scoringVersion: varchar("scoring_version", { length: 40 }).notNull(),
+    createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+  },
+  (t) => [
+    uniqueIndex("scan_summaries_job_unique").on(t.scanJobId),
+    index("scan_summaries_score_idx").on(t.overallScore),
   ]
 );
 
@@ -481,6 +546,7 @@ export type Project = typeof projects.$inferSelect;
 export type ScanJob = typeof scanJobs.$inferSelect;
 export type ScanPage = typeof scanPages.$inferSelect;
 export type AccessibilityIssue = typeof accessibilityIssues.$inferSelect;
+export type ScanSummary = typeof scanSummaries.$inferSelect;
 export type AiExplanation = typeof aiExplanations.$inferSelect;
 export type RemediationTask = typeof remediationTasks.$inferSelect;
 export type Report = typeof reports.$inferSelect;

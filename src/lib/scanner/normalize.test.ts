@@ -29,7 +29,7 @@ describe("normalizeAxeViolation", () => {
   it("maps axe severity correctly", () => {
     const issues = normalizeAxeViolation(fakeResult());
     expect(issues).toHaveLength(1);
-    expect(issues[0].severity).toBe("critical"); // serious → critical
+    expect(issues[0].severity).toBe("moderate"); // serious impact stays serious; severity is workflow grouping
     expect(issues[0].impact).toBe("serious");
     expect(issues[0].ruleId).toBe("color-contrast");
   });
@@ -97,7 +97,7 @@ describe("normalizeAxeResults", () => {
       incomplete: [fakeResult({ id: "color-contrast", impact: "moderate" })],
     });
     expect(out).toHaveLength(2);
-    expect(out.find((i) => i.ruleId === "button-name")?.severity).toBe("critical");
+    expect(out.find((i) => i.ruleId === "button-name")?.severity).toBe("moderate");
     expect(out.find((i) => i.ruleId === "color-contrast")?.severity).toBe("review");
   });
 });
