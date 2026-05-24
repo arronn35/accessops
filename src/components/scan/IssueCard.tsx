@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight } from "lucide-react";
+import { Camera, ChevronRight } from "lucide-react";
 import { SeverityBadge } from "./SeverityBadge";
 import { WcagBadge } from "./WcagBadge";
 import { CATEGORY_META, type Issue } from "@/lib/mock/issues";
@@ -9,10 +9,12 @@ export function IssueCard({
   issue,
   scanId,
   className,
+  evidenceAvailable,
 }: {
   issue: Issue;
   scanId: string;
   className?: string;
+  evidenceAvailable?: boolean;
 }) {
   return (
     <Link
@@ -32,6 +34,11 @@ export function IssueCard({
             {issue.humanReviewRequired && (
               <span className="inline-flex items-center gap-1 text-[11px] text-amber-700 font-medium">
                 · Needs human review
+              </span>
+            )}
+            {evidenceAvailable && (
+              <span className="inline-flex items-center gap-1 text-[11px] text-blue-700 font-medium">
+                <Camera className="size-3" aria-hidden /> Evidence
               </span>
             )}
           </div>

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { desc, eq } from "drizzle-orm";
-import { ArrowLeft, ExternalLink, Sparkles } from "lucide-react";
+import { ArrowLeft, Camera, ExternalLink, Sparkles } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
@@ -13,10 +13,13 @@ import {
   scanJobs,
   scanPages,
   aiExplanations,
+  visualEvidence,
 } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 import { AiExplanationPanel } from "./ai-panel";
 import { IssueActions } from "./issue-actions";
+import { DeleteVisualEvidenceButton } from "./visual-evidence-actions";
 
 export const metadata = { title: "Issue — AccessOps AI" };
 export const dynamic = "force-dynamic";
@@ -50,6 +53,13 @@ export default async function IssueDetailPage({
     .from(aiExplanations)
     .where(eq(aiExplanations.issueId, issueId))
     .orderBy(desc(aiExplanations.createdAt))
+    .limit(1);
+
+  const [evidence] = await db
+    .select()
+    .from(visualEvidence)
+    .where(eq(visualEvidence.issueId, issueId))
+    .orderBy(desc(visualEvidence.createdAt))
     .limit(1);
 
   const { issue, page } = row;
@@ -110,6 +120,21 @@ export default async function IssueDetailPage({
                   axe-core help <ExternalLink className="size-3" aria-hidden />
                 </a>
               )}
+            </CardContent>
+          </Card>
+
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2">
+                <Camera className="size-4 text-blue-600" aria-hidden /> Visual evidence
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <VisualEvidencePanel
+                evidence={evidence ?? null}
+                pageUrl={page?.url ?? row.scan?.baseUrl ?? "—"}
+                canDelete={ctx.member.role === "owner" || ctx.member.role === "admin"}
+              />
             </CardContent>
           </Card>
 
@@ -204,4 +229,87 @@ function KeyVal({ label, children }: { label: string; children: React.ReactNode 
       <span className="text-ink-900 text-right truncate max-w-[200px]">{children}</span>
     </div>
   );
+}
+
+function VisualEvidencePanel({
+  evidence,
+  pageUrl,
+  canDelete,
+}: {
+  evidence: typeof visualEvidence.$inferSelect | null;
+  pageUrl: string;
+  canDelete: boolean;
+}) {
+  if (!evidence) {
+    return (
+      <div className="space-y-2">
+        <p className="text-sm text-ink-700">No visual evidence was captured for this issue.</p>
+        <p className="text-xs text-ink-500">{COMPLIANCE_COPY.SCREENSHOT_NOTICE}</p>
+      </div>
+    );
+  }
+  const unavailable = !!evidence.deletedAt || evidence.expiresAt <= new Date();
+  const canShow = Boolean(
+    !unavailable &&
+    evidence.screenshotKey &&
+    (evidence.screenshotStatus === "captured" || evidence.screenshotStatus === "redacted")
+  );
+  const status = unavailable ? "skipped" : evidence.screenshotStatus;
+  const reason = unavailable ? "expired_or_deleted" : evidence.failureReason;
+
+  return (
+    <div className="space-y-3">
+      {canShow ? (
+        <a
+          href={`/api/visual-evidence/${evidence.id}/image`}
+          target="_blank"
+          rel="noreferrer"
+          className="block overflow-hidden rounded-md ring-1 ring-line bg-canvas-2"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={`/api/visual-evidence/${evidence.id}/image`}
+            alt="Diagnostic visual evidence for this accessibility issue"
+            className="max-h-[520px] w-full object-contain"
+          />
+        </a>
+      ) : (
+        <div className="rounded-md bg-canvas-2 ring-1 ring-line p-4">
+          <p className="text-sm font-medium text-ink-900">Screenshot {status}</p>
+          <p className="text-xs text-ink-600 mt-1">{reason ? evidenceReason(reason) : "Image not available."}</p>
+        </div>
+      )}
+      <dl className="grid gap-2 text-xs sm:grid-cols-2">
+        <KeyVal label="Selector">
+          <span className="font-mono">{evidence.selector ?? "—"}</span>
+        </KeyVal>
+        <KeyVal label="Page">
+          <span className="font-mono">{pageUrl}</span>
+        </KeyVal>
+        <KeyVal label="Status">{status}</KeyVal>
+        <KeyVal label="Redaction">{evidence.redactionApplied ? "Applied" : "Not applied"}</KeyVal>
+      </dl>
+      <p className="text-xs text-ink-500 leading-relaxed">
+        This screenshot is captured for diagnostic accessibility evidence only. {COMPLIANCE_COPY.VISUAL_EVIDENCE_WARNING}
+      </p>
+      {canDelete && canShow && <DeleteVisualEvidenceButton evidenceId={evidence.id} />}
+    </div>
+  );
+}
+
+function evidenceReason(reason: string): string {
+  const labels: Record<string, string> = {
+    element_not_visible: "The affected element was not visible at capture time.",
+    selector_not_found: "The target selector could not be resolved safely.",
+    screenshot_disabled: "Screenshot capture was disabled for this scan.",
+    privacy_settings_disabled: "Workspace privacy settings disabled screenshot capture.",
+    sensitive_page_skipped: "The page appeared to contain sensitive or private content.",
+    capture_failed: "The screenshot capture failed.",
+    storage_disabled: "Private screenshot storage is not enabled.",
+    screenshot_storage_disabled: "Screenshot storage was disabled for this scan.",
+    expired_or_deleted: "This evidence was deleted or passed its retention window.",
+    screenshot_limit_reached: "The scan reached its visual evidence limit.",
+    duplicate_issue_skipped: "A duplicate issue already had visual evidence captured.",
+  };
+  return labels[reason] ?? reason.replace(/_/g, " ");
 }

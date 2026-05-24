@@ -16,6 +16,8 @@ import { audit } from "@/lib/api/audit";
 const Patch = z.object({
   aiProcessingEnabled: z.boolean().optional(),
   screenshotStorageEnabled: z.boolean().optional(),
+  visualEvidenceEnabled: z.boolean().optional(),
+  visualEvidenceRetentionDays: z.number().int().min(1).max(365).optional(),
   scanDataRetentionDays: z.number().int().min(7).max(3650).optional(),
   regionPreference: z.enum(["eu", "us", "uk", "ca", "other"]).optional(),
 });

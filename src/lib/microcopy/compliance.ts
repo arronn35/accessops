@@ -25,7 +25,8 @@ export const COMPLIANCE_COPY = {
   REPORT_NOT_LEGAL:
     "This report is an accessibility assessment aid, not a legal certification. It reflects findings at the time of the scan and does not certify compliance with any law, regulation, or standard.",
 
-  SCAN_PERMISSION: "I confirm I have permission to scan this website.",
+  SCAN_PERMISSION:
+    "I confirm I own this website or have permission to scan it and capture diagnostic accessibility evidence.",
 
   SCAN_PRIVACY:
     "Do not scan private dashboards or pages containing sensitive personal data. Use authenticated scanning carefully and only on properties you own or operate.",
@@ -43,7 +44,10 @@ export const COMPLIANCE_COPY = {
     "Deleting scan data is permanent. Reports built from this scan will lose their underlying findings.",
 
   SCREENSHOT_NOTICE:
-    "Screenshots may contain personal data visible on the page at scan time. Storing screenshots is opt-in and off by default.",
+    "Screenshots are captured only for diagnostic accessibility evidence. Avoid scanning pages containing personal, confidential, financial, medical, or highly sensitive information unless you have authorization.",
+
+  VISUAL_EVIDENCE_WARNING:
+    "Visual evidence is diagnostic only and may contain third-party copyrighted or personal data. Do not redistribute publicly.",
 } as const;
 
 export const FORBIDDEN_AI_CLAIMS = [

@@ -7,13 +7,19 @@ import {
   scanPages,
   scanSummaries,
   usageLimits,
+  visualEvidence,
 } from "@/lib/db";
-import type { NormalizedIssue, NormalizedPage, ScanOutcome } from "./types";
+import type { NormalizedIssue, NormalizedPage, ScanOutcome, VisualEvidenceMetadata } from "./types";
 import { calculateScanScore } from "./scoring";
+import {
+  putVisualEvidenceObject,
+  visualEvidenceStorageAvailable,
+} from "@/lib/storage/r2";
 
 export async function persistScanOutcome(
   scanJobId: string,
-  pages: NormalizedPage[]
+  pages: NormalizedPage[],
+  options?: { workspaceId: string; storeScreenshots: boolean; retentionDays: number }
 ): Promise<void> {
   for (const p of pages) {
     const [pageRow] = await db
@@ -31,8 +37,8 @@ export async function persistScanOutcome(
 
     if (!p.issues.length) continue;
 
-    await db.insert(accessibilityIssues).values(
-      p.issues.map((i: NormalizedIssue) => ({
+    for (const i of p.issues) {
+      const [issueRow] = await db.insert(accessibilityIssues).values({
         scanJobId,
         scanPageId: pageRow.id,
         ruleId: i.ruleId,
@@ -47,9 +53,80 @@ export async function persistScanOutcome(
         htmlSnippet: i.htmlSnippet,
         failureSummary: i.failureSummary,
         humanReviewRequired: i.humanReviewRequired,
-      }))
-    );
+      }).returning({ id: accessibilityIssues.id });
+
+      if (i.visualEvidence && options) {
+        await persistVisualEvidenceForIssue({
+          workspaceId: options.workspaceId,
+          scanJobId,
+          scanPageId: pageRow.id,
+          issueId: issueRow.id,
+          evidence: i.visualEvidence,
+          storeScreenshots: options.storeScreenshots,
+          retentionDays: options.retentionDays,
+        });
+      }
+    }
   }
+}
+
+export async function persistVisualEvidenceForIssue(args: {
+  workspaceId: string;
+  scanJobId: string;
+  scanPageId: string;
+  issueId: string;
+  evidence: VisualEvidenceMetadata;
+  storeScreenshots: boolean;
+  retentionDays: number;
+}): Promise<void> {
+  const expiresAt = new Date(
+    Date.now() + Math.max(1, args.retentionDays) * 24 * 60 * 60 * 1000
+  );
+  let screenshotKey = args.evidence.screenshotKey;
+  let status = args.evidence.screenshotStatus;
+  let failureReason = args.evidence.screenshotFailureReason;
+
+  if (
+    args.evidence.imageBuffer &&
+    (status === "captured" || status === "redacted")
+  ) {
+    if (args.storeScreenshots && visualEvidenceStorageAvailable()) {
+      screenshotKey = `visual-evidence/${args.workspaceId}/${args.scanJobId}/${args.issueId}.png`;
+      try {
+        await putVisualEvidenceObject({
+          key: screenshotKey,
+          body: args.evidence.imageBuffer,
+          contentType: "image/png",
+        });
+      } catch (err) {
+        screenshotKey = undefined;
+        status = "failed";
+        failureReason = `storage_failed:${(err as Error).message}`;
+      }
+    } else {
+      screenshotKey = undefined;
+      status = "skipped";
+      failureReason = args.storeScreenshots
+        ? "storage_disabled"
+        : "screenshot_storage_disabled";
+    }
+  }
+
+  await db.insert(visualEvidence).values({
+    workspaceId: args.workspaceId,
+    scanJobId: args.scanJobId,
+    scanPageId: args.scanPageId,
+    issueId: args.issueId,
+    screenshotKey,
+    screenshotStatus: status,
+    selector: args.evidence.selector,
+    viewportJson: args.evidence.viewport,
+    state: args.evidence.state,
+    boundingBoxJson: args.evidence.boundingBox,
+    redactionApplied: args.evidence.redactionApplied,
+    failureReason,
+    expiresAt,
+  });
 }
 
 export async function markScanFailed(scanJobId: string, errorMessage: string) {

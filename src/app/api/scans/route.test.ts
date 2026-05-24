@@ -100,17 +100,10 @@ describe("POST /api/scans — validation gates", () => {
   });
 
   it("rejects a file:// URL (400)", async () => {
-    const res = await POST(
-      makeRequest({ url: "https://example.com", permissionConfirmed: true, scanType: "single" }) as never
-    );
-    // example.com ends with the reserved .com? no — .example is reserved,
-    // .com is fine. This one should pass validation and hit the DB.
-    // Use a genuinely blocked URL instead:
     const blocked = await POST(
       makeRequest({ url: "ftp://example.org", permissionConfirmed: true }) as never
     );
     expect(blocked.status).toBe(400);
-    void res;
   });
 
   it("rejects a private-IP URL via SSRF guard (400)", async () => {

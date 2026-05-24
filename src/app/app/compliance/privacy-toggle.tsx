@@ -12,7 +12,7 @@ export function PrivacyToggle({
   description,
   disabled,
 }: {
-  fieldKey: "aiProcessingEnabled" | "screenshotStorageEnabled";
+  fieldKey: "aiProcessingEnabled" | "screenshotStorageEnabled" | "visualEvidenceEnabled";
   initial: boolean;
   label: string;
   description?: string;

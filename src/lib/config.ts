@@ -34,3 +34,23 @@ export function scanRenderProfile(): RenderProfile {
 export function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
+
+export function visualEvidenceEnabled(): boolean {
+  return process.env.VISUAL_EVIDENCE_ENABLED === "true";
+}
+
+export function visualEvidenceStorageEnabled(): boolean {
+  return process.env.VISUAL_EVIDENCE_STORAGE_ENABLED === "true";
+}
+
+export function visualEvidenceRedactionEnabled(): boolean {
+  return process.env.VISUAL_EVIDENCE_REDACTION_ENABLED !== "false";
+}
+
+export function visualEvidenceMaxPerScan(): number {
+  return Math.max(0, Number(process.env.VISUAL_EVIDENCE_MAX_PER_SCAN ?? 10));
+}
+
+export function visualEvidenceRetentionDays(): number {
+  return Math.max(1, Number(process.env.VISUAL_EVIDENCE_RETENTION_DAYS ?? 30));
+}

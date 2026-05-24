@@ -150,6 +150,8 @@ export async function bootstrapWorkspaceForUser(
     workspaceId: ws.id,
     scanDataRetentionDays: 365,
     screenshotStorageEnabled: false,
+    visualEvidenceEnabled: false,
+    visualEvidenceRetentionDays: 30,
     aiProcessingEnabled: false,
     regionPreference: "eu",
   });

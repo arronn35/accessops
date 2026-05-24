@@ -11,9 +11,10 @@ import { NextRequest } from "next/server";
 import { eq } from "drizzle-orm";
 import { z } from "zod";
 import { db } from "@/lib/db";
-import { scanJobs } from "@/lib/db/schema";
+import { scanJobs, visualEvidence } from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
 import { audit } from "@/lib/api/audit";
+import { deleteVisualEvidenceObject } from "@/lib/storage/r2";
 
 const Schema = z.union([
   z.object({ scanJobId: z.string().uuid() }),
@@ -40,6 +41,16 @@ export async function POST(req: NextRequest) {
       if (!job || job.workspaceId !== ctx.workspaceId) {
         throw new ApiError(404, "not_found");
       }
+      const evidenceRows = await db
+        .select({ screenshotKey: visualEvidence.screenshotKey })
+        .from(visualEvidence)
+        .where(eq(visualEvidence.scanJobId, scanJobId));
+      await Promise.all(
+        evidenceRows
+          .map((row) => row.screenshotKey)
+          .filter(Boolean)
+          .map((key) => deleteVisualEvidenceObject(key!))
+      );
       // Deleting the scan_jobs row cascades: scan_pages → accessibility_issues
       // → ai_explanations, and scan_jobs → reports. remediation_tasks linked
       // to those issues are removed by the ON DELETE CASCADE on
@@ -59,6 +70,16 @@ export async function POST(req: NextRequest) {
     }
 
     // All-scans wipe.
+    const evidenceRows = await db
+      .select({ screenshotKey: visualEvidence.screenshotKey })
+      .from(visualEvidence)
+      .where(eq(visualEvidence.workspaceId, ctx.workspaceId));
+    await Promise.all(
+      evidenceRows
+        .map((row) => row.screenshotKey)
+        .filter(Boolean)
+        .map((key) => deleteVisualEvidenceObject(key!))
+    );
     await db.delete(scanJobs).where(eq(scanJobs.workspaceId, ctx.workspaceId));
     await audit({
       userId: ctx.userId,

@@ -34,6 +34,10 @@ import { checkRateLimit } from "@/lib/api/rate-limit";
 import { audit } from "@/lib/api/audit";
 import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 import { inlineScanFallbackEnabled, processScanInline } from "@/lib/scanner/inline-runner";
+import {
+  visualEvidenceEnabled as visualEvidenceEnvEnabled,
+  visualEvidenceStorageEnabled,
+} from "@/lib/config";
 
 const ScanCreateSchema = z.object({
   url: z.string().url().max(2048),
@@ -158,10 +162,17 @@ export async function POST(req: NextRequest) {
       .where(eq(privacySettings.workspaceId, ctx.workspaceId))
       .limit(1);
 
-    const includeScreenshots =
-      input.includeScreenshots && (privacy?.screenshotStorageEnabled ?? false);
+    const visualEvidenceEnabled =
+      input.includeScreenshots &&
+      input.permissionConfirmed &&
+      visualEvidenceEnvEnabled() &&
+      (privacy?.visualEvidenceEnabled ?? false);
+    const includeScreenshots = visualEvidenceEnabled;
     const storeScreenshots =
-      input.storeScreenshots && (privacy?.screenshotStorageEnabled ?? false);
+      visualEvidenceEnabled &&
+      input.storeScreenshots &&
+      visualEvidenceStorageEnabled() &&
+      (privacy?.screenshotStorageEnabled ?? false);
     const aiExplanationsEnabled =
       input.aiExplanationsEnabled && (privacy?.aiProcessingEnabled ?? false);
     const aiRemediationEnabled =
@@ -187,6 +198,9 @@ export async function POST(req: NextRequest) {
         maxPages,
         includeScreenshots,
         storeScreenshots,
+        visualEvidenceMaxScreenshots: includeScreenshots
+          ? Math.max(0, scanCaps.visualEvidenceMaxPerScan)
+          : 0,
         aiExplanationsEnabled,
         aiRemediationEnabled,
         permissionConfirmed: input.permissionConfirmed,

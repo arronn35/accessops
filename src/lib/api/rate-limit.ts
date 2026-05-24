@@ -51,6 +51,8 @@ export const limiters = {
   aiExplain: makeLimiter("rl:ai_explain", 60, "1 h"),
   // 30 report exports per hour.
   reportExport: makeLimiter("rl:report_export", 30, "1 h"),
+  // Evidence images may contain sensitive customer page content.
+  visualEvidence: makeLimiter("rl:visual_evidence", 120, "1 h"),
 };
 
 export type LimiterName = keyof typeof limiters;

@@ -33,8 +33,10 @@ import {
   accessibilityIssues,
   auditLogs,
   usageLimits,
+  privacySettings,
 } from "../src/lib/db";
 import { runScanJob } from "../src/lib/scanner";
+import { persistVisualEvidenceForIssue } from "../src/lib/scanner/persistence";
 import { calculateScanScore } from "../src/lib/scanner/scoring";
 import {
   scanQueueName,
@@ -48,6 +50,7 @@ import type { NormalizedIssue, NormalizedPage } from "../src/lib/scanner/types";
 import { captureException } from "../src/lib/observability";
 import { reportPdfHandler } from "./report-pdf";
 import { storageConfigured } from "../src/lib/storage/r2";
+import { visualEvidenceRetentionDays } from "../src/lib/config";
 
 // ============================================================
 // Config
@@ -158,6 +161,14 @@ async function processScanJob(job: Job<ScanJobPayload>) {
     return;
   }
 
+  const [privacy] = await db
+    .select({
+      visualEvidenceRetentionDays: privacySettings.visualEvidenceRetentionDays,
+    })
+    .from(privacySettings)
+    .where(eq(privacySettings.workspaceId, row.workspaceId))
+    .limit(1);
+
   // 2. Mark running.
   await db
     .update(scanJobs)
@@ -180,6 +191,8 @@ async function processScanJob(job: Job<ScanJobPayload>) {
       scanType: row.scanType,
       includeScreenshots: row.includeScreenshots,
       storeScreenshots: row.storeScreenshots,
+      visualEvidenceEnabled: row.includeScreenshots,
+      visualEvidenceMaxScreenshots: row.visualEvidenceMaxScreenshots,
       timeoutMs: SCAN_TIMEOUT_MS,
     },
     async (update) => {
@@ -224,7 +237,12 @@ async function processScanJob(job: Job<ScanJobPayload>) {
     .set({ progressStep: "saving", updatedAt: new Date() })
     .where(eq(scanJobs.id, scanJobId));
 
-  await persistOutcome(scanJobId, outcome.pages);
+  await persistOutcome(scanJobId, outcome.pages, {
+    workspaceId: row.workspaceId,
+    storeScreenshots: row.storeScreenshots,
+    retentionDays:
+      privacy?.visualEvidenceRetentionDays ?? visualEvidenceRetentionDays(),
+  });
 
   const summary = calculateScanScore(outcome.pages);
   await db
@@ -293,7 +311,8 @@ async function processScanJob(job: Job<ScanJobPayload>) {
 
 async function persistOutcome(
   scanJobId: string,
-  pages: NormalizedPage[]
+  pages: NormalizedPage[],
+  options: { workspaceId: string; storeScreenshots: boolean; retentionDays: number }
 ): Promise<void> {
   // Postgres batching: one insert per page (we need its UUID for issue FKs).
   for (const p of pages) {
@@ -312,8 +331,8 @@ async function persistOutcome(
 
     if (!p.issues.length) continue;
 
-    await db.insert(accessibilityIssues).values(
-      p.issues.map((i: NormalizedIssue) => ({
+    for (const i of p.issues) {
+      const [issueRow] = await db.insert(accessibilityIssues).values({
         scanJobId,
         scanPageId: pageRow.id,
         ruleId: i.ruleId,
@@ -328,8 +347,20 @@ async function persistOutcome(
         htmlSnippet: i.htmlSnippet,
         failureSummary: i.failureSummary,
         humanReviewRequired: i.humanReviewRequired,
-      }))
-    );
+      }).returning({ id: accessibilityIssues.id });
+
+      if (i.visualEvidence) {
+        await persistVisualEvidenceForIssue({
+          workspaceId: options.workspaceId,
+          scanJobId,
+          scanPageId: pageRow.id,
+          issueId: issueRow.id,
+          evidence: i.visualEvidence,
+          storeScreenshots: options.storeScreenshots,
+          retentionDays: options.retentionDays,
+        });
+      }
+    }
   }
 }
 

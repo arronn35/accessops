@@ -37,10 +37,12 @@ describe("admin tester entitlements", () => {
     expect(scanCapsForPlan("free")).toEqual({
       dailyScanCap: 3,
       maxPagesCap: 3,
+      visualEvidenceMaxPerScan: 10,
     });
     expect(scanCapsForPlan("enterprise")).toEqual({
       dailyScanCap: 1000,
       maxPagesCap: 1000,
+      visualEvidenceMaxPerScan: 500,
     });
   });
 });

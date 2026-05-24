@@ -84,6 +84,14 @@ export const reportType = pgEnum("report_type", ["full", "executive", "csv"]);
 
 export const planTier = pgEnum("plan_tier", ["free", "starter", "agency", "team", "enterprise"]);
 
+export const visualEvidenceStatus = pgEnum("visual_evidence_status", [
+  "pending",
+  "captured",
+  "skipped",
+  "failed",
+  "redacted",
+]);
+
 // ============================================================
 // Auth.js v5 tables (Drizzle adapter expects these names)
 // ============================================================
@@ -268,6 +276,9 @@ export const scanJobs = pgTable(
     pagesScanned: integer("pages_scanned").notNull().default(0),
     includeScreenshots: boolean("include_screenshots").notNull().default(false),
     storeScreenshots: boolean("store_screenshots").notNull().default(false),
+    visualEvidenceMaxScreenshots: integer("visual_evidence_max_screenshots")
+      .notNull()
+      .default(0),
     aiExplanationsEnabled: boolean("ai_explanations_enabled").notNull().default(false),
     aiRemediationEnabled: boolean("ai_remediation_enabled").notNull().default(false),
     permissionConfirmed: boolean("permission_confirmed").notNull().default(false),
@@ -424,6 +435,54 @@ export const aiExplanations = pgTable("ai_explanations", {
 });
 
 // ============================================================
+// Visual evidence
+// ============================================================
+export const visualEvidence = pgTable(
+  "visual_evidence",
+  {
+    id: uuid("id").primaryKey().defaultRandom(),
+    workspaceId: uuid("workspace_id")
+      .notNull()
+      .references(() => workspaces.id, { onDelete: "cascade" }),
+    scanJobId: uuid("scan_job_id")
+      .notNull()
+      .references(() => scanJobs.id, { onDelete: "cascade" }),
+    scanPageId: uuid("scan_page_id")
+      .references(() => scanPages.id, { onDelete: "cascade" }),
+    issueId: uuid("issue_id")
+      .notNull()
+      .references(() => accessibilityIssues.id, { onDelete: "cascade" }),
+    screenshotKey: text("screenshot_key"),
+    screenshotStatus: visualEvidenceStatus("screenshot_status")
+      .notNull()
+      .default("pending"),
+    selector: text("selector"),
+    viewportJson: jsonb("viewport_json").$type<{
+      name: "desktop" | "mobile";
+      width: number;
+      height: number;
+    }>(),
+    state: varchar("state", { length: 40 }),
+    boundingBoxJson: jsonb("bounding_box_json").$type<{
+      x: number;
+      y: number;
+      width: number;
+      height: number;
+    }>(),
+    redactionApplied: boolean("redaction_applied").notNull().default(false),
+    failureReason: text("failure_reason"),
+    expiresAt: timestamp("expires_at", { mode: "date" }).notNull(),
+    createdAt: timestamp("created_at", { mode: "date" }).defaultNow().notNull(),
+    deletedAt: timestamp("deleted_at", { mode: "date" }),
+  },
+  (t) => [
+    index("visual_evidence_workspace_idx").on(t.workspaceId, t.createdAt),
+    index("visual_evidence_issue_idx").on(t.issueId),
+    index("visual_evidence_expiry_idx").on(t.expiresAt, t.deletedAt),
+  ]
+);
+
+// ============================================================
 // Remediation tasks
 // ============================================================
 export const remediationTasks = pgTable(
@@ -489,6 +548,10 @@ export const privacySettings = pgTable("privacy_settings", {
     .references(() => workspaces.id, { onDelete: "cascade" }),
   scanDataRetentionDays: integer("scan_data_retention_days").notNull().default(365),
   screenshotStorageEnabled: boolean("screenshot_storage_enabled").notNull().default(false),
+  visualEvidenceEnabled: boolean("visual_evidence_enabled").notNull().default(false),
+  visualEvidenceRetentionDays: integer("visual_evidence_retention_days")
+    .notNull()
+    .default(30),
   aiProcessingEnabled: boolean("ai_processing_enabled").notNull().default(false),
   regionPreference: varchar("region_preference", { length: 40 }).notNull().default("eu"),
   updatedAt: timestamp("updated_at", { mode: "date" }).defaultNow().notNull(),
@@ -548,6 +611,7 @@ export type ScanPage = typeof scanPages.$inferSelect;
 export type AccessibilityIssue = typeof accessibilityIssues.$inferSelect;
 export type ScanSummary = typeof scanSummaries.$inferSelect;
 export type AiExplanation = typeof aiExplanations.$inferSelect;
+export type VisualEvidence = typeof visualEvidence.$inferSelect;
 export type RemediationTask = typeof remediationTasks.$inferSelect;
 export type Report = typeof reports.$inferSelect;
 export type PrivacySettings = typeof privacySettings.$inferSelect;

@@ -28,6 +28,7 @@ const AUDIT_ACTION_LABELS: Record<string, string> = {
   "privacy.scan_deleted": "Deleted scan data",
   "privacy.all_scans_deleted": "Deleted all scan data",
   "privacy.workspace_exported": "Exported workspace data",
+  "privacy.visual_evidence_deleted": "Deleted visual evidence",
 };
 
 function humanizeAction(action: string): string {
@@ -57,6 +58,7 @@ export default async function CompliancePage() {
   const ctx = await getCurrentWorkspaceOrRedirect();
   const aiOn = !!ctx.privacy?.aiProcessingEnabled;
   const screenshotsOn = !!ctx.privacy?.screenshotStorageEnabled;
+  const visualEvidenceOn = !!ctx.privacy?.visualEvidenceEnabled;
 
   // Audit events are only readable by owners/admins; for others we
   // show an empty list rather than leaking who-did-what.
@@ -137,13 +139,21 @@ export default async function CompliancePage() {
       <section className="space-y-3">
         <SectionTitle icon={<Database className="size-4 text-ink-700" aria-hidden />} title="Scan data &amp; storage" />
         <Card>
-          <CardContent className="pt-5">
+          <CardContent className="pt-5 space-y-5">
             <PrivacyToggle
-              fieldKey="screenshotStorageEnabled"
-              initial={screenshotsOn}
-              label="Enable screenshot capture &amp; storage"
-              description={COMPLIANCE_COPY.SCREENSHOT_NOTICE}
+              fieldKey="visualEvidenceEnabled"
+              initial={visualEvidenceOn}
+              label="Allow diagnostic visual evidence"
+              description="Workspace admins must enable this before any scan can capture issue-level screenshots. Visual evidence is diagnostic only and may contain third-party copyrighted or personal data. Do not redistribute publicly."
             />
+            <div className="border-t border-line pt-5">
+              <PrivacyToggle
+                fieldKey="screenshotStorageEnabled"
+                initial={screenshotsOn}
+                label="Store visual evidence screenshots"
+                description={`${COMPLIANCE_COPY.SCREENSHOT_NOTICE} Default visual evidence retention is ${ctx.privacy?.visualEvidenceRetentionDays ?? 30} days.`}
+              />
+            </div>
           </CardContent>
         </Card>
 

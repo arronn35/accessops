@@ -29,6 +29,11 @@ import {
 import { normalizeAxeResults } from "./normalize";
 import { staticExpertHeuristics } from "./expert-heuristics";
 import {
+  captureVisualEvidenceForIssues,
+  createEvidenceBudget,
+  type EvidenceBudget,
+} from "./visual-evidence";
+import {
   resolveScanSourcePlan,
   sameOriginCanonicalUrl,
 } from "./sources";
@@ -160,7 +165,11 @@ async function configurePage(
 export async function scanSinglePage(
   browser: Browser,
   url: string,
-  options: { includeScreenshots?: boolean } = {}
+  options: {
+    includeScreenshots?: boolean;
+    visualEvidenceEnabled?: boolean;
+    evidenceBudget?: EvidenceBudget;
+  } = {}
 ): Promise<NormalizedPage> {
   const validated = await validateUrl(url, { resolveDns: true });
   const profile = scanRenderProfile();
@@ -183,6 +192,8 @@ export async function scanSinglePage(
       blocklist,
       viewport,
       state: "initial",
+      visualEvidenceEnabled: !!options.visualEvidenceEnabled,
+      evidenceBudget: options.evidenceBudget,
     });
     variants.push(initial);
 
@@ -197,6 +208,8 @@ export async function scanSinglePage(
           viewport,
           state,
           candidateIndex,
+          visualEvidenceEnabled: !!options.visualEvidenceEnabled,
+          evidenceBudget: options.evidenceBudget,
         }).catch(() => null);
         if (!result) break;
         variants.push(result);
@@ -249,6 +262,8 @@ async function scanPageVariant(args: {
   viewport: ScanViewport;
   state: ScanState;
   candidateIndex?: number;
+  visualEvidenceEnabled: boolean;
+  evidenceBudget?: EvidenceBudget;
 }): Promise<{
   finalUrl: string;
   title: string | null;
@@ -319,7 +334,7 @@ async function scanPageVariant(args: {
 
     const domHtml = await page.content().catch(() => "");
     const contextMeta: IssueContext = { viewport: viewport.name, state };
-    const issues = withContext(
+    let issues = withContext(
       [
         ...normalizeAxeResults({
           violations: axeResult.violations,
@@ -329,6 +344,17 @@ async function scanPageVariant(args: {
       ],
       contextMeta
     );
+    if (args.visualEvidenceEnabled && args.evidenceBudget) {
+      issues = await captureVisualEvidenceForIssues({
+        page,
+        pageUrl: finalUrl,
+        issues,
+        viewport,
+        state,
+        budget: args.evidenceBudget,
+        enabled: true,
+      });
+    }
 
     return {
       finalUrl,
@@ -489,6 +515,11 @@ export async function crawlSameDomain(
   const queue: string[] = [...sourcePlan.targets];
   const seen = new Set<string>(queue);
   const results: NormalizedPage[] = [];
+  const evidenceBudget = createEvidenceBudget(
+    input.visualEvidenceEnabled
+      ? input.visualEvidenceMaxScreenshots ?? 0
+      : 0
+  );
 
   await onProgress?.({
     step: "starting_browser",
@@ -510,6 +541,8 @@ export async function crawlSameDomain(
     try {
       page = await scanSinglePage(browser, next, {
         includeScreenshots: input.includeScreenshots,
+        visualEvidenceEnabled: !!input.visualEvidenceEnabled,
+        evidenceBudget,
       });
     } catch (err) {
       // One bad page should not poison the whole scan.
@@ -630,8 +663,20 @@ function dedupeIssues(issues: NormalizedIssue[]): NormalizedIssue[] {
     if (!existing.failureSummary && issue.failureSummary) {
       existing.failureSummary = issue.failureSummary;
     }
+    if (shouldReplaceEvidence(existing, issue)) {
+      existing.visualEvidence = issue.visualEvidence;
+    }
   }
   return Array.from(byKey.values());
+}
+
+function shouldReplaceEvidence(existing: NormalizedIssue, incoming: NormalizedIssue): boolean {
+  const current = existing.visualEvidence?.screenshotStatus;
+  const next = incoming.visualEvidence?.screenshotStatus;
+  if (!next) return false;
+  if (!current) return true;
+  const rank = { failed: 0, skipped: 1, pending: 2, captured: 3, redacted: 4 };
+  return rank[next] > rank[current];
 }
 
 function mergeContexts(a: IssueContext[], b: IssueContext[]): IssueContext[] {

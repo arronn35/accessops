@@ -17,15 +17,17 @@
  * `x-vercel-cron` header for local-style runs. Outside callers get a 401.
  */
 import { NextRequest } from "next/server";
-import { and, eq, inArray, lt } from "drizzle-orm";
+import { and, eq, inArray, isNull, lt } from "drizzle-orm";
 import { db } from "@/lib/db";
 import {
   scanJobs,
   privacySettings,
+  visualEvidence,
   workspaces,
 } from "@/lib/db/schema";
 import { audit } from "@/lib/api/audit";
 import { captureException } from "@/lib/observability";
+import { deleteVisualEvidenceObject } from "@/lib/storage/r2";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -56,6 +58,7 @@ export async function GET(req: NextRequest) {
   const startedAt = Date.now();
   let workspacesProcessed = 0;
   let scansDeleted = 0;
+  let evidenceDeleted = 0;
   const errors: { workspaceId: string; message: string }[] = [];
 
   try {
@@ -76,8 +79,40 @@ export async function GET(req: NextRequest) {
         row.retentionDays ?? 365
       );
       const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+      const evidenceCutoff = new Date();
 
       try {
+        const expiredEvidence = await db
+          .select({ id: visualEvidence.id, screenshotKey: visualEvidence.screenshotKey })
+          .from(visualEvidence)
+          .where(
+            and(
+              eq(visualEvidence.workspaceId, row.workspaceId),
+              lt(visualEvidence.expiresAt, evidenceCutoff),
+              isNull(visualEvidence.deletedAt)
+            )
+          )
+          .limit(PER_WORKSPACE_BATCH);
+
+        if (expiredEvidence.length > 0) {
+          await Promise.all(
+            expiredEvidence
+              .map((e) => e.screenshotKey)
+              .filter(Boolean)
+              .map((key) => deleteVisualEvidenceObject(key!))
+          );
+          await db
+            .update(visualEvidence)
+            .set({
+              screenshotKey: null,
+              screenshotStatus: "skipped",
+              failureReason: "expired_or_deleted",
+              deletedAt: new Date(),
+            })
+            .where(inArray(visualEvidence.id, expiredEvidence.map((e) => e.id)));
+          evidenceDeleted += expiredEvidence.length;
+        }
+
         // Fetch IDs first so we can audit each deletion and so the
         // delete is bounded by PER_WORKSPACE_BATCH.
         const stale = await db
@@ -95,6 +130,17 @@ export async function GET(req: NextRequest) {
           workspacesProcessed++;
           continue;
         }
+
+        const staleEvidence = await db
+          .select({ screenshotKey: visualEvidence.screenshotKey })
+          .from(visualEvidence)
+          .where(inArray(visualEvidence.scanJobId, stale.map((s) => s.id)));
+        await Promise.all(
+          staleEvidence
+            .map((e) => e.screenshotKey)
+            .filter(Boolean)
+            .map((key) => deleteVisualEvidenceObject(key!))
+        );
 
         await db
           .delete(scanJobs)
@@ -132,6 +178,7 @@ export async function GET(req: NextRequest) {
       ok: true,
       workspacesProcessed,
       scansDeleted,
+      evidenceDeleted,
       errors,
       elapsedMs: Date.now() - startedAt,
     };

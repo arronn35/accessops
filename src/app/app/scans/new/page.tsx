@@ -60,7 +60,7 @@ export default function NewScanPage() {
           sitemapUrl: type === "sitemap" && sitemapUrl.trim() ? sitemapUrl.trim() : undefined,
           maxPages,
           includeScreenshots: screenshots,
-          storeScreenshots: false,
+          storeScreenshots: screenshots,
           aiExplanationsEnabled: aiExplain,
           aiRemediationEnabled: aiExplain,
           permissionConfirmed: true,
@@ -94,8 +94,8 @@ export default function NewScanPage() {
         <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">New scan</p>
         <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">Start a scan</h1>
         <p className="text-sm text-ink-600 mt-1 max-w-xl">
-          We&apos;ll run automated accessibility checks and capture findings. Screenshots are off by
-          default. AI explanations require workspace consent.
+          We&apos;ll run automated accessibility checks and capture findings. Visual evidence
+          screenshots are off by default. AI explanations require workspace consent.
         </p>
       </header>
 
@@ -230,14 +230,17 @@ export default function NewScanPage() {
                 onChange={(e) => setScreenshots(e.target.checked)}
                 label={
                   <span className="flex items-center gap-2">
-                    Capture screenshots
+                    Capture visual evidence screenshots
                     <span className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">
                       Off by default
                     </span>
                   </span>
                 }
-                description={COMPLIANCE_COPY.SCREENSHOT_NOTICE}
+                description="Screenshots help identify where accessibility issues appear. They may contain visible page content, so enable this only for websites you are authorized to audit."
               />
+              <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+                {COMPLIANCE_COPY.SCREENSHOT_NOTICE}
+              </p>
             </div>
           </CardContent>
         </Card>

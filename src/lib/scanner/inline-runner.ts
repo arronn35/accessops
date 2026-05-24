@@ -3,6 +3,7 @@ import { db, scanJobs } from "@/lib/db";
 import { captureException } from "@/lib/observability";
 import { completeScanJob, markScanFailed, persistScanOutcome } from "./persistence";
 import { runStaticScanJob } from "./static-runner";
+import { visualEvidenceRetentionDays } from "@/lib/config";
 
 const INLINE_SCAN_TIMEOUT_MS = Math.max(
   10_000,
@@ -51,6 +52,8 @@ export async function processScanInline(scanJobId: string): Promise<void> {
         scanType: row.scanType,
         includeScreenshots: row.includeScreenshots,
         storeScreenshots: row.storeScreenshots,
+        visualEvidenceEnabled: false,
+        visualEvidenceMaxScreenshots: 0,
         timeoutMs: INLINE_SCAN_TIMEOUT_MS,
       },
       async (update) => {
@@ -71,7 +74,11 @@ export async function processScanInline(scanJobId: string): Promise<void> {
       .set({ progressStep: "saving", updatedAt: new Date() })
       .where(eq(scanJobs.id, scanJobId));
 
-    await persistScanOutcome(scanJobId, outcome.pages);
+    await persistScanOutcome(scanJobId, outcome.pages, {
+      workspaceId: row.workspaceId,
+      storeScreenshots: row.storeScreenshots,
+      retentionDays: visualEvidenceRetentionDays(),
+    });
     await completeScanJob(scanJobId, outcome, {
       userId: row.requestedBy,
       workspaceId: row.workspaceId,

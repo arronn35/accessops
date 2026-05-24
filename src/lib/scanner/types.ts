@@ -36,7 +36,32 @@ export interface ScanInput {
   scanType: "single" | "multi" | "sitemap" | "manual";
   includeScreenshots: boolean;
   storeScreenshots: boolean;
+  visualEvidenceEnabled?: boolean;
+  visualEvidenceMaxScreenshots?: number;
   timeoutMs: number;
+}
+
+export type ScreenshotStatus = "pending" | "captured" | "skipped" | "failed" | "redacted";
+
+export interface BoundingBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface VisualEvidenceMetadata {
+  visualEvidenceEnabled: boolean;
+  screenshotPath?: string;
+  screenshotKey?: string;
+  screenshotStatus: ScreenshotStatus;
+  screenshotFailureReason?: string;
+  boundingBox?: BoundingBox;
+  viewport?: ScanViewport;
+  state?: ScanState;
+  selector?: string;
+  redactionApplied: boolean;
+  imageBuffer?: Buffer;
 }
 
 export interface NormalizedIssue {
@@ -52,6 +77,7 @@ export interface NormalizedIssue {
   failureSummary?: string;
   humanReviewRequired: boolean;
   contexts?: IssueContext[];
+  visualEvidence?: VisualEvidenceMetadata;
 }
 
 export interface NormalizedPage {

@@ -43,6 +43,13 @@
       "when": 1779581000000,
       "tag": "0005_scan_summaries",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1779581100000,
+      "tag": "0006_visual_evidence",
+      "breakpoints": true
     }
   ]
 }

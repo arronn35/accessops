@@ -17,6 +17,7 @@ import {
   scanPages,
   accessibilityIssues,
   scanSummaries,
+  visualEvidence,
 } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { type IssueCategory } from "@/lib/mock/issues";
@@ -61,9 +62,14 @@ export default async function ScanResultsPage({
       status: accessibilityIssues.status,
       pageUrl: scanPages.url,
       pageTitle: scanPages.title,
+      evidenceStatus: visualEvidence.screenshotStatus,
+      evidenceDeletedAt: visualEvidence.deletedAt,
+      evidenceExpiresAt: visualEvidence.expiresAt,
+      evidenceKey: visualEvidence.screenshotKey,
     })
     .from(accessibilityIssues)
     .leftJoin(scanPages, eq(accessibilityIssues.scanPageId, scanPages.id))
+    .leftJoin(visualEvidence, eq(visualEvidence.issueId, accessibilityIssues.id))
     .where(eq(accessibilityIssues.scanJobId, scan.id))
     .orderBy(asc(accessibilityIssues.severity));
 
@@ -240,6 +246,13 @@ export default async function ScanResultsPage({
                 <ContextLine contexts={issue.contextsJson ?? []} />
                 <IssueCard
                   scanId={scan.id}
+                  evidenceAvailable={
+                    !!issue.evidenceKey &&
+                    !issue.evidenceDeletedAt &&
+                    !!issue.evidenceExpiresAt &&
+                    issue.evidenceExpiresAt > new Date() &&
+                    (issue.evidenceStatus === "captured" || issue.evidenceStatus === "redacted")
+                  }
                   issue={{
                     id: issue.id,
                     title: issue.help,
