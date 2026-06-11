@@ -93,5 +93,5 @@ Removed and no longer required:
 ## Known Limits
 
 - Visual evidence/screenshots require workspace consent and are stored in Firestore (650 KB/screenshot cap).
-- Remediation tasks and team invitation emails are intentionally stubbed until the Firebase-only model is extended.
+- Invitation emails are delivered through Firebase Auth email-link sign-in (no SMTP provider); if Firebase declines the send, the UI falls back to manual link sharing. Billing remains disabled; plan selection is an entitlement switch.
 - The deprecated `POST /api/internal/scans/process` endpoint runs a static-only scan and is retained as a manual fallback (secret-guarded); the worker is authoritative.

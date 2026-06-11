@@ -29,6 +29,10 @@ export function FirebaseSignInForm() {
   const [email, setEmail] = useState("");
   const [status, setStatus] = useState<"idle" | "sending" | "sent" | "signing-in">("idle");
   const [error, setError] = useState<string | null>(null);
+  // True when the page was opened from an email link on a device that
+  // doesn't know the address — the form completes the existing link
+  // instead of sending a new one (typical for invitation emails).
+  const [pendingLink, setPendingLink] = useState(false);
   const configured = firebaseClientConfigured();
 
   const finishSignIn = useCallback(
@@ -68,7 +72,8 @@ export function FirebaseSignInForm() {
     void Promise.resolve().then(async () => {
       const storedEmail = window.localStorage.getItem(EMAIL_STORAGE_KEY);
       if (!storedEmail) {
-        setError("Please enter your email again to finish this sign-in link.");
+        setPendingLink(true);
+        setError("Enter the email address this link was sent to, then finish signing in.");
         return;
       }
       setStatus("signing-in");
@@ -90,6 +95,23 @@ export function FirebaseSignInForm() {
   async function sendEmailLink(e: React.FormEvent) {
     e.preventDefault();
     if (!configured) return;
+    if (pendingLink) {
+      setError(null);
+      setStatus("signing-in");
+      try {
+        const credential = await signInWithEmailLink(
+          firebaseClientAuth(),
+          email.trim(),
+          window.location.href
+        );
+        window.localStorage.removeItem(EMAIL_STORAGE_KEY);
+        await finishSignIn(await credential.user.getIdToken(), callbackUrl);
+      } catch (err) {
+        setError(firebaseError(err));
+        setStatus("idle");
+      }
+      return;
+    }
     setError(null);
     setStatus("sending");
     try {
@@ -183,7 +205,13 @@ export function FirebaseSignInForm() {
             className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 disabled:opacity-60"
           >
             <Mail className="size-4" aria-hidden />
-            {status === "sending" ? "Sending..." : "Email me a sign-in link"}
+            {pendingLink
+              ? status === "signing-in"
+                ? "Signing in..."
+                : "Finish sign-in"
+              : status === "sending"
+              ? "Sending..."
+              : "Email me a sign-in link"}
           </button>
         </form>
 

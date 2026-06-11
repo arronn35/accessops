@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Mail, Trash2 } from "lucide-react";
+import { sendInviteEmail } from "@/lib/firebase/invite-email";
 
 interface Invitation {
   id: string;
@@ -102,10 +103,16 @@ export function InviteSection({
         ...prev,
       ]);
       setEmail("");
+      // Delivery goes through Firebase Auth's email-link service from the
+      // browser — no SMTP provider involved. On failure we fall back to
+      // manual link sharing (the pending list always shows the URL).
+      const emailSent = data.inviteUrl
+        ? await sendInviteEmail(data.email, data.inviteUrl)
+        : false;
       setInfo(
-        data.emailSent
-          ? `Invite emailed to ${data.email}.`
-          : `Invite created for ${data.email}. Email delivery was not configured, so share the link with them manually.`
+        emailSent
+          ? `Invite emailed to ${data.email}. They'll sign in from the link and land on the invitation.`
+          : `Invite created for ${data.email}, but the email could not be sent automatically — share the link below with them manually.`
       );
     } catch (err) {
       setError((err as Error).message ?? "Network error");
