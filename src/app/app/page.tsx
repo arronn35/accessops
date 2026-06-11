@@ -1,5 +1,4 @@
 import Link from "next/link";
-import { desc, eq, sql } from "drizzle-orm";
 import {
   ArrowUpRight, Plus, AlertOctagon, AlertTriangle, Info, FileCheck2, Activity, Sparkles,
 } from "lucide-react";
@@ -11,13 +10,9 @@ import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { ScanLine } from "lucide-react";
-import { db } from "@/lib/db";
-import {
-  scanJobs,
-  accessibilityIssues,
-  scanSummaries,
-} from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { getScanSummary, listIssues, listScans } from "@/lib/data/firestore";
+import type { ScanSummary } from "@/lib/data/types";
 import { formatRelative } from "@/lib/utils";
 
 export const metadata = { title: "Dashboard — AccessOps AI" };
@@ -26,47 +21,24 @@ export const dynamic = "force-dynamic";
 export default async function DashboardPage() {
   const ctx = await getCurrentWorkspaceOrRedirect();
 
-  const recentScans = await db
-    .select()
-    .from(scanJobs)
-    .where(eq(scanJobs.workspaceId, ctx.workspace.id))
-    .orderBy(desc(scanJobs.createdAt))
-    .limit(5);
+  const recentScans = await listScans(ctx.workspace.id, 5);
 
   const latest = recentScans[0];
-  const openIssuesRaw = latest
-    ? await db
-        .select({
-          id: accessibilityIssues.id,
-          ruleId: accessibilityIssues.ruleId,
-          severity: accessibilityIssues.severity,
-          help: accessibilityIssues.help,
-        })
-        .from(accessibilityIssues)
-        .where(eq(accessibilityIssues.scanJobId, latest.id))
-        .orderBy(desc(accessibilityIssues.severity))
-        .limit(5)
-    : [];
+  const allIssues = latest ? await listIssues(ctx.workspace.id, latest.id) : [];
+  const openIssuesRaw = allIssues.slice(0, 5).map((issue) => ({
+    id: issue.id,
+    ruleId: issue.ruleId,
+    severity: issue.severity,
+    help: issue.help,
+  }));
 
   const counts = { critical: 0, moderate: 0, minor: 0, review: 0, passed: 0 };
-  let latestSummary: typeof scanSummaries.$inferSelect | null = null;
+  let latestSummary: ScanSummary | null = null;
   if (latest) {
-    const sevRows = await db
-      .select({
-        severity: accessibilityIssues.severity,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(accessibilityIssues)
-      .where(eq(accessibilityIssues.scanJobId, latest.id))
-      .groupBy(accessibilityIssues.severity);
-    for (const row of sevRows) {
-      counts[row.severity as keyof typeof counts] = row.count;
+    for (const issue of allIssues) {
+      counts[issue.severity as keyof typeof counts]++;
     }
-    [latestSummary] = await db
-      .select()
-      .from(scanSummaries)
-      .where(eq(scanSummaries.scanJobId, latest.id))
-      .limit(1);
+    latestSummary = await getScanSummary(ctx.workspace.id, latest.id);
   }
 
   const total = counts.critical + counts.moderate + counts.minor + counts.review;
@@ -151,10 +123,15 @@ export default async function DashboardPage() {
                       Risk score reflects automated findings only. Lower-risk doesn&apos;t mean compliant.
                     </p>
                     <Link
-                      href={`/app/scans/${latest.id}`}
+                      href={
+                        latest.status === "completed"
+                          ? `/app/scans/${latest.id}`
+                          : `/app/scans/${latest.id}/progress`
+                      }
                       className="inline-flex items-center gap-1 text-xs font-medium text-blue-600 hover:underline"
                     >
-                      Open scan results <ArrowUpRight className="size-3" aria-hidden />
+                      {latest.status === "completed" ? "Open scan results" : "View scan progress"}{" "}
+                      <ArrowUpRight className="size-3" aria-hidden />
                     </Link>
                   </div>
                 </div>

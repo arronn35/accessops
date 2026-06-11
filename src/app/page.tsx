@@ -1,16 +1,18 @@
 import Link from "next/link";
 import {
   ArrowRight, ShieldCheck, Sparkles, Eye, ScanLine, Lock, UserCheck, FileBarChart2, Workflow, Code2,
-  Globe, ChevronDown, CheckCircle2,
+  Globe, ChevronDown, CheckCircle2, LayoutDashboard,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Badge } from "@/components/ui/Badge";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { verifySessionCookie } from "@/lib/auth/session";
 
 export const metadata = {
   title: "maitrico AccessOps AI — Accessibility operations, not one-click compliance",
 };
+export const dynamic = "force-dynamic";
 
 const TRUST = [
   { icon: ScanLine, label: "WCAG-oriented checks" },
@@ -48,13 +50,14 @@ const FAQ = [
   },
 ];
 
-export default function LandingPage() {
+export default async function LandingPage() {
+  const signedIn = Boolean(await verifySessionCookie().catch(() => null));
   return (
     <div className="bg-paper text-ink-900">
       {/* Top nav */}
       <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-line">
         <div className="max-w-6xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/" aria-label="maitrico AccessOps AI home">
+          <Link href="/" aria-label="accessops home">
             <Logo variant="lockup" />
           </Link>
           <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-sm">
@@ -64,18 +67,31 @@ export default function LandingPage() {
             <Link href="/pricing" className="text-ink-700 hover:text-ink-900">Pricing</Link>
           </nav>
           <div className="flex items-center gap-2">
-            <Link
-              href="/auth/sign-in"
-              className="hidden sm:inline-flex items-center gap-1.5 text-sm text-ink-700 hover:text-ink-900 h-10 px-3 rounded-md"
-            >
-              Sign in
-            </Link>
-            <Link
-              href="/onboarding"
-              className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-            >
-              Start free scan <ArrowRight className="size-4" aria-hidden />
-            </Link>
+            {signedIn ? (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+              >
+                <LayoutDashboard className="size-4" aria-hidden /> Open dashboard
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/auth/sign-in"
+                  className="inline-flex items-center gap-1.5 text-sm text-ink-700 hover:text-ink-900 h-10 px-2 sm:px-3 rounded-md"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/onboarding"
+                  className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+                >
+                  <span className="hidden min-[420px]:inline">Start free scan</span>
+                  <span className="min-[420px]:hidden">Start</span>
+                  <ArrowRight className="size-4" aria-hidden />
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>

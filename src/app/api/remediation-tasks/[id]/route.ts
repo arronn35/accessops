@@ -1,114 +1,63 @@
-/**
- * PATCH /api/remediation-tasks/:id — update status / assignee / notes
- * DELETE /api/remediation-tasks/:id
- */
-import { NextRequest } from "next/server";
-import { and, eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { remediationTasks, workspaceMembers } from "@/lib/db/schema";
-import { apiError, ApiError, requireSession } from "@/lib/api/context";
-import { audit } from "@/lib/api/audit";
+import { apiError, ApiError, requirePermission } from "@/lib/api/context";
+import {
+  audit,
+  deleteRemediationTask,
+  updateRemediationTask,
+} from "@/lib/data/firestore";
 
-const Patch = z.object({
-  status: z
-    .enum([
-      "to_review",
-      "planned",
-      "in_progress",
-      "needs_human_review",
-      "fixed",
-      "accepted_risk",
-    ])
-    .optional(),
-  priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+const PatchSchema = z.object({
   title: z.string().min(2).max(240).optional(),
-  description: z.string().max(4000).optional(),
-  notes: z.string().max(4000).optional(),
-  assignedToMemberId: z.string().uuid().nullable().optional(),
+  description: z.string().max(2000).nullable().optional(),
+  status: z.enum(["to_do", "planned", "in_progress", "blocked", "fixed", "accepted_risk"]).optional(),
+  priority: z.enum(["urgent", "high", "medium", "low"]).optional(),
+  assignedToMemberId: z.string().nullable().optional(),
   dueAt: z.string().datetime().nullable().optional(),
+  notes: z.string().max(2000).nullable().optional(),
 });
 
 export async function PATCH(
-  req: NextRequest,
+  req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("manage_remediation");
     const { id } = await params;
-    const body = await req.json().catch(() => ({}));
-    const parsed = Patch.safeParse(body);
+    const parsed = PatchSchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) throw new ApiError(400, "invalid_input");
-
-    if (parsed.data.assignedToMemberId) {
-      const [member] = await db
-        .select({ id: workspaceMembers.id, status: workspaceMembers.status })
-        .from(workspaceMembers)
-        .where(
-          and(
-            eq(workspaceMembers.id, parsed.data.assignedToMemberId),
-            eq(workspaceMembers.workspaceId, ctx.workspaceId)
-          )
-        )
-        .limit(1);
-      if (!member || member.status !== "active") {
-        throw new ApiError(400, "invalid_assignee");
-      }
-    }
-
-    const updates: Record<string, unknown> = { ...parsed.data, updatedAt: new Date() };
-    if (parsed.data.dueAt) updates.dueAt = new Date(parsed.data.dueAt);
-
-    const result = await db
-      .update(remediationTasks)
-      .set(updates)
-      .where(
-        and(
-          eq(remediationTasks.id, id),
-          eq(remediationTasks.workspaceId, ctx.workspaceId)
-        )
-      )
-      .returning({ id: remediationTasks.id });
-
-    if (!result.length) throw new ApiError(404, "not_found");
-
+    const task = await updateRemediationTask(ctx.workspaceId, id, {
+      ...parsed.data,
+      dueAt: parsed.data.dueAt ? new Date(parsed.data.dueAt) : parsed.data.dueAt === null ? null : undefined,
+    });
+    if (!task) throw new ApiError(404, "not_found");
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       action: "task.updated",
-      resourceType: "task",
+      resourceType: "remediation_task",
       resourceId: id,
       metadata: parsed.data,
     });
-
-    return Response.json({ ok: true });
+    return Response.json({ task });
   } catch (err) {
     return apiError(err);
   }
 }
 
 export async function DELETE(
-  _req: NextRequest,
+  _req: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("manage_remediation");
     const { id } = await params;
-    const result = await db
-      .delete(remediationTasks)
-      .where(
-        and(
-          eq(remediationTasks.id, id),
-          eq(remediationTasks.workspaceId, ctx.workspaceId)
-        )
-      )
-      .returning({ id: remediationTasks.id });
-    if (!result.length) throw new ApiError(404, "not_found");
+    const ok = await deleteRemediationTask(ctx.workspaceId, id);
+    if (!ok) throw new ApiError(404, "not_found");
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       action: "task.deleted",
-      resourceType: "task",
+      resourceType: "remediation_task",
       resourceId: id,
     });
     return Response.json({ ok: true });

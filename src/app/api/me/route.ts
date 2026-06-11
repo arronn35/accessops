@@ -1,9 +1,7 @@
 import { z } from "zod";
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
-import { audit } from "@/lib/api/audit";
+import { audit, getWorkspaceContext } from "@/lib/data/firestore";
+import { firestore } from "@/lib/firebase/admin";
 
 const BodySchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
@@ -13,27 +11,16 @@ const BodySchema = z.object({
 export async function PATCH(req: Request) {
   try {
     const ctx = await requireSession();
-    const body = await req.json().catch(() => ({}));
-    const parsed = BodySchema.safeParse(body);
-    if (!parsed.success) {
-      throw new ApiError(400, "invalid_input", JSON.stringify(parsed.error.issues));
-    }
-
-    const [updated] = await db
-      .update(users)
-      .set({
+    const parsed = BodySchema.safeParse(await req.json().catch(() => ({})));
+    if (!parsed.success) throw new ApiError(400, "invalid_input");
+    await firestore().collection("users").doc(ctx.userId).set(
+      {
         name: parsed.data.name,
         fullName: parsed.data.fullName || null,
         updatedAt: new Date(),
-      })
-      .where(eq(users.id, ctx.userId))
-      .returning({
-        id: users.id,
-        name: users.name,
-        fullName: users.fullName,
-        email: users.email,
-      });
-
+      },
+      { merge: true }
+    );
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
@@ -41,8 +28,8 @@ export async function PATCH(req: Request) {
       resourceType: "user",
       resourceId: ctx.userId,
     });
-
-    return Response.json({ user: updated });
+    const current = await getWorkspaceContext(ctx.userId);
+    return Response.json({ user: current?.user ?? null });
   } catch (err) {
     return apiError(err);
   }

@@ -1,12 +1,14 @@
 import Link from "next/link";
-import { Check, ArrowLeft, Sparkles } from "lucide-react";
+import { Check, ArrowLeft, Sparkles, LayoutDashboard } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Logo } from "@/components/brand/Logo";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { cn } from "@/lib/utils";
+import { verifySessionCookie } from "@/lib/auth/session";
 import { PricingCta } from "./pricing-cta";
 
 export const metadata = { title: "Pricing — maitrico AccessOps AI" };
+export const dynamic = "force-dynamic";
 
 const PLANS = [
   {
@@ -106,7 +108,8 @@ const FAQ = [
   },
 ];
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const signedIn = Boolean(await verifySessionCookie().catch(() => null));
   return (
     <div className="bg-canvas-2 min-h-screen pb-20">
       <header className="bg-paper border-b border-line">
@@ -118,12 +121,32 @@ export default function PricingPage() {
             <Link href="/" className="inline-flex items-center gap-1 text-sm text-ink-700 hover:text-ink-900">
               <ArrowLeft className="size-4" aria-hidden /> Back home
             </Link>
-            <Link
-              href="/onboarding"
-              className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-            >
-              Start free scan
-            </Link>
+            {signedIn ? (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+              >
+                <LayoutDashboard className="size-4" aria-hidden />
+                <span className="hidden min-[420px]:inline">Open dashboard</span>
+                <span className="min-[420px]:hidden">Dashboard</span>
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/auth/sign-in"
+                  className="inline-flex items-center gap-1.5 text-sm text-ink-700 hover:text-ink-900 h-10 px-2 sm:px-3 rounded-md"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/onboarding"
+                  className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+                >
+                  <span className="hidden min-[420px]:inline">Start free scan</span>
+                  <span className="min-[420px]:hidden">Start</span>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>

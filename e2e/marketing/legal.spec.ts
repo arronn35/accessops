@@ -30,8 +30,11 @@ test.describe("legal pages", () => {
     }
   });
 
-  test("subprocessor list includes Stripe", async ({ page }) => {
+  test("subprocessor list matches the current architecture", async ({ page }) => {
     await page.goto("/legal/subprocessors");
-    await expect(page.getByText(/Stripe, Inc\./)).toBeVisible();
+    await expect(page.getByRole("cell", { name: /Google Firebase/ })).toBeVisible();
+    // The scan worker host replaced the retired Cloudflare queue.
+    await expect(page.getByRole("cell", { name: /Railway/ })).toBeVisible();
+    await expect(page.getByText(/Cloudflare/)).toHaveCount(0);
   });
 });

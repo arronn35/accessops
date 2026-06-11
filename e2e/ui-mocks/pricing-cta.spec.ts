@@ -2,32 +2,27 @@ import { test, expect } from "@playwright/test";
 
 /**
  * The pricing CTAs for paid plans are client components that POST to
- * /api/billing/checkout. In production that route requires a session and
- * returns a Stripe Checkout URL. We mock both flavours of response here
- * to lock in the CTA behaviour without needing Stripe or auth.
+ * /api/plan/select. Stripe was removed; selecting a plan now grants
+ * access immediately. We mock the API to lock in the CTA behaviour
+ * without needing auth.
  */
-test.describe("pricing CTA → checkout API", () => {
-  test("redirects to Stripe Checkout on success", async ({ page }) => {
-    await page.route("**/api/billing/checkout", (route) =>
+test.describe("pricing CTA → plan-select API", () => {
+  test("activates the plan and redirects to billing page", async ({ page }) => {
+    await page.route("**/api/plan/select", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify({ url: "https://checkout.example/test_session" }),
+        body: JSON.stringify({ ok: true, plan: "starter" }),
       })
     );
 
     await page.goto("/pricing");
-    // Don't actually load Stripe — capture the navigation attempt.
-    const navPromise = page.waitForRequest(
-      (req) => req.url().startsWith("https://checkout.example/")
-    );
     await page.getByRole("button", { name: /Get started/i }).first().click();
-    const req = await navPromise;
-    expect(req.url()).toBe("https://checkout.example/test_session");
+    await expect(page.getByRole("button", { name: /Plan activated/i })).toBeVisible();
   });
 
   test("bounces unauthenticated user to sign-in", async ({ page }) => {
-    await page.route("**/api/billing/checkout", (route) =>
+    await page.route("**/api/plan/select", (route) =>
       route.fulfill({
         status: 401,
         contentType: "application/json",
@@ -40,20 +35,20 @@ test.describe("pricing CTA → checkout API", () => {
     await expect(page).toHaveURL(/\/auth\/sign-in\?callbackUrl=/);
   });
 
-  test("surfaces a friendly error when Stripe is not configured", async ({ page }) => {
-    await page.route("**/api/billing/checkout", (route) =>
+  test("surfaces a friendly error on failure", async ({ page }) => {
+    await page.route("**/api/plan/select", (route) =>
       route.fulfill({
-        status: 503,
+        status: 500,
         contentType: "application/json",
         body: JSON.stringify({
-          error: "billing_unavailable",
-          message: "Stripe is not configured on this deployment.",
+          error: "internal",
+          message: "Something went wrong.",
         }),
       })
     );
 
     await page.goto("/pricing");
     await page.getByRole("button", { name: /Get started/i }).first().click();
-    await expect(page.getByText(/Stripe is not configured/i)).toBeVisible();
+    await expect(page.getByText(/Something went wrong/i)).toBeVisible();
   });
 });

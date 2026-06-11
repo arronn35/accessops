@@ -9,9 +9,7 @@ import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { PrivacyToggle } from "./privacy-toggle";
 import { DeleteAllScansButton, ExportWorkspaceButton } from "./delete-actions";
-import { db } from "@/lib/db";
-import { auditLogs, users } from "@/lib/db/schema";
-import { desc, eq } from "drizzle-orm";
+import { listAuditLogs } from "@/lib/data/firestore";
 import { formatRelative } from "@/lib/utils";
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
@@ -39,19 +37,19 @@ export const metadata = { title: "Privacy & Compliance Center — AccessOps AI" 
 export const dynamic = "force-dynamic";
 
 const LEGAL_PAGES = [
-  { label: "Privacy Policy", href: "#privacy" },
-  { label: "Terms of Service", href: "#terms" },
-  { label: "AI Use Disclosure", href: "#ai-use" },
-  { label: "Accessibility Methodology", href: "#methodology" },
-  { label: "No Legal Advice Disclaimer", href: "#no-legal" },
-  { label: "Data Processing Addendum", href: "#dpa" },
+  { label: "Privacy Policy", href: "/legal/privacy" },
+  { label: "Terms of Service", href: "/legal/terms" },
+  { label: "AI Use Disclosure", href: "/legal/ai-use" },
+  { label: "Accessibility Methodology", href: "/legal/accessibility-methodology" },
+  { label: "No Legal Advice Disclaimer", href: "/legal/no-legal-advice" },
+  { label: "Data Processing Addendum", href: "/legal/dpa" },
 ];
 
 const SUBPROCESSORS = [
-  { name: "AWS (eu-central-1)", purpose: "Application hosting & scan execution", region: "EU" },
-  { name: "Cloudflare", purpose: "Edge caching & DDoS protection", region: "Global" },
-  { name: "Anthropic API", purpose: "AI explanations & remediation suggestions", region: "US" },
-  { name: "Postmark", purpose: "Transactional email", region: "US" },
+  { name: "Vercel", purpose: "Application hosting and API", region: "US/global" },
+  { name: "Firebase", purpose: "Authentication and Firestore workspace storage", region: "Configured project region" },
+  { name: "Railway", purpose: "Browser scan worker (Playwright + axe-core); page content processed transiently", region: "US" },
+  { name: "OpenAI API", purpose: "GPT explanations and remediation suggestions when enabled", region: "US" },
 ];
 
 export default async function CompliancePage() {
@@ -63,21 +61,20 @@ export default async function CompliancePage() {
   // Audit events are only readable by owners/admins; for others we
   // show an empty list rather than leaking who-did-what.
   const canViewAudit = ctx.member.role === "owner" || ctx.member.role === "admin";
+  let auditEventsError = false;
   const auditEvents = canViewAudit
-    ? await db
-        .select({
-          id: auditLogs.id,
-          action: auditLogs.action,
-          resourceType: auditLogs.resourceType,
-          createdAt: auditLogs.createdAt,
-          userName: users.name,
-          userEmail: users.email,
+    ? await listAuditLogs(ctx.workspace.id, 10)
+        .then((events) =>
+          events.map((event) => ({
+            ...event,
+            userName: event.userId === ctx.userId ? ctx.user.name : null,
+            userEmail: event.userId === ctx.userId ? ctx.user.email : null,
+          }))
+        )
+        .catch(() => {
+          auditEventsError = true;
+          return [];
         })
-        .from(auditLogs)
-        .leftJoin(users, eq(auditLogs.userId, users.id))
-        .where(eq(auditLogs.workspaceId, ctx.workspace.id))
-        .orderBy(desc(auditLogs.createdAt))
-        .limit(10)
     : [];
 
   return (
@@ -151,7 +148,7 @@ export default async function CompliancePage() {
                 fieldKey="screenshotStorageEnabled"
                 initial={screenshotsOn}
                 label="Store visual evidence screenshots"
-                description={`${COMPLIANCE_COPY.SCREENSHOT_NOTICE} Default visual evidence retention is ${ctx.privacy?.visualEvidenceRetentionDays ?? 30} days.`}
+                description={`${COMPLIANCE_COPY.SCREENSHOT_NOTICE} Turning this on also keeps diagnostic visual evidence enabled. Turning visual evidence off disables screenshot storage. Default retention is ${ctx.privacy?.visualEvidenceRetentionDays ?? 30} days.`}
               />
             </div>
           </CardContent>
@@ -228,7 +225,12 @@ export default async function CompliancePage() {
             <CardDescription>Last 10 sensitive actions in this workspace.</CardDescription>
           </CardHeader>
           <CardContent>
-            {auditEvents.length === 0 ? (
+            {auditEventsError ? (
+              <AlertCallout tone="warning" title="Audit log temporarily unavailable">
+                Sensitive actions are still recorded, but the recent activity list could not be
+                loaded right now.
+              </AlertCallout>
+            ) : auditEvents.length === 0 ? (
               <p className="text-xs text-ink-600">
                 No recorded actions yet. Sensitive actions — scans, exports, privacy changes,
                 deletions — appear here as they happen.
@@ -307,6 +309,26 @@ export default async function CompliancePage() {
           ))}
         </div>
       </section>
+
+      <footer className="border-t border-line pt-6 mt-4 text-xs text-ink-600 flex flex-wrap gap-x-6 gap-y-2 items-center">
+        <span className="font-semibold text-ink-700 uppercase tracking-wider text-[10px]">
+          Contact
+        </span>
+        <a
+          href="mailto:maitritechco@gmail.com"
+          className="hover:text-ink-900"
+        >
+          maitritechco@gmail.com
+        </a>
+        <a
+          href="https://maitrico.online"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-ink-900 underline-offset-2 hover:underline"
+        >
+          maitrico
+        </a>
+      </footer>
     </div>
   );
 }

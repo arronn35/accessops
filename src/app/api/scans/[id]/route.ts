@@ -1,16 +1,8 @@
-/**
- * GET /api/scans/:id — full scan summary (job + page counts + severity counts)
- */
 import { NextRequest } from "next/server";
-import { and, eq, sql } from "drizzle-orm";
-import { db } from "@/lib/db";
-import {
-  scanJobs,
-  scanPages,
-  accessibilityIssues,
-  scanSummaries,
-} from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { audit, getScanJob, getScanSummary, listIssues, listScanPages } from "@/lib/data/firestore";
+import { deleteScanCompletely } from "@/lib/data/deletion";
+import { roleHasPermission } from "@/lib/entitlements";
 
 export async function GET(
   _req: NextRequest,
@@ -18,45 +10,15 @@ export async function GET(
 ) {
   try {
     const ctx = await requireSession();
+    if (!roleHasPermission(ctx.role, "view_scans")) throw new ApiError(403, "forbidden");
     const { id } = await params;
-
-    const [job] = await db
-      .select()
-      .from(scanJobs)
-      .where(and(eq(scanJobs.id, id), eq(scanJobs.workspaceId, ctx.workspaceId)))
-      .limit(1);
-
+    const job = await getScanJob(ctx.workspaceId, id);
     if (!job) throw new ApiError(404, "not_found");
-
-    const pagesCount = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(scanPages)
-      .where(eq(scanPages.scanJobId, id));
-
-    const severity = await db
-      .select({
-        severity: accessibilityIssues.severity,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(accessibilityIssues)
-      .where(eq(accessibilityIssues.scanJobId, id))
-      .groupBy(accessibilityIssues.severity);
-
-    const impact = await db
-      .select({
-        impact: accessibilityIssues.impact,
-        count: sql<number>`count(*)::int`,
-      })
-      .from(accessibilityIssues)
-      .where(eq(accessibilityIssues.scanJobId, id))
-      .groupBy(accessibilityIssues.impact);
-
-    const [summary] = await db
-      .select()
-      .from(scanSummaries)
-      .where(eq(scanSummaries.scanJobId, id))
-      .limit(1);
-
+    const [pages, issues, summary] = await Promise.all([
+      listScanPages(ctx.workspaceId, id),
+      listIssues(ctx.workspaceId, id),
+      getScanSummary(ctx.workspaceId, id),
+    ]);
     const counts = {
       critical: 0,
       serious: 0,
@@ -64,15 +26,14 @@ export async function GET(
       minor: 0,
       passed: 0,
       review: 0,
-    } as Record<string, number>;
-    for (const row of severity) counts[row.severity] = row.count;
-    for (const row of impact) {
-      if (row.impact === "serious") counts.serious = row.count;
+    };
+    for (const issue of issues) {
+      if (issue.impact === "serious") counts.serious++;
+      counts[issue.severity]++;
     }
-
     return Response.json({
       scan: job,
-      pagesCount: pagesCount[0]?.count ?? 0,
+      pagesCount: pages.length,
       counts,
       scoreSummary: summary
         ? {
@@ -90,6 +51,39 @@ export async function GET(
           }
         : null,
     });
+  } catch (err) {
+    return apiError(err);
+  }
+}
+
+/**
+ * Permanently delete one scan and its results (pages, issues, groups,
+ * summary, visual evidence). Running scans must finish or fail first so the
+ * worker does not resurrect partial results.
+ */
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const ctx = await requireSession();
+    if (!roleHasPermission(ctx.role, "delete_scans")) throw new ApiError(403, "forbidden");
+    const { id } = await params;
+    const job = await getScanJob(ctx.workspaceId, id);
+    if (!job) throw new ApiError(404, "not_found");
+    if (job.status === "queued" || job.status === "running") {
+      throw new ApiError(409, "scan_in_progress", "Wait for the scan to finish before deleting it.");
+    }
+    const deletedCounts = await deleteScanCompletely(ctx.workspaceId, id);
+    await audit({
+      userId: ctx.userId,
+      workspaceId: ctx.workspaceId,
+      action: "scan.deleted",
+      resourceType: "scan",
+      resourceId: id,
+      metadata: { deletedCounts },
+    });
+    return Response.json({ ok: true, deletedCounts });
   } catch (err) {
     return apiError(err);
   }

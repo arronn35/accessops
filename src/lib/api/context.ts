@@ -8,11 +8,11 @@
  * Returns a typed context object or throws an ApiError that the route
  * handler converts into a JSON response.
  */
-import { auth } from "@/auth";
-import { db } from "@/lib/db";
-import { workspaceMembers } from "@/lib/db/schema";
-import { and, eq } from "drizzle-orm";
+import { verifySessionCookie } from "@/lib/auth/session";
+import { getWorkspaceContext } from "@/lib/data/firestore";
+import { isFirestoreQuotaError } from "@/lib/data/firestore-errors";
 import { captureException } from "@/lib/observability";
+import { roleHasPermission, type WorkspacePermission } from "@/lib/entitlements";
 
 export class ApiError extends Error {
   constructor(
@@ -51,35 +51,33 @@ export interface ApiContext {
 }
 
 export async function requireSession(): Promise<ApiContext> {
-  const session = await auth();
-  if (!session?.user?.id) {
+  const token = await verifySessionCookie();
+  if (!token?.uid) {
     throw new ApiError(401, "unauthorized");
   }
-  const workspaceId = session.user.workspaceId;
-  if (!workspaceId) {
+  const ctx = await getWorkspaceContext(token.uid);
+  if (!ctx?.workspace?.id) {
     throw new ApiError(403, "no_workspace", "User has no workspace yet");
   }
-
-  const [member] = await db
-    .select({ role: workspaceMembers.role, status: workspaceMembers.status })
-    .from(workspaceMembers)
-    .where(
-      and(
-        eq(workspaceMembers.userId, session.user.id),
-        eq(workspaceMembers.workspaceId, workspaceId)
-      )
-    )
-    .limit(1);
-
-  if (!member || member.status !== "active") {
+  if (ctx.member.status !== "active") {
     throw new ApiError(403, "not_a_member");
   }
 
   return {
-    userId: session.user.id,
-    workspaceId,
-    role: member.role,
+    userId: token.uid,
+    workspaceId: ctx.workspace.id,
+    role: ctx.member.role,
   };
+}
+
+export async function requirePermission(
+  permission: WorkspacePermission
+): Promise<ApiContext> {
+  const ctx = await requireSession();
+  if (!roleHasPermission(ctx.role, permission)) {
+    throw new ApiError(403, "forbidden");
+  }
+  return ctx;
 }
 
 export function apiError(err: unknown): Response {
@@ -89,6 +87,15 @@ export function apiError(err: unknown): Response {
     return Response.json(
       { error: err.code, message: err.message },
       { status: err.status, headers: err.headers }
+    );
+  }
+  if (isFirestoreQuotaError(err)) {
+    return Response.json(
+      {
+        error: "firestore_quota_exceeded",
+        message: "Workspace data is temporarily unavailable because Firestore quota was exceeded.",
+      },
+      { status: 503, headers: { "cache-control": "no-store" } }
     );
   }
   // Unexpected — log + ship to Sentry (fire-and-forget).

@@ -64,7 +64,7 @@ describe("visual evidence privacy helpers", () => {
     expect(out.visualEvidence?.screenshotFailureReason).toBe("sensitive_page_skipped");
   });
 
-  it("records selector visibility failures without throwing", async () => {
+  it("captures viewport context when the exact selector is not visible", async () => {
     const [out] = await captureVisualEvidenceForIssues({
       page: fakePage({ visible: false }) as never,
       pageUrl: "https://example.com/",
@@ -75,8 +75,33 @@ describe("visual evidence privacy helpers", () => {
       enabled: true,
     });
 
-    expect(out.visualEvidence?.screenshotStatus).toBe("skipped");
-    expect(out.visualEvidence?.screenshotFailureReason).toBe("element_not_visible");
+    expect(out.visualEvidence?.screenshotStatus).toBe("captured");
+    expect(out.visualEvidence?.screenshotFailureReason).toBe("element_not_visible_context_capture");
+    expect(out.visualEvidence?.imageBuffer?.length).toBeGreaterThan(100);
+  });
+
+  it("tries alternate selectors before falling back to page context", async () => {
+    const page = fakePage({
+      visibleBySelector: {
+        "button.bad": false,
+        "button.good": true,
+      },
+      screenshot: blankPng(),
+    });
+    const [out] = await captureVisualEvidenceForIssues({
+      page: page as never,
+      pageUrl: "https://example.com/",
+      issues: [issue({ target: ["button.bad", "button.good"] })],
+      viewport,
+      state: "initial",
+      budget: createEvidenceBudget(10),
+      enabled: true,
+    });
+
+    expect(page.locator).toHaveBeenCalledWith("button.bad");
+    expect(page.locator).toHaveBeenCalledWith("button.good");
+    expect(out.visualEvidence?.screenshotStatus).toBe("captured");
+    expect(out.visualEvidence?.selector).toBe("button.good");
   });
 
   it("captures and decorates an element screenshot", async () => {
@@ -109,23 +134,30 @@ describe("visual evidence privacy helpers", () => {
   });
 });
 
-function fakePage(options: { visible?: boolean; sensitive?: boolean; screenshot?: Buffer } = {}) {
-  const locator = {
-    isVisible: vi.fn(async () => options.visible ?? true),
-    scrollIntoViewIfNeeded: vi.fn(async () => undefined),
-    boundingBox: vi.fn(async () => ({ x: 12, y: 14, width: 80, height: 40 })),
-    screenshot: vi.fn(async () => options.screenshot ?? (await blankPng())),
-    evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
-      if (arg) return undefined;
-      return {
-        previousOutline: "",
-        previousOutlineOffset: "",
-        previousBoxShadow: "",
-      };
-    }),
-  };
+function fakePage(options: {
+  visible?: boolean;
+  visibleBySelector?: Record<string, boolean>;
+  sensitive?: boolean;
+  screenshot?: Buffer;
+} = {}) {
   return {
-    locator: vi.fn(() => ({ first: () => locator })),
+    locator: vi.fn((selector: string) => {
+      const locator = {
+        isVisible: vi.fn(async () => options.visibleBySelector?.[selector] ?? options.visible ?? true),
+        scrollIntoViewIfNeeded: vi.fn(async () => undefined),
+        boundingBox: vi.fn(async () => ({ x: 12, y: 14, width: 80, height: 40 })),
+        screenshot: vi.fn(async () => options.screenshot ?? (await blankPng())),
+        evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {
+          if (arg) return undefined;
+          return {
+            previousOutline: "",
+            previousOutlineOffset: "",
+            previousBoxShadow: "",
+          };
+        }),
+      };
+      return { first: () => locator };
+    }),
     waitForTimeout: vi.fn(async () => undefined),
     screenshot: vi.fn(async () => options.screenshot ?? (await blankPng())),
     evaluate: vi.fn(async (_fn: unknown, arg?: unknown) => {

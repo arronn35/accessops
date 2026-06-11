@@ -13,6 +13,9 @@ import { Logo } from "@/components/brand/Logo";
 const LEGAL_NAV = [
   { href: "/legal/terms", label: "Terms of Service" },
   { href: "/legal/privacy", label: "Privacy Policy" },
+  { href: "/legal/ai-use", label: "AI Use Disclosure" },
+  { href: "/legal/accessibility-methodology", label: "Accessibility Methodology" },
+  { href: "/legal/no-legal-advice", label: "No Legal Advice" },
   { href: "/legal/dpa", label: "Data Processing Addendum" },
   { href: "/legal/subprocessors", label: "Subprocessors" },
   { href: "/legal/contact", label: "Contact" },

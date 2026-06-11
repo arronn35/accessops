@@ -11,7 +11,12 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { SCAN_VIEWPORTS } from "@/lib/scanner/types";
 import { cn } from "@/lib/utils";
+
+// Mirrors the worker: 3 viewports × (initial + 5 interactive states).
+const VIEWPORT_COUNT = SCAN_VIEWPORTS.length;
+const STATES_PER_VIEWPORT = 6;
 
 const SCAN_TYPES = [
   { id: "single", label: "Single page", description: "Scan one URL." },
@@ -42,6 +47,26 @@ export default function NewScanPage() {
     permission &&
     !submitting &&
     (type !== "manual" || parsedManualUrls.length > 0);
+
+  // Estimated scope shown before the user commits, so the cost of a
+  // multi-page + screenshots run is never a surprise.
+  const estimatedPages =
+    type === "single"
+      ? 1
+      : type === "manual"
+      ? Math.max(1, parsedManualUrls.length)
+      : Math.max(1, maxPages);
+  const passesPerPage = VIEWPORT_COUNT * STATES_PER_VIEWPORT;
+  const totalPasses = estimatedPages * passesPerPage;
+  // Rough heuristic: ~2s per analysis pass, +1.5s per page when capturing
+  // screenshots. Bounded estimate, not a guarantee.
+  const estSeconds = Math.round(
+    totalPasses * 2 + (screenshots ? estimatedPages * 1.5 : 0)
+  );
+  const estLabel =
+    estSeconds < 90
+      ? `${estSeconds}s`
+      : `${Math.ceil(estSeconds / 60)} min`;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -260,6 +285,27 @@ export default function NewScanPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListChecks className="size-4 text-ink-500" aria-hidden /> Estimated scope
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <ScopeStat label="Pages" value={`${estimatedPages}`} />
+              <ScopeStat label="Viewports" value={`${VIEWPORT_COUNT}`} hint="Desktop · Tablet · Mobile" />
+              <ScopeStat label="Analysis passes" value={`${totalPasses}`} hint={`${passesPerPage}/page`} />
+              <ScopeStat label="Est. time" value={`~${estLabel}`} hint={screenshots ? "incl. screenshots" : undefined} />
+            </div>
+            <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+              Each page is analysed across {VIEWPORT_COUNT} viewports and {STATES_PER_VIEWPORT} interactive
+              states. Page count may be lower if the crawler finds fewer same-domain links. Time is a rough
+              estimate, not a guarantee.
+            </p>
+          </CardContent>
+        </Card>
+
         <NoGuaranteeBanner variant="compact" />
 
         {error && (
@@ -294,6 +340,24 @@ export default function NewScanPage() {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function ScopeStat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-md ring-1 ring-line bg-canvas-2 p-3">
+      <p className="text-lg font-semibold text-ink-900 tabular-nums leading-none">{value}</p>
+      <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mt-1.5">{label}</p>
+      {hint && <p className="text-[11px] text-ink-500 mt-0.5">{hint}</p>}
     </div>
   );
 }

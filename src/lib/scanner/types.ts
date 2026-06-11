@@ -6,7 +6,7 @@
 
 export type Severity = "critical" | "moderate" | "minor" | "passed" | "review";
 export type Impact = "minor" | "moderate" | "serious" | "critical";
-export type ScanViewportName = "desktop" | "mobile";
+export type ScanViewportName = "desktop" | "tablet" | "mobile";
 export type ScanState =
   | "initial"
   | "menu-open"
@@ -15,12 +15,30 @@ export type ScanState =
   | "tab-open"
   | "form-focus";
 export type ResultConfidence = "high" | "medium" | "low";
+export type ScannerErrorCode =
+  | "browser_launch_failed"
+  | "navigation_failed"
+  | "axe_failed"
+  | "deadline_exceeded"
+  | "state_unavailable"
+  | "page_unavailable";
 
 export interface ScanViewport {
   name: ScanViewportName;
   width: number;
   height: number;
 }
+
+/**
+ * Canonical viewport matrix every scan runs through. Defined here (rather
+ * than inline in the Playwright runner) so it can be imported and asserted
+ * without pulling in the browser engine. Order is widest → narrowest.
+ */
+export const SCAN_VIEWPORTS: readonly ScanViewport[] = [
+  { name: "desktop", width: 1440, height: 900 },
+  { name: "tablet", width: 768, height: 1024 },
+  { name: "mobile", width: 390, height: 844 },
+] as const;
 
 export interface IssueContext {
   viewport: ScanViewportName;
@@ -86,8 +104,23 @@ export interface NormalizedPage {
   statusCode: number | null;
   scannedAt: Date;
   screenshotPath?: string;
-  rawMetadata?: Record<string, unknown>;
+  rawMetadata?: ScannerPageMetadata;
   issues: NormalizedIssue[];
+}
+
+export interface ScannerPageMetadata {
+  [key: string]: unknown;
+  engine?: string;
+  scanner?: string;
+  fallbackMode?: boolean;
+  resultConfidence?: ResultConfidence;
+  code?: ScannerErrorCode;
+  message?: string;
+  truncatedByDeadline?: boolean;
+  playwrightVersion?: string | null;
+  axeVersion?: string | null;
+  variantCount?: number;
+  variants?: unknown[];
 }
 
 export interface ScanScoreSummary {

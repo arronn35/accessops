@@ -6,31 +6,31 @@ export const metadata = {
 const CHANNELS = [
   {
     label: "Product support",
-    email: "support@maitrico.com",
+    email: "maitritechco@gmail.com",
     body:
       "Stuck inside the app? Scan not finishing? Send a workspace ID and a brief description; we read every message.",
   },
   {
     label: "Sales & Enterprise",
-    email: "sales@maitrico.com",
+    email: "maitritechco@gmail.com",
     body:
       "Volume scanning, custom DPA, on-prem worker, SSO/SAML, regional residency. Tell us about your estate and we'll come back with options.",
   },
   {
     label: "Privacy & data subject requests",
-    email: "privacy@maitrico.com",
+    email: "maitritechco@gmail.com",
     body:
-      "Access, correction, deletion, portability, objection. EU/EEA/UK rights apply where relevant.",
+      "Access, correction, deletion, portability, and objection requests where applicable.",
   },
   {
     label: "Security",
-    email: "security@maitrico.com",
+    email: "maitritechco@gmail.com",
     body:
       "Vulnerability reports and suspected account compromise. We accept responsible-disclosure reports and will respond within 72 hours.",
   },
   {
     label: "Legal",
-    email: "legal@maitrico.com",
+    email: "maitritechco@gmail.com",
     body:
       "Contract questions, DPA counter-signature requests, law-enforcement requests.",
   },
@@ -48,7 +48,7 @@ export default function ContactPage() {
       <ul className="not-prose mt-6 space-y-3">
         {CHANNELS.map((c) => (
           <li
-            key={c.email}
+            key={c.label}
             className="rounded-md ring-1 ring-line bg-paper p-4"
           >
             <p className="text-sm font-semibold text-ink-900">{c.label}</p>
@@ -75,7 +75,7 @@ export default function ContactPage() {
       <h2>Responsible disclosure</h2>
       <p>
         Please report security vulnerabilities to{" "}
-        <a href="mailto:security@maitrico.com">security@maitrico.com</a>{" "}
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a>{" "}
         before public disclosure. We do not pursue good-faith researchers who
         follow our reporting policy.
       </p>

@@ -32,6 +32,7 @@ interface FetchResult {
   statusCode: number | null;
   contentType: string | null;
   html: string;
+  errorMessage?: string;
 }
 
 export async function runStaticScanJob(
@@ -39,6 +40,7 @@ export async function runStaticScanJob(
   onProgress?: ProgressCallback
 ): Promise<ScanOutcome> {
   const started = Date.now();
+  const deadline = started + Math.max(1_000, input.timeoutMs);
   const plan = await resolveScanSourcePlan({
     baseUrl: input.url,
     scanType: input.scanType,
@@ -62,6 +64,7 @@ export async function runStaticScanJob(
   });
 
   while (queue.length > 0 && pages.length < maxPages) {
+    assertWithinDeadline(deadline);
     const current = queue.shift()!;
     if (scanned.has(current)) continue;
     scanned.add(current);
@@ -73,10 +76,16 @@ export async function runStaticScanJob(
       currentUrl: current,
     });
 
-    const fetched = await fetchHtmlSafely(current, startUrl);
+    const fetched = await fetchHtmlSafely(current, startUrl, deadline).catch((err) =>
+      unavailableFetchResult(current, err)
+    );
     const analysis = fetched.html
       ? analyzeHtml(fetched.html, fetched.url)
-      : { title: null, issues: [], links: [] };
+      : {
+          title: null,
+          issues: fetched.errorMessage ? [unavailablePageIssue(fetched.errorMessage)] : [],
+          links: [],
+        };
 
     pages.push({
       url: fetched.url,
@@ -92,6 +101,7 @@ export async function runStaticScanJob(
         viewports: [],
         states: ["initial"],
         contentType: fetched.contentType,
+        fetchFailureReason: fetched.errorMessage ?? null,
         pageCap: maxPages,
         discoverySource: plan.discoverySource,
         sitemapUrl: plan.sitemapUrl ?? null,
@@ -286,12 +296,20 @@ export function analyzeHtml(html: string, pageUrl = "https://example.com/"): Htm
   };
 }
 
-async function fetchHtmlSafely(url: string, startUrl: ValidatedUrl): Promise<FetchResult> {
+async function fetchHtmlSafely(
+  url: string,
+  startUrl: ValidatedUrl,
+  deadline: number
+): Promise<FetchResult> {
   let current = url;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    assertWithinDeadline(deadline);
     await validateFinalUrl(current, startUrl.origin);
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), DEFAULT_FETCH_TIMEOUT_MS);
+    const timeout = setTimeout(
+      () => controller.abort(),
+      Math.max(250, Math.min(DEFAULT_FETCH_TIMEOUT_MS, deadline - Date.now()))
+    );
     try {
       const res = await fetch(current, {
         redirect: "manual",
@@ -322,6 +340,45 @@ async function fetchHtmlSafely(url: string, startUrl: ValidatedUrl): Promise<Fet
     }
   }
   throw new Error("too_many_redirects");
+}
+
+function unavailableFetchResult(url: string, err: unknown): FetchResult {
+  return {
+    url,
+    statusCode: null,
+    contentType: null,
+    html: "",
+    errorMessage: scanErrorMessage(err),
+  };
+}
+
+function unavailablePageIssue(errorMessage: string): NormalizedIssue {
+  return issue({
+    ruleId: "page-unavailable",
+    impact: "moderate",
+    severity: "review",
+    wcagTags: ["manual-review"],
+    description:
+      "AccessOps could not retrieve this page during the scan, so automated accessibility checks could not run for it.",
+    help: `Page retrieval failed: ${errorMessage}. Verify that the page is publicly reachable and retry the scan. If it is intentionally protected, review it manually or scan an accessible staging URL.`,
+    helpUrl: "https://www.w3.org/WAI/test-evaluate/",
+    target: ["document"],
+    htmlSnippet: "",
+    humanReviewRequired: true,
+    contexts: [{ viewport: "desktop", state: "initial" }],
+  });
+}
+
+function scanErrorMessage(err: unknown): string {
+  if (err instanceof Error) {
+    if (err.name === "AbortError") return "request_timeout";
+    return err.message || err.name;
+  }
+  return String(err || "fetch_failed");
+}
+
+function assertWithinDeadline(deadline: number): void {
+  if (Date.now() >= deadline) throw new Error("scan_timeout");
 }
 
 function issue(input: {

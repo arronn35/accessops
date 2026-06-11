@@ -21,6 +21,7 @@
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { createHash } from "node:crypto";
 import AxeBuilder from "@axe-core/playwright";
+import playwrightPackage from "playwright/package.json";
 import {
   resolveAndCheckHost,
   validateFinalUrl,
@@ -47,15 +48,14 @@ import type {
   ScanOutcome,
   ScanState,
   ScanViewport,
+  ScannerErrorCode,
 } from "./types";
+import { SCAN_VIEWPORTS } from "./types";
 
 const USER_AGENT =
   "Mozilla/5.0 (compatible; AccessOpsBot/1.0; +https://maitrico.com/bots)";
 
-const VIEWPORTS: ScanViewport[] = [
-  { name: "desktop", width: 1440, height: 900 },
-  { name: "mobile", width: 390, height: 844 },
-];
+const VIEWPORTS: ScanViewport[] = [...SCAN_VIEWPORTS];
 const INTERACTIVE_STATES: Exclude<ScanState, "initial">[] = [
   "menu-open",
   "dialog-open",
@@ -67,6 +67,33 @@ const STATE_CANDIDATE_LIMIT = 2;
 const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB cap per page
 const NAV_TIMEOUT_MS = 30_000;
 const AXE_TIMEOUT_MS = 25_000;
+const MIN_SCAN_DEADLINE_MS = 500;
+const PLAYWRIGHT_VERSION =
+  typeof playwrightPackage.version === "string" ? playwrightPackage.version : null;
+
+interface ScanDeadline {
+  startedAt: number;
+  deadlineAt: number;
+  truncated: boolean;
+}
+
+interface PageVariantResult {
+  finalUrl: string;
+  title: string | null;
+  statusCode: number | null;
+  issues: NormalizedIssue[];
+  metadata: Record<string, unknown>;
+}
+
+class ScannerRunnerError extends Error {
+  constructor(
+    public readonly code: ScannerErrorCode,
+    message: string
+  ) {
+    super(message);
+    this.name = "ScannerRunnerError";
+  }
+}
 
 // Resource policy by render profile.
 //   - "real":    only heavy/risky resources are blocked, so axe-core sees
@@ -87,6 +114,91 @@ const MINIMAL_BLOCKLIST = new Set([
 
 function resourceBlocklist(profile: RenderProfile): Set<string> {
   return profile === "minimal" ? MINIMAL_BLOCKLIST : REAL_BLOCKLIST;
+}
+
+function createDeadline(timeoutMs: number): ScanDeadline {
+  const startedAt = Date.now();
+  return {
+    startedAt,
+    deadlineAt: startedAt + Math.max(MIN_SCAN_DEADLINE_MS, timeoutMs),
+    truncated: false,
+  };
+}
+
+function remainingMs(deadline: ScanDeadline, capMs: number): number {
+  return Math.max(0, Math.min(capMs, deadline.deadlineAt - Date.now()));
+}
+
+function hasBudget(deadline: ScanDeadline, minMs = 250): boolean {
+  return deadline.deadlineAt - Date.now() > minMs;
+}
+
+function assertBudget(deadline: ScanDeadline): void {
+  if (!hasBudget(deadline)) {
+    deadline.truncated = true;
+    throw new ScannerRunnerError("deadline_exceeded", "Scan deadline exceeded.");
+  }
+}
+
+function scannerError(err: unknown, fallback: ScannerErrorCode): {
+  code: ScannerErrorCode;
+  message: string;
+} {
+  if (err instanceof ScannerRunnerError) {
+    return { code: err.code, message: err.message };
+  }
+  const message = err instanceof Error ? err.message : String(err || fallback);
+  if (/deadline|timeout/i.test(message)) {
+    return { code: "deadline_exceeded", message };
+  }
+  if (/axe/i.test(message)) {
+    return { code: "axe_failed", message };
+  }
+  if (/state_not_available/i.test(message)) {
+    return { code: "state_unavailable", message };
+  }
+  if (/navigation|goto|net::|redirect|ssrf|url validation/i.test(message)) {
+    return { code: "navigation_failed", message };
+  }
+  return { code: fallback, message };
+}
+
+function pageErrorResult(
+  url: string,
+  err: unknown,
+  fallback: ScannerErrorCode,
+  extra: Record<string, unknown> = {}
+): NormalizedPage {
+  const normalized = scannerError(err, fallback);
+  return {
+    url,
+    title: null,
+    statusCode: null,
+    scannedAt: new Date(),
+    rawMetadata: {
+      engine: "playwright-axe",
+      scanner: "playwright-axe",
+      fallbackMode: false,
+      resultConfidence: "low",
+      playwrightVersion: PLAYWRIGHT_VERSION,
+      code: normalized.code,
+      message: normalized.message,
+      truncatedByDeadline: normalized.code === "deadline_exceeded",
+      ...extra,
+    },
+    issues: [],
+  };
+}
+
+function firstStringMetadata(
+  metadata: Array<Record<string, unknown>>,
+  key: string
+): string | null {
+  for (const item of metadata) {
+    const value = item[key];
+    if (typeof value === "string") return value;
+  }
+  return null;
 }
 
 export async function launchBrowser(): Promise<Browser> {
@@ -169,71 +281,54 @@ export async function scanSinglePage(
     includeScreenshots?: boolean;
     visualEvidenceEnabled?: boolean;
     evidenceBudget?: EvidenceBudget;
+    deadline?: ScanDeadline;
   } = {}
 ): Promise<NormalizedPage> {
+  const deadline = options.deadline ?? createDeadline(60_000);
   const validated = await validateUrl(url, { resolveDns: true });
   const profile = scanRenderProfile();
   const blocklist = resourceBlocklist(profile);
   const pageStartedAt = Date.now();
-  const variants: Array<{
-    finalUrl: string;
-    title: string | null;
-    statusCode: number | null;
-    issues: NormalizedIssue[];
-    metadata: Record<string, unknown>;
-  }> = [];
+  const variants: PageVariantResult[] = [];
 
   for (const viewport of VIEWPORTS) {
-    const initial = await scanPageVariant({
+    if (!hasBudget(deadline)) {
+      deadline.truncated = true;
+      break;
+    }
+    const viewportResults = await scanViewportVariants({
       browser,
       url: validated.normalized,
       validated,
       profile,
       blocklist,
       viewport,
-      state: "initial",
       visualEvidenceEnabled: !!options.visualEvidenceEnabled,
       evidenceBudget: options.evidenceBudget,
+      deadline,
     });
-    variants.push(initial);
+    variants.push(...viewportResults);
+  }
 
-    for (const state of INTERACTIVE_STATES) {
-      for (let candidateIndex = 0; candidateIndex < STATE_CANDIDATE_LIMIT; candidateIndex += 1) {
-        const result = await scanPageVariant({
-          browser,
-          url: validated.normalized,
-          validated,
-          profile,
-          blocklist,
-          viewport,
-          state,
-          candidateIndex,
-          visualEvidenceEnabled: !!options.visualEvidenceEnabled,
-          evidenceBudget: options.evidenceBudget,
-        }).catch(() => null);
-        if (!result) break;
-        variants.push(result);
-      }
-    }
+  if (!variants.length) {
+    return pageErrorResult(url, new ScannerRunnerError("deadline_exceeded", "Scan deadline exceeded before any viewport completed."), "deadline_exceeded", {
+      renderProfile: profile,
+      resourcePolicy: Array.from(blocklist).sort(),
+    });
   }
 
   const first = variants[0];
   const issues = dedupeIssues(variants.flatMap((variant) => variant.issues));
   const metadata = variants.map((variant) => variant.metadata);
 
-  let screenshotPath: string | undefined;
-  if (options.includeScreenshots) {
-    screenshotPath = undefined;
-  }
-
   return {
     url: first.finalUrl,
     title: first.title,
     statusCode: first.statusCode,
     scannedAt: new Date(),
-    screenshotPath,
     rawMetadata: {
-      axeVersion: metadata.find((m) => typeof m.axeVersion === "string")?.axeVersion ?? null,
+      axeVersion: firstStringMetadata(metadata, "axeVersion"),
+      playwrightVersion: PLAYWRIGHT_VERSION,
       renderProfile: profile,
       resourcePolicy: Array.from(blocklist).sort(),
       viewports: VIEWPORTS,
@@ -244,38 +339,34 @@ export async function scanSinglePage(
       scanner: "playwright-axe",
       fallbackMode: false,
       resultConfidence: "high",
-      domHash: metadata.find((m) => typeof m.domHash === "string")?.domHash ?? null,
+      domHash: firstStringMetadata(metadata, "domHash"),
       scannedUrl: first.finalUrl,
       durationMs: Date.now() - pageStartedAt,
+      truncatedByDeadline: deadline.truncated,
+      variantCount: variants.length,
       variants: metadata,
     },
     issues,
   };
 }
 
-async function scanPageVariant(args: {
+async function scanViewportVariants(args: {
   browser: Browser;
   url: string;
   validated: Awaited<ReturnType<typeof validateUrl>>;
   profile: RenderProfile;
   blocklist: Set<string>;
   viewport: ScanViewport;
-  state: ScanState;
-  candidateIndex?: number;
   visualEvidenceEnabled: boolean;
   evidenceBudget?: EvidenceBudget;
-}): Promise<{
-  finalUrl: string;
-  title: string | null;
-  statusCode: number | null;
-  issues: NormalizedIssue[];
-  metadata: Record<string, unknown>;
-}> {
-  const { browser, url, validated, profile, blocklist, viewport, state } = args;
+  deadline: ScanDeadline;
+}): Promise<PageVariantResult[]> {
+  const { browser, url, validated, profile, blocklist, viewport, deadline } = args;
   const context = await newHardenedContext(browser, viewport);
   const page = await context.newPage();
   await configurePage(page, validated.host, blocklist);
   let bytesSeen = 0;
+  const results: PageVariantResult[] = [];
 
   page.on("response", async (resp) => {
     try {
@@ -287,95 +378,178 @@ async function scanPageVariant(args: {
   });
 
   try {
-    const response = await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: NAV_TIMEOUT_MS,
+    const initial = await scanPageVariant({
+      page,
+      url,
+      validated,
+      profile,
+      viewport,
+      state: "initial",
+      bytesSeen: () => bytesSeen,
+      visualEvidenceEnabled: args.visualEvidenceEnabled,
+      evidenceBudget: args.evidenceBudget,
+      deadline,
     });
+    results.push(initial);
 
-    const finalUrl = page.url();
-    if (finalUrl !== url) {
-      try {
-        await validateFinalUrl(finalUrl, validated.origin);
-      } catch (err) {
-        throw new Error(`Redirect rejected by SSRF guard: ${(err as Error).message}`);
+    for (const state of INTERACTIVE_STATES) {
+      for (let candidateIndex = 0; candidateIndex < STATE_CANDIDATE_LIMIT; candidateIndex += 1) {
+        if (!hasBudget(deadline)) {
+          deadline.truncated = true;
+          return results;
+        }
+        const result = await scanPageVariant({
+          page,
+          url,
+          validated,
+          profile,
+          viewport,
+          state,
+          candidateIndex,
+          bytesSeen: () => bytesSeen,
+          visualEvidenceEnabled: args.visualEvidenceEnabled,
+          evidenceBudget: args.evidenceBudget,
+          deadline,
+        }).catch((err) => {
+          const normalized = scannerError(err, "state_unavailable");
+          if (normalized.code === "deadline_exceeded") deadline.truncated = true;
+          return null;
+        });
+        if (!result) break;
+        results.push(result);
       }
     }
-
-    if (bytesSeen > MAX_RESPONSE_BYTES) {
-      throw new Error(`Response body too large (${bytesSeen} bytes)`);
-    }
-
-    await page.waitForLoadState("networkidle", { timeout: 8_000 }).catch(() => undefined);
-
-    if (state !== "initial") {
-      const applied = await applyState(page, state, args.candidateIndex ?? 0);
-      if (!applied) {
-        throw new Error("state_not_available");
-      }
-      await page.waitForTimeout(350).catch(() => undefined);
-      await page.waitForLoadState("networkidle", { timeout: 2_000 }).catch(() => undefined);
-    }
-
-    const axeBuilder = new AxeBuilder({ page }).withTags([
-      "wcag2a",
-      "wcag2aa",
-      "wcag21a",
-      "wcag21aa",
-      "wcag22aa",
-      "best-practice",
-    ]);
-
-    const axeResult = (await Promise.race([
-      axeBuilder.analyze(),
-      new Promise((_, rej) =>
-        setTimeout(() => rej(new Error("axe timeout")), AXE_TIMEOUT_MS)
-      ),
-    ])) as Awaited<ReturnType<AxeBuilder["analyze"]>>;
-
-    const domHtml = await page.content().catch(() => "");
-    const contextMeta: IssueContext = { viewport: viewport.name, state };
-    let issues = withContext(
-      [
-        ...normalizeAxeResults({
-          violations: axeResult.violations,
-          incomplete: axeResult.incomplete,
-        }),
-        ...(domHtml ? staticExpertHeuristics(domHtml) : []),
-      ],
-      contextMeta
-    );
-    if (args.visualEvidenceEnabled && args.evidenceBudget) {
-      issues = await captureVisualEvidenceForIssues({
-        page,
-        pageUrl: finalUrl,
-        issues,
-        viewport,
-        state,
-        budget: args.evidenceBudget,
-        enabled: true,
-      });
-    }
-
-    return {
-      finalUrl,
-      title: await page.title().catch(() => null),
-      statusCode: response?.status() ?? null,
-      issues,
-      metadata: {
-        axeVersion: axeResult.testEngine?.version ?? null,
-        viewport,
-        state,
-        domHash: domHtml ? hashHtml(domHtml) : null,
-        passes: axeResult.passes.length,
-        incomplete: axeResult.incomplete.length,
-        violations: axeResult.violations.length,
-        renderProfile: profile,
-      },
-    };
+    return results;
   } finally {
     await page.close({ runBeforeUnload: false }).catch(() => undefined);
     await context.close().catch(() => undefined);
   }
+}
+
+async function scanPageVariant(args: {
+  page: Page;
+  url: string;
+  validated: Awaited<ReturnType<typeof validateUrl>>;
+  profile: RenderProfile;
+  viewport: ScanViewport;
+  state: ScanState;
+  candidateIndex?: number;
+  bytesSeen: () => number;
+  visualEvidenceEnabled: boolean;
+  evidenceBudget?: EvidenceBudget;
+  deadline: ScanDeadline;
+}): Promise<PageVariantResult> {
+  const { page, url, validated, profile, viewport, state, deadline } = args;
+  assertBudget(deadline);
+
+  const response = await page.goto(url, {
+    waitUntil: "domcontentloaded",
+    timeout: remainingMs(deadline, NAV_TIMEOUT_MS),
+  }).catch((err) => {
+    const message = (err as Error).message;
+    throw new ScannerRunnerError(
+      /timeout/i.test(message) ? "deadline_exceeded" : "navigation_failed",
+      message
+    );
+  });
+
+  const finalUrl = page.url();
+  if (finalUrl !== url) {
+    try {
+      await validateFinalUrl(finalUrl, validated.origin);
+    } catch (err) {
+      throw new ScannerRunnerError(
+        "navigation_failed",
+        `Redirect rejected by SSRF guard: ${(err as Error).message}`
+      );
+    }
+  }
+
+  if (args.bytesSeen() > MAX_RESPONSE_BYTES) {
+    throw new ScannerRunnerError(
+      "navigation_failed",
+      `Response body too large (${args.bytesSeen()} bytes)`
+    );
+  }
+
+  await page.waitForLoadState("networkidle", {
+    timeout: remainingMs(deadline, 8_000),
+  }).catch(() => undefined);
+
+  if (state !== "initial") {
+    const applied = await applyState(page, state, args.candidateIndex ?? 0);
+    if (!applied) {
+      throw new ScannerRunnerError("state_unavailable", "state_not_available");
+    }
+    await page.waitForTimeout(Math.min(350, remainingMs(deadline, 350))).catch(() => undefined);
+    await page.waitForLoadState("networkidle", {
+      timeout: remainingMs(deadline, 2_000),
+    }).catch(() => undefined);
+  }
+
+  assertBudget(deadline);
+  const axeBuilder = new AxeBuilder({ page }).withTags([
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22aa",
+    "best-practice",
+  ]);
+
+  const axeResult = (await Promise.race([
+    axeBuilder.analyze(),
+    new Promise((_, rej) =>
+      setTimeout(() => rej(new ScannerRunnerError("axe_failed", "axe timeout")), remainingMs(deadline, AXE_TIMEOUT_MS))
+    ),
+  ]).catch((err) => {
+    const normalized = scannerError(err, "axe_failed");
+    throw new ScannerRunnerError(normalized.code, normalized.message);
+  })) as Awaited<ReturnType<AxeBuilder["analyze"]>>;
+
+  const domHtml = await page.content().catch(() => "");
+  const contextMeta: IssueContext = { viewport: viewport.name, state };
+  let issues = withContext(
+    [
+      ...normalizeAxeResults({
+        violations: axeResult.violations,
+        incomplete: axeResult.incomplete,
+      }),
+      ...(domHtml ? staticExpertHeuristics(domHtml) : []),
+    ],
+    contextMeta
+  );
+  if (args.visualEvidenceEnabled && args.evidenceBudget) {
+    issues = await captureVisualEvidenceForIssues({
+      page,
+      pageUrl: finalUrl,
+      issues,
+      viewport,
+      state,
+      budget: args.evidenceBudget,
+      enabled: true,
+    });
+  }
+
+  return {
+    finalUrl,
+    title: await page.title().catch(() => null),
+    statusCode: response?.status() ?? null,
+    issues,
+    metadata: {
+      axeVersion: axeResult.testEngine?.version ?? null,
+      playwrightVersion: PLAYWRIGHT_VERSION,
+      viewport,
+      state,
+      candidateIndex: args.candidateIndex ?? null,
+      domHash: domHtml ? hashHtml(domHtml) : null,
+      passes: axeResult.passes.length,
+      incomplete: axeResult.incomplete.length,
+      violations: axeResult.violations.length,
+      renderProfile: profile,
+      deadlineRemainingMs: deadline.deadlineAt - Date.now(),
+    },
+  };
 }
 
 async function applyState(
@@ -498,19 +672,48 @@ export async function crawlSameDomain(
   onProgress?: ProgressCallback
 ): Promise<ScanOutcome> {
   const started = Date.now();
+  const deadline = createDeadline(input.timeoutMs);
+  let sourcePlanError: unknown = null;
   const sourcePlan = await resolveScanSourcePlan({
     baseUrl: input.url,
     scanType: input.scanType,
     maxPages: input.maxPages,
     sourceUrls: input.sourceUrls,
     sitemapUrl: input.sitemapUrl,
+  }).catch((err) => {
+    sourcePlanError = err;
+    return null;
   });
-  const startValidated = await validateUrl(sourcePlan.baseUrl, { resolveDns: true });
+  if (!sourcePlan) {
+    return {
+      pages: [pageErrorResult(input.url, sourcePlanError, "page_unavailable")],
+      pagesDiscovered: 1,
+      pagesScanned: 1,
+      durationMs: Date.now() - started,
+    };
+  }
+  const startValidated = await validateUrl(sourcePlan.baseUrl, { resolveDns: true }).catch((err) => err);
+  if (startValidated instanceof Error) {
+    return {
+      pages: [pageErrorResult(sourcePlan.baseUrl, startValidated, "page_unavailable")],
+      pagesDiscovered: 1,
+      pagesScanned: 1,
+      durationMs: Date.now() - started,
+    };
+  }
 
   // Re-resolve start host once more — gives us the pinned IP set for
   // optional future use (we don't pin connections here because Playwright
   // hides the socket, but we re-check on every navigation).
-  await resolveAndCheckHost(startValidated.host);
+  const resolved = await resolveAndCheckHost(startValidated.host).catch((err) => err);
+  if (resolved instanceof Error) {
+    return {
+      pages: [pageErrorResult(sourcePlan.baseUrl, resolved, "page_unavailable")],
+      pagesDiscovered: 1,
+      pagesScanned: 1,
+      durationMs: Date.now() - started,
+    };
+  }
 
   const queue: string[] = [...sourcePlan.targets];
   const seen = new Set<string>(queue);
@@ -528,6 +731,25 @@ export async function crawlSameDomain(
   });
 
   while (queue.length > 0 && results.length < input.maxPages) {
+    if (!hasBudget(deadline)) {
+      deadline.truncated = true;
+      if (results.length > 0) {
+        const last = results[results.length - 1];
+        last.rawMetadata = {
+          ...(last.rawMetadata ?? {}),
+          truncatedByDeadline: true,
+        };
+      } else {
+        results.push(
+          pageErrorResult(
+            queue[0] ?? input.url,
+            new ScannerRunnerError("deadline_exceeded", "Scan deadline exceeded before the first page completed."),
+            "deadline_exceeded"
+          )
+        );
+      }
+      break;
+    }
     const next = queue.shift()!;
 
     await onProgress?.({
@@ -543,17 +765,11 @@ export async function crawlSameDomain(
         includeScreenshots: input.includeScreenshots,
         visualEvidenceEnabled: !!input.visualEvidenceEnabled,
         evidenceBudget,
+        deadline,
       });
     } catch (err) {
       // One bad page should not poison the whole scan.
-      results.push({
-        url: next,
-        title: null,
-        statusCode: null,
-        scannedAt: new Date(),
-        rawMetadata: { error: (err as Error).message },
-        issues: [],
-      });
+      results.push(pageErrorResult(next, err, "page_unavailable"));
       continue;
     }
     results.push(page);
@@ -572,7 +788,8 @@ export async function crawlSameDomain(
       page.statusCode >= 200 &&
       page.statusCode < 400
     ) {
-      const links = await discoverLinksOnce(browser, page.url, startValidated.origin);
+      const links = await discoverLinksOnce(browser, page.url, startValidated.origin, deadline)
+        .catch(() => []);
       for (const link of links) {
         if (!seen.has(link) && queue.length + results.length < input.maxPages) {
           seen.add(link);
@@ -597,8 +814,13 @@ export async function crawlSameDomain(
 async function discoverLinksOnce(
   browser: Browser,
   pageUrl: string,
-  expectedOrigin: string
+  expectedOrigin: string,
+  deadline: ScanDeadline
 ): Promise<string[]> {
+  if (!hasBudget(deadline)) {
+    deadline.truncated = true;
+    return [];
+  }
   const validated = await validateUrl(pageUrl, { resolveDns: true });
   const context = await newHardenedContext(browser);
   const page = await context.newPage();
@@ -606,7 +828,7 @@ async function discoverLinksOnce(
   try {
     await page.goto(validated.normalized, {
       waitUntil: "domcontentloaded",
-      timeout: NAV_TIMEOUT_MS,
+      timeout: remainingMs(deadline, NAV_TIMEOUT_MS),
     });
     const hrefs = await page.evaluate(() =>
       Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
@@ -713,7 +935,19 @@ export async function runScanJob(
   input: ScanInput,
   onProgress?: ProgressCallback
 ): Promise<ScanOutcome> {
-  const browser = await launchBrowser();
+  // Categorize the two distinct failure modes the UI/logs care about:
+  // the browser never launched (env/image problem) vs. the scan itself
+  // (navigation, axe) failed. Screenshot failures never reach here — they
+  // are recorded per-issue and never abort the scan.
+  let browser;
+  try {
+    browser = await launchBrowser();
+  } catch (err) {
+    throw new ScannerRunnerError(
+      "browser_launch_failed",
+      `Browser launch failed: ${(err as Error).message}`
+    );
+  }
   try {
     return await crawlSameDomain(browser, input, onProgress);
   } finally {

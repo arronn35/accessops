@@ -50,7 +50,11 @@ export async function resolveScanSourcePlan(
     const seen = new Set<string>();
     for (const candidate of sitemapCandidates) {
       if (targets.length >= maxPages) break;
-      const discovered = await discoverSitemapUrls(candidate, base.origin, maxPages - targets.length);
+      const discovered = await discoverSitemapUrls(
+        candidate,
+        base.origin,
+        maxPages - targets.length
+      ).catch(() => []);
       for (const url of discovered) {
         if (seen.has(url)) continue;
         seen.add(url);
@@ -122,7 +126,8 @@ async function normalizeExplicitUrls(
     if (out.length >= maxPages) break;
     const candidate = raw.trim();
     if (!candidate) continue;
-    const validated = await validateUrl(candidate, { resolveDns: true });
+    const validated = await validateUrl(candidate, { resolveDns: true }).catch(() => null);
+    if (!validated) continue;
     if (validated.origin !== origin) continue;
     const canonical = canonicalizeUrl(validated.normalized);
     if (seen.has(canonical)) continue;

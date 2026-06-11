@@ -1,43 +1,19 @@
-/**
- * POST /api/scans     — create + enqueue a scan job
- * GET  /api/scans     — list scan jobs for the active workspace (paginated)
- *
- * Security:
- *   - requireSession (workspace membership check)
- *   - validateUrl (cheap synchronous SSRF check; worker does the heavy DNS)
- *   - permission_confirmed must be true
- *   - rate limit via @upstash/ratelimit
- *   - free-plan limits: SCAN_MAX_PAGES_FREE pages, 3 scans/day
- *
- * Side effects:
- *   - INSERT scan_jobs
- *   - enqueueScan (BullMQ) — only fires if DB insert succeeded
- *   - INSERT audit_logs("scan.created")
- *   - UPDATE usage_limits (scansUsedToday + 1)
- */
 import { NextRequest } from "next/server";
-import { and, desc, eq, sql } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import {
-  scanJobs,
-  usageLimits,
-  privacySettings,
-} from "@/lib/db/schema";
-import {
-  validateUrl,
-  UrlValidationFailed,
-} from "@/lib/scanner/url-validation";
-import { enqueueScan } from "@/lib/queue";
+import { validateUrl, UrlValidationFailed } from "@/lib/scanner/url-validation";
 import { apiError, ApiError, rateLimitError, requireSession } from "@/lib/api/context";
 import { checkRateLimit } from "@/lib/api/rate-limit";
-import { audit } from "@/lib/api/audit";
-import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
-import { inlineScanFallbackEnabled, processScanInline } from "@/lib/scanner/inline-runner";
+import { roleHasPermission } from "@/lib/entitlements";
 import {
-  visualEvidenceEnabled as visualEvidenceEnvEnabled,
-  visualEvidenceStorageEnabled,
-} from "@/lib/config";
+  audit,
+  countInflightScans,
+  createScanJob,
+  getPrivacySettings,
+  getWorkspace,
+  listScans,
+  reserveScanQuota,
+} from "@/lib/data/firestore";
+import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 
 const ScanCreateSchema = z.object({
   url: z.string().url().max(2048),
@@ -49,13 +25,18 @@ const ScanCreateSchema = z.object({
   storeScreenshots: z.boolean().default(false),
   aiExplanationsEnabled: z.boolean().default(false),
   aiRemediationEnabled: z.boolean().default(false),
-  permissionConfirmed: z.literal(true), // must be exactly true
-  projectId: z.string().uuid().optional(),
+  permissionConfirmed: z.literal(true),
+  projectId: z.string().optional(),
 });
+
+export const maxDuration = 30;
 
 export async function POST(req: NextRequest) {
   try {
     const ctx = await requireSession();
+    if (!roleHasPermission(ctx.role, "create_scans")) {
+      throw new ApiError(403, "forbidden");
+    }
     const body = await req.json().catch(() => ({}));
     const parsed = ScanCreateSchema.safeParse(body);
     if (!parsed.success) {
@@ -63,13 +44,12 @@ export async function POST(req: NextRequest) {
     }
     const input = parsed.data;
 
-    // 1. URL validation (synchronous — DNS happens in worker).
     let baseValidated: Awaited<ReturnType<typeof validateUrl>>;
     try {
       baseValidated = await validateUrl(input.url, { resolveDns: false });
       if (input.scanType === "manual") {
         const manualUrls = input.urls ?? [];
-        if (manualUrls.length === 0) {
+        if (!manualUrls.length) {
           throw new ApiError(400, "manual_urls_required", "Manual scans require at least one URL.");
         }
         for (const rawUrl of manualUrls) {
@@ -87,167 +67,90 @@ export async function POST(req: NextRequest) {
       }
     } catch (err) {
       if (err instanceof ApiError) throw err;
-      if (err instanceof UrlValidationFailed) {
-        throw new ApiError(400, err.code, err.detail);
+      if (err instanceof UrlValidationFailed) throw new ApiError(400, err.code, err.detail);
+      throw err;
+    }
+
+    const rl = await checkRateLimit("scanCreate", ctx.userId);
+    if (!rl.ok) throw rateLimitError(rl.reset, rl.remaining, "Too many scans created recently.");
+
+    const workspace = await getWorkspace(ctx.workspaceId);
+    if (!workspace) throw new ApiError(404, "workspace_not_found");
+    const plan = workspace.plan as PlanTier;
+    const caps = scanCapsForPlan(plan);
+    const maxPages = Math.min(input.maxPages, caps.maxPagesCap);
+    const privacy = await getPrivacySettings(ctx.workspaceId);
+    const screenshotsRequested = input.includeScreenshots || input.storeScreenshots;
+    const screenshotsAllowed =
+      screenshotsRequested &&
+      privacy.visualEvidenceEnabled &&
+      privacy.screenshotStorageEnabled;
+    const aiRequested = input.aiExplanationsEnabled || input.aiRemediationEnabled;
+    const aiAllowed = aiRequested && privacy.aiProcessingEnabled;
+    const warnings: string[] = [];
+    if (aiRequested && !aiAllowed) {
+      warnings.push("AI analysis was requested, but workspace AI processing consent is disabled.");
+    }
+    if (screenshotsRequested && !screenshotsAllowed) {
+      warnings.push("Visual evidence was requested, but workspace visual evidence and screenshot storage consent are both required.");
+    }
+    const maxConcurrent = Number(process.env.MAX_CONCURRENT_SCANS_PER_WORKSPACE ?? 1);
+    if ((await countInflightScans(ctx.workspaceId)) >= maxConcurrent) {
+      throw new ApiError(429, "scan_concurrency_limit", "A scan is already running. Wait for it to finish.");
+    }
+
+    let reserved: Awaited<ReturnType<typeof reserveScanQuota>>;
+    try {
+      reserved = await reserveScanQuota({
+        workspaceId: ctx.workspaceId,
+        plan,
+        maxPages,
+      });
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.startsWith("daily_workspace_capacity_reached")) {
+        throw new ApiError(429, "daily_scan_limit", "Daily free workspace capacity reached.");
+      }
+      if (msg.startsWith("daily_free_capacity_reached")) {
+        throw new ApiError(429, "daily_free_capacity_reached", "Daily free capacity reached. Please try again tomorrow.");
       }
       throw err;
     }
 
-    // 2. Rate limit (per-user, anti-abuse).
-    const rl = await checkRateLimit("scanCreate", `${ctx.userId}`);
-    if (!rl.ok) {
-      throw rateLimitError(rl.reset, rl.remaining, "Too many scans created recently.");
-    }
+    const job = await createScanJob({
+      workspaceId: ctx.workspaceId,
+      projectId: input.projectId ?? null,
+      requestedBy: ctx.userId,
+      scanType: input.scanType,
+      status: "queued",
+      baseUrl: input.url,
+      sourceUrlsJson:
+        input.scanType === "manual" || input.scanType === "sitemap"
+          ? {
+              urls: input.scanType === "manual" ? input.urls ?? [] : undefined,
+              sitemapUrl: input.scanType === "sitemap" ? input.sitemapUrl ?? null : undefined,
+            }
+          : null,
+      maxPages: reserved.maxPages,
+      includeScreenshots: screenshotsRequested,
+      storeScreenshots: screenshotsAllowed,
+      visualEvidenceMaxScreenshots: screenshotsAllowed ? caps.visualEvidenceMaxPerScan : 0,
+      aiExplanationsEnabled: input.aiExplanationsEnabled && aiAllowed,
+      aiRemediationEnabled: input.aiRemediationEnabled && aiAllowed,
+      permissionConfirmed: input.permissionConfirmed,
+      progressStep: screenshotsRequested && !screenshotsAllowed ? "screenshot_consent_required" : "queued",
+      errorMessage: warnings.length > 0 ? warnings.join(" ") : null,
+      queueAttempts: 0,
+      lastQueuePublishedAt: null,
+      processorStartedAt: null,
+      processorHeartbeatAt: null,
+      processorError: null,
+    });
 
-    // 3. Plan + usage caps (free tier).
-    const [limits] = await db
-      .select()
-      .from(usageLimits)
-      .where(eq(usageLimits.workspaceId, ctx.workspaceId))
-      .limit(1);
-
-    if (!limits) {
-      throw new ApiError(500, "no_usage_record");
-    }
-
-    // Reset daily counter if the day has rolled over.
-    const now = new Date();
-    if (now > limits.resetDailyAt) {
-      const nextReset = new Date(now);
-      nextReset.setUTCHours(24, 0, 0, 0);
-      await db
-        .update(usageLimits)
-        .set({ scansUsedToday: 0, resetDailyAt: nextReset })
-        .where(eq(usageLimits.workspaceId, ctx.workspaceId));
-      limits.scansUsedToday = 0;
-    }
-
-    const scanCaps = scanCapsForPlan(limits.plan as PlanTier);
-    if (limits.scansUsedToday >= scanCaps.dailyScanCap) {
-      throw new ApiError(
-        429,
-        "daily_scan_limit",
-        `Daily scan limit (${scanCaps.dailyScanCap}) reached.`
-      );
-    }
-
-    const maxPages = Math.min(input.maxPages, scanCaps.maxPagesCap);
-
-    // 4. Concurrent scans cap.
-    const inflight = await db
-      .select({ count: sql<number>`count(*)::int` })
-      .from(scanJobs)
-      .where(
-        and(
-          eq(scanJobs.workspaceId, ctx.workspaceId),
-          sql`${scanJobs.status} in ('queued', 'running')`
-        )
-      );
-    const maxConcurrent = Number(
-      process.env.MAX_CONCURRENT_SCANS_PER_WORKSPACE ?? 1
-    );
-    if ((inflight[0]?.count ?? 0) >= maxConcurrent) {
-      throw new ApiError(
-        429,
-        "scan_concurrency_limit",
-        `A scan is already running. Wait for it to finish.`
-      );
-    }
-
-    // 5. Privacy settings: enforce screenshots-off and AI-off when
-    // workspace disabled them, regardless of what the client sent.
-    const [privacy] = await db
-      .select()
-      .from(privacySettings)
-      .where(eq(privacySettings.workspaceId, ctx.workspaceId))
-      .limit(1);
-
-    const visualEvidenceEnabled =
-      input.includeScreenshots &&
-      input.permissionConfirmed &&
-      visualEvidenceEnvEnabled() &&
-      (privacy?.visualEvidenceEnabled ?? false);
-    const includeScreenshots = visualEvidenceEnabled;
-    const storeScreenshots =
-      visualEvidenceEnabled &&
-      input.storeScreenshots &&
-      visualEvidenceStorageEnabled() &&
-      (privacy?.screenshotStorageEnabled ?? false);
-    const aiExplanationsEnabled =
-      input.aiExplanationsEnabled && (privacy?.aiProcessingEnabled ?? false);
-    const aiRemediationEnabled =
-      input.aiRemediationEnabled && (privacy?.aiProcessingEnabled ?? false);
-
-    // 6. Persist + enqueue.
-    const [job] = await db
-      .insert(scanJobs)
-      .values({
-        workspaceId: ctx.workspaceId,
-        projectId: input.projectId,
-        requestedBy: ctx.userId,
-        scanType: input.scanType,
-        status: "queued",
-        baseUrl: input.url,
-        sourceUrlsJson:
-          input.scanType === "manual" || input.scanType === "sitemap"
-            ? {
-                urls: input.scanType === "manual" ? input.urls ?? [] : undefined,
-                sitemapUrl: input.scanType === "sitemap" ? input.sitemapUrl ?? null : undefined,
-              }
-            : undefined,
-        maxPages,
-        includeScreenshots,
-        storeScreenshots,
-        visualEvidenceMaxScreenshots: includeScreenshots
-          ? Math.max(0, scanCaps.visualEvidenceMaxPerScan)
-          : 0,
-        aiExplanationsEnabled,
-        aiRemediationEnabled,
-        permissionConfirmed: input.permissionConfirmed,
-        progressStep: "queued",
-      })
-      .returning({ id: scanJobs.id });
-
-    let executionMode: "queue" | "inline-degraded" = "queue";
-    try {
-      await enqueueScan({
-        scanJobId: job.id,
-        workspaceId: ctx.workspaceId,
-        requestedBy: ctx.userId,
-      });
-    } catch (err) {
-      if (!inlineScanFallbackEnabled()) {
-        // Roll back so we don't leave a permanently-queued job that no
-        // worker will ever pick up.
-        await db
-          .update(scanJobs)
-          .set({
-            status: "failed",
-            progressStep: "failed",
-            errorMessage: `enqueue_failed: ${(err as Error).message}`,
-          })
-          .where(eq(scanJobs.id, job.id));
-        throw new ApiError(503, "queue_unavailable", "Could not enqueue scan");
-      }
-
-      executionMode = "inline-degraded";
-      try {
-        await processScanInline(job.id);
-      } catch {
-        // The inline runner persists the failed status. Return the job id so
-        // the progress page can show the actionable scan failure instead of
-        // dropping the user back to the form with a generic queue error.
-      }
-    }
-
-    // 7. Update usage + audit.
-    await db
-      .update(usageLimits)
-      .set({
-        scansUsedToday: sql`${usageLimits.scansUsedToday} + 1`,
-        scansUsedThisMonth: sql`${usageLimits.scansUsedThisMonth} + 1`,
-      })
-      .where(eq(usageLimits.workspaceId, ctx.workspaceId));
+    // Dispatch is Firestore polling: the job is created with status "queued"
+    // and the dedicated browser worker claims it (see worker/index.ts). No
+    // queue publish step is needed.
+    const mode = "queued" as const;
 
     await audit({
       userId: ctx.userId,
@@ -255,10 +158,23 @@ export async function POST(req: NextRequest) {
       action: "scan.created",
       resourceType: "scan_job",
       resourceId: job.id,
-      metadata: { url: input.url, maxPages },
+      metadata: { url: input.url, maxPages: reserved.maxPages, mode, engine: "playwright-axe" },
     });
 
-    return Response.json({ scanJobId: job.id, mode: executionMode }, { status: 201 });
+    return Response.json(
+      {
+        scanJobId: job.id,
+        mode,
+        warnings,
+        appliedOptions: {
+          aiExplanationsEnabled: input.aiExplanationsEnabled && aiAllowed,
+          aiRemediationEnabled: input.aiRemediationEnabled && aiAllowed,
+          includeScreenshots: screenshotsRequested,
+          storeScreenshots: screenshotsAllowed,
+        },
+      },
+      { status: 201 }
+    );
   } catch (err) {
     return apiError(err);
   }
@@ -267,14 +183,12 @@ export async function POST(req: NextRequest) {
 export async function GET(req: NextRequest) {
   try {
     const ctx = await requireSession();
+    if (!roleHasPermission(ctx.role, "view_scans")) {
+      throw new ApiError(403, "forbidden");
+    }
     const limit = Math.min(50, Number(req.nextUrl.searchParams.get("limit") ?? 20));
-    const rows = await db
-      .select()
-      .from(scanJobs)
-      .where(eq(scanJobs.workspaceId, ctx.workspaceId))
-      .orderBy(desc(scanJobs.createdAt))
-      .limit(limit);
-    return Response.json({ scans: rows });
+    const scans = await listScans(ctx.workspaceId, limit);
+    return Response.json({ scans });
   } catch (err) {
     return apiError(err);
   }

@@ -1,19 +1,9 @@
-/**
- * GET /api/healthz       — liveness probe (cheap, no I/O)
- * GET /api/healthz?deep=1 — readiness probe: also pings Postgres + Redis
- *
- * Liveness is what Vercel / a basic uptime monitor should poll — it
- * just confirms the function executes. The deep variant is for
- * post-deploy smoke checks: a 503 means the app booted but a
- * dependency is unreachable (bad DATABASE_URL, Upstash down, etc.).
- *
- * Deep checks are bounded by a 3s timeout each so a hung dependency
- * can't make the probe itself hang.
- */
 import { NextRequest } from "next/server";
-import { sql } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { inlineScanFallbackEnabled } from "@/lib/scanner/inline-runner";
+import {
+  getLatestWorkerHeartbeat,
+  isWorkerHeartbeatFresh,
+} from "@/lib/data/worker-health";
+import { firebaseAdminConfigured, firestore } from "@/lib/firebase/admin";
 
 export const dynamic = "force-dynamic";
 
@@ -26,68 +16,65 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
   ]);
 }
 
-async function checkDb(): Promise<{ ok: boolean; detail?: string }> {
+async function checkFirestore(): Promise<{ ok: boolean; detail?: string }> {
+  if (!firebaseAdminConfigured()) {
+    return { ok: false, detail: "Firebase Admin environment is not configured" };
+  }
   try {
-    await withTimeout(db.execute(sql`select 1`), 3000, "db");
+    await withTimeout(firestore().collection("systemUsage").limit(1).get(), 3000, "firestore");
     return { ok: true };
   } catch (err) {
     return { ok: false, detail: (err as Error).message };
   }
 }
 
-async function checkRedis(): Promise<{ ok: boolean; detail?: string; mode?: string }> {
-  if (!process.env.REDIS_URL) {
-    if (inlineScanFallbackEnabled()) {
-      return {
-        ok: true,
-        mode: "inline-fallback",
-        detail: "REDIS_URL not set; inline scanner fallback is active",
-      };
-    }
-    return { ok: false, detail: "REDIS_URL not set" };
-  }
-  // Import ioredis lazily — keeps the liveness path free of a Redis
-  // connection attempt.
+/**
+ * Scan-worker liveness from `workerHeartbeats`. Sanitized: exposes only
+ * freshness and beat age, never worker ids, hosts, or job details.
+ */
+async function checkWorker(): Promise<{ ok: boolean; lastSeenSecondsAgo: number | null }> {
   try {
-    const { default: IORedis } = await import("ioredis");
-    const client = new IORedis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: 1,
-      lazyConnect: true,
-      connectTimeout: 3000,
-    });
-    try {
-      await withTimeout(client.connect(), 3000, "redis-connect");
-      const pong = await withTimeout(client.ping(), 3000, "redis-ping");
-      return { ok: pong === "PONG" };
-    } finally {
-      client.disconnect();
-    }
-  } catch (err) {
-    return { ok: false, detail: (err as Error).message };
+    const lastSeenAt = await withTimeout(getLatestWorkerHeartbeat(), 3000, "worker-heartbeat");
+    return {
+      ok: isWorkerHeartbeatFresh(lastSeenAt),
+      lastSeenSecondsAgo: lastSeenAt
+        ? Math.max(0, Math.round((Date.now() - lastSeenAt.getTime()) / 1000))
+        : null,
+    };
+  } catch {
+    return { ok: false, lastSeenSecondsAgo: null };
   }
 }
 
 export async function GET(req: NextRequest) {
   const deep = req.nextUrl.searchParams.get("deep") === "1";
-
   if (!deep) {
     return Response.json({
       ok: true,
       service: "accessops-web",
       mode: "liveness",
+      stack: "firebase-firestore-polling-worker",
       ts: new Date().toISOString(),
     });
   }
 
-  const [database, redis] = await Promise.all([checkDb(), checkRedis()]);
-  const ok = database.ok && redis.ok;
+  const firestoreCheck = await checkFirestore();
+  const workerCheck = firestoreCheck.ok
+    ? await checkWorker()
+    : { ok: false, lastSeenSecondsAgo: null };
 
+  // `ok` (and the 503) reflects only the web app's own dependencies; a
+  // stale worker marks the service `degraded` (scans queue but don't run)
+  // without pulling web instances out of rotation.
+  const ok = firestoreCheck.ok;
   return Response.json(
     {
       ok,
+      degraded: ok && !workerCheck.ok,
       service: "accessops-web",
       mode: "readiness",
-      checks: { database, redis },
+      dispatch: "firestore-polling-worker",
+      checks: { firestore: firestoreCheck, worker: workerCheck },
       ts: new Date().toISOString(),
     },
     { status: ok ? 200 : 503, headers: { "cache-control": "no-store" } }

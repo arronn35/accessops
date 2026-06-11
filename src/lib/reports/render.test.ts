@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderHtml, renderCsv, type ReportInput } from "./render";
+import { renderHtml, renderCsv, renderJson, type ReportInput } from "./render";
 
 function fakeInput(overrides: Partial<ReportInput> = {}): ReportInput {
   return {
@@ -83,5 +83,69 @@ describe("renderCsv", () => {
       })
     );
     expect(csv).toMatch(/""quotes""/);
+  });
+
+  it("includes per-instance group columns tying issues to root causes", () => {
+    const csv = renderCsv(
+      fakeInput({
+        issues: [{ ...fakeInput().issues[0], groupId: "g1" }],
+        groups: [
+          {
+            id: "g1",
+            ruleId: "button-name",
+            title: "Buttons missing names",
+            severity: "critical",
+            affectedCount: 3,
+            primaryWcagTag: "wcag412",
+            recommendedFix: "Add accessible names",
+            priority: 10,
+          },
+        ],
+      })
+    );
+    expect(csv.split("\n")[0]).toMatch(/group_id.*group_title.*group_affected_count/);
+    expect(csv).toMatch(/Buttons missing names/);
+  });
+});
+
+describe("renderJson", () => {
+  it("emits schema version, grouped + normalized issues, and the disclaimer", () => {
+    const json = JSON.parse(
+      renderJson(
+        fakeInput({
+          issues: [{ ...fakeInput().issues[0], groupId: "g1" }],
+          groups: [
+            {
+              id: "g1",
+              ruleId: "button-name",
+              title: "Buttons missing names",
+              severity: "critical",
+              affectedCount: 1,
+              primaryWcagTag: "wcag412",
+              recommendedFix: "Add names",
+              priority: 10,
+            },
+          ],
+        })
+      )
+    );
+    expect(json.schemaVersion).toBe("accessops-report-v1");
+    expect(json.scan.baseUrl).toBe("https://example.org/");
+    expect(json.groups[0].instanceIds).toEqual(["i1"]);
+    expect(json.issues[0].screenshot.captured).toBe(false);
+    expect(json.disclaimer).toMatch(/not a legal certification/i);
+  });
+});
+
+describe("agency branding", () => {
+  it("attributes the workspace alone when agencyBranding is true", () => {
+    const html = renderHtml(fakeInput({ agencyBranding: true }));
+    expect(html).toMatch(/Prepared by Acme\./);
+    expect(html).not.toMatch(/Prepared with AccessOps AI/);
+  });
+
+  it("carries AccessOps attribution by default", () => {
+    const html = renderHtml(fakeInput());
+    expect(html).toMatch(/Prepared with AccessOps AI by Acme\./);
   });
 });

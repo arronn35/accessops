@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/Badge";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
-import type { ScanJob } from "@/lib/db/schema";
+import type { ScanJob } from "@/lib/data/types";
 
 const STEPS = [
   { id: "queued", label: "Queued", icon: ScanLine, body: "Preparing the scan job." },
@@ -41,6 +41,10 @@ interface PollResponse {
   startedAt: string | null;
   completedAt: string | null;
   errorMessage: string | null;
+  queueAttempts?: number;
+  processorStartedAt?: string | null;
+  processorHeartbeatAt?: string | null;
+  workerHeartbeatStale?: boolean;
 }
 
 export function ProgressClient({ initial }: { initial: ScanJob }) {
@@ -54,7 +58,12 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
     startedAt: initial.startedAt?.toISOString() ?? null,
     completedAt: initial.completedAt?.toISOString() ?? null,
     errorMessage: initial.errorMessage,
+    queueAttempts: initial.queueAttempts ?? 0,
+    processorStartedAt: initial.processorStartedAt?.toISOString() ?? null,
+    processorHeartbeatAt: initial.processorHeartbeatAt?.toISOString() ?? null,
+    workerHeartbeatStale: false,
   });
+  const [pollToken, setPollToken] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -62,6 +71,7 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
 
     async function tick() {
       if (cancelled) return;
+      let continuePolling = true;
       try {
         const res = await fetch(`/api/scans/${initial.id}/status`, {
           cache: "no-store",
@@ -71,16 +81,20 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
         if (cancelled) return;
         setState(data);
         if (data.status === "completed") {
+          continuePolling = false;
           router.replace(`/app/scans/${initial.id}`);
           return;
         }
-        if (data.status === "failed") return;
+        if (data.status === "failed") {
+          continuePolling = false;
+          return;
+        }
         // Back off polling once the scan is actively running.
         intervalMs = data.status === "running" ? 2500 : 1500;
       } catch {
         // ignore transient network errors; next tick will retry
       } finally {
-        if (!cancelled) setTimeout(tick, intervalMs);
+        if (!cancelled && continuePolling) setTimeout(tick, intervalMs);
       }
     }
 
@@ -89,7 +103,7 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [initial.id, router]);
+  }, [initial.id, router, pollToken]);
 
   const currentStepIdx =
     state.status === "queued"
@@ -140,7 +154,44 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
           <p className="mb-2">{humanizeError(state.errorMessage)}</p>
           <RetryControls
             scanJobId={initial.id}
-            onRetry={(next) => setState((s) => ({ ...s, ...next }))}
+            onRetry={(next) => {
+              setState((s) => ({ ...s, ...next }));
+              setPollToken((value) => value + 1);
+            }}
+          />
+        </AlertCallout>
+      )}
+
+      {state.status !== "failed" && state.errorMessage && (
+        <AlertCallout
+          tone="warning"
+          icon={AlertCircle}
+          title={state.progressStep === "queue_retry_pending" ? "Scan queued" : "Scan option adjusted"}
+          className="mb-5"
+        >
+          {humanizeError(state.errorMessage)}
+        </AlertCallout>
+      )}
+
+      {state.status === "queued" && (
+        <AlertCallout tone="info" icon={ScanLine} title="Scan queued" className="mb-5">
+          The scan job is safely queued. The browser scanner worker will pick it up
+          automatically and this page will switch to running when processing starts.
+        </AlertCallout>
+      )}
+
+      {state.status === "running" && state.workerHeartbeatStale && (
+        <AlertCallout tone="warning" icon={AlertCircle} title="Worker recovery pending" className="mb-5">
+          <p className="mb-2">
+            The scanner heartbeat is stale. You can retry this scan now, or wait for
+            another worker to reclaim it automatically.
+          </p>
+          <RetryControls
+            scanJobId={initial.id}
+            onRetry={(next) => {
+              setState((s) => ({ ...s, ...next }));
+              setPollToken((value) => value + 1);
+            }}
           />
         </AlertCallout>
       )}
@@ -149,7 +200,8 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
         <CardContent className="pt-5">
           <ol className="space-y-3">
             {STEPS.map((s, i) => {
-              const done = i < currentStepIdx;
+              const failedStep = state.status === "failed" && i === 0;
+              const done = state.status !== "failed" && i < currentStepIdx;
               const active = i === currentStepIdx && state.status !== "failed";
               const Icon = s.icon;
               return (
@@ -159,12 +211,20 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
                     className={`size-9 rounded-md inline-flex items-center justify-center shrink-0 ${
                       done
                         ? "bg-green-50 text-green-700 ring-1 ring-green-50"
+                        : failedStep
+                        ? "bg-rose-50 text-rose-700 ring-1 ring-rose-100"
                         : active
                         ? "bg-blue-50 text-blue-700 ring-1 ring-blue-100"
                         : "bg-canvas-2 text-ink-400 ring-1 ring-line"
                     }`}
                   >
-                    {done ? <Check className="size-4" /> : <Icon className="size-4" />}
+                    {done ? (
+                      <Check className="size-4" />
+                    ) : failedStep ? (
+                      <AlertCircle className="size-4" />
+                    ) : (
+                      <Icon className="size-4" />
+                    )}
                   </span>
                   <div className="flex-1 min-w-0 pt-1">
                     <p
@@ -184,8 +244,13 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
                   </div>
                   <span className="text-[11px] uppercase tracking-wider font-semibold shrink-0 mt-2">
                     {done && <span className="text-green-700">Done</span>}
+                    {failedStep && <span className="text-rose-700">Failed</span>}
                     {active && <span className="text-blue-700">In progress</span>}
-                    {!done && !active && <span className="text-ink-400">Queued</span>}
+                    {!done && !active && !failedStep && (
+                      <span className="text-ink-400">
+                        {state.status === "failed" ? "Not completed" : "Queued"}
+                      </span>
+                    )}
                   </span>
                 </li>
               );
@@ -211,7 +276,12 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
               <DataItem on label="Page HTML structure (no form values)" />
               <DataItem on label="Computed accessibility tree" />
               <DataItem on label="Color contrast samples" />
-              <DataItem off label="Screenshots" hint={initial.includeScreenshots ? "Enabled this scan" : "Off"} />
+              <DataItem
+                on={initial.includeScreenshots}
+                off={!initial.includeScreenshots}
+                label="Screenshots"
+                hint={initial.includeScreenshots ? "Enabled this scan" : "Off"}
+              />
               <DataItem
                 off
                 label="Cookies & local storage"
@@ -243,7 +313,7 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
       </div>
 
       <p className="text-xs text-ink-500 mt-6 leading-relaxed">
-        You can leave this page — results persist in your workspace.
+        You can leave this page. Queued and completed results persist in your workspace.
       </p>
     </div>
   );

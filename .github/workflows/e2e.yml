@@ -18,7 +18,8 @@ jobs:
       - name: Set up Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 20
+          # Keep in sync with "engines" in package.json.
+          node-version: 22
           cache: npm
 
       - name: Install dependencies
@@ -29,10 +30,11 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        # AUTH_SECRET keeps Auth.js from refusing to boot; no real auth flow.
+        # Public + route-mocked lanes only. The authenticated lane needs
+        # staging Firebase credentials (E2E_FIREBASE_* secrets) and is
+        # skipped automatically when they are absent.
         run: npm run test:e2e
         env:
-          AUTH_SECRET: e2e-placeholder-secret-aaaaaaaaaaaaaaaaa
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
 
       - name: Upload Playwright report on failure

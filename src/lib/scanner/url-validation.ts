@@ -64,6 +64,15 @@ const RESERVED_TLDS = new Set([
   "onion",
 ]);
 
+function privateTargetsAllowedForBrowserTests(host: string): boolean {
+  return (
+    process.env.NODE_ENV === "test" &&
+    process.env.RUN_BROWSER_TESTS === "1" &&
+    process.env.ACCESSOPS_ALLOW_PRIVATE_SCAN_TARGETS_FOR_TESTS === "1" &&
+    (host === "localhost" || host === "127.0.0.1" || host === "::1" || isIP(host) > 0)
+  );
+}
+
 // IPv4 CIDRs that are never publicly routable / are sensitive infra.
 // Each entry is [networkInt, maskInt]. We compute integer comparisons.
 const PRIVATE_IPV4_RANGES: Array<[string, number]> = [
@@ -141,6 +150,7 @@ export async function resolveAndCheckHost(host: string): Promise<string[]> {
 
   if (isIP(cleanHost)) {
     if (isBlockedIp(cleanHost)) {
+      if (privateTargetsAllowedForBrowserTests(cleanHost)) return [cleanHost];
       throw new UrlValidationFailed("private_ip", cleanHost);
     }
     return [cleanHost];
@@ -208,7 +218,8 @@ export async function validateUrl(
 
   const host = parsed.hostname.toLowerCase();
   const lastLabel = host.split(".").pop() ?? "";
-  if (RESERVED_TLDS.has(host) || RESERVED_TLDS.has(lastLabel)) {
+  const allowPrivateTestTarget = privateTargetsAllowedForBrowserTests(host);
+  if (!allowPrivateTestTarget && (RESERVED_TLDS.has(host) || RESERVED_TLDS.has(lastLabel))) {
     throw new UrlValidationFailed("reserved_tld", host);
   }
 
@@ -219,8 +230,12 @@ export async function validateUrl(
     throw new UrlValidationFailed("metadata_address", host);
   }
 
-  // If the host is an IP literal, check it synchronously.
-  if (isIP(host) && isBlockedIp(host)) {
+  // If the host is an IP literal, check it synchronously. Note: the
+  // WHATWG URL parser already canonicalises decimal / hex / octal / short-
+  // form IPv4 (e.g. 2130706433, 0x7f000001, 127.1) to dotted-quad for
+  // http(s) schemes, so those SSRF-bypass encodings arrive here as normal
+  // IP literals and are caught by this guard (or the metadata check above).
+  if (isIP(host) && isBlockedIp(host) && !allowPrivateTestTarget) {
     throw new UrlValidationFailed("private_ip", host);
   }
 

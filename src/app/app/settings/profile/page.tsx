@@ -1,7 +1,4 @@
 import Link from "next/link";
-import { eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { users } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { ProfileClient } from "./profile-client";
 
@@ -10,15 +7,6 @@ export const dynamic = "force-dynamic";
 
 export default async function ProfilePage() {
   const ctx = await getCurrentWorkspaceOrRedirect();
-  const [user] = await db
-    .select({
-      name: users.name,
-      fullName: users.fullName,
-      email: users.email,
-    })
-    .from(users)
-    .where(eq(users.id, ctx.userId))
-    .limit(1);
 
   return (
     <div className="max-w-3xl mx-auto px-4 lg:px-8 py-10">
@@ -38,9 +26,9 @@ export default async function ProfilePage() {
       </div>
 
       <ProfileClient
-        name={user?.name ?? ctx.user.name ?? null}
-        fullName={user?.fullName ?? null}
-        email={user?.email ?? ctx.user.email ?? null}
+        name={ctx.user.name ?? null}
+        fullName={ctx.user.fullName ?? null}
+        email={ctx.user.email ?? null}
       />
     </div>
   );
