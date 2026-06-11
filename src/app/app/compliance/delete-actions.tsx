@@ -10,7 +10,7 @@ export function ExportWorkspaceButton() {
       href="/api/privacy/export-workspace-data"
       className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
     >
-      <Download className="size-4" aria-hidden /> Export ZIP
+      <Download className="size-4" aria-hidden /> Export JSON
     </a>
   );
 }

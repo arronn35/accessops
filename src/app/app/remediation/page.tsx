@@ -7,21 +7,13 @@ import { EmptyState } from "@/components/empty/EmptyState";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { listRemediationTasks } from "@/lib/data/firestore";
+import { TaskStatusControl } from "./task-status";
 import { fallbackProjectFolder } from "@/lib/remediation/project-folder";
 import { formatRelative } from "@/lib/utils";
 import type { IssueSeverity, RemediationTask } from "@/lib/data/types";
 
 export const metadata = { title: "Remediation board — AccessOps AI" };
 export const dynamic = "force-dynamic";
-
-const STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "success" | "danger"> = {
-  to_do: "neutral",
-  planned: "info",
-  in_progress: "warning",
-  blocked: "danger",
-  fixed: "success",
-  accepted_risk: "warning",
-};
 
 export default async function RemediationPage() {
   const ctx = await getCurrentWorkspaceOrRedirect();
@@ -117,9 +109,7 @@ function TaskCard({ task }: { task: RemediationTask }) {
               {task.ruleId ?? "Manual task"} · updated {formatRelative(task.updatedAt)}
             </CardDescription>
           </div>
-          <Badge tone={STATUS_TONE[task.status] ?? "neutral"} size="sm">
-            {task.status.replaceAll("_", " ")}
-          </Badge>
+          <TaskStatusControl taskId={task.id} status={task.status} />
         </div>
       </CardHeader>
       <CardContent>

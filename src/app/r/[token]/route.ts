@@ -25,6 +25,10 @@ export async function GET(
       title: shared.report.title,
       workspaceName: shared.workspace.name,
       agencyBranding: agencyBrandingEnabled(shared.workspace.plan),
+      sections: shared.report.sectionsJson ?? null,
+      reportType: shared.report.reportType,
+      // Public links never embed page screenshots.
+      includeEvidence: false,
     });
     if (!input) return NOT_FOUND.clone();
     return new Response(renderHtml(input), {

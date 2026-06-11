@@ -5,6 +5,7 @@ import { Logo } from "@/components/brand/Logo";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { cn } from "@/lib/utils";
 import { verifySessionCookie } from "@/lib/auth/session";
+import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 import { PricingCta } from "./pricing-cta";
 
 export const metadata = { title: "Pricing — maitrico AccessOps AI" };
@@ -20,8 +21,6 @@ const PLANS = [
     cta: "Start free",
     features: [
       "1 website",
-      "3 scans per month",
-      "Single-page scan only",
       "Basic findings report (web)",
       "AI explanations (limited)",
     ],
@@ -35,7 +34,6 @@ const PLANS = [
     cta: "Get started",
     features: [
       "3 websites",
-      "Multi-page crawl up to 50 pages",
       "AI explanations & remediation",
       "PDF export",
       "Email support",
@@ -53,7 +51,6 @@ const PLANS = [
       "Multiple client workspaces",
       "Branded client reports",
       "Remediation board",
-      "Up to 200 pages per scan",
       "Priority support",
     ],
   },
@@ -68,7 +65,6 @@ const PLANS = [
       "Roles & permissions",
       "Advanced export (CSV / API)",
       "Shared remediation backlog",
-      "Up to 500 pages per scan",
       "SLA support",
     ],
   },
@@ -88,6 +84,19 @@ const PLANS = [
     ],
   },
 ];
+
+/**
+ * Limit lines come from the same source the API enforces
+ * (scanCapsForPlan), so pricing copy cannot drift from real behavior.
+ */
+function limitFeatures(planId: string): string[] {
+  if (planId === "enterprise") return [];
+  const caps = scanCapsForPlan(planId as PlanTier);
+  return [
+    `${caps.dailyScanCap} scan${caps.dailyScanCap === 1 ? "" : "s"} per day`,
+    `Up to ${caps.maxPagesCap} page${caps.maxPagesCap === 1 ? "" : "s"} per scan`,
+  ];
+}
 
 const FAQ = [
   {
@@ -188,7 +197,7 @@ export default async function PricingPage() {
               </p>
               <p className="text-xs text-ink-600 mt-2 leading-relaxed min-h-[48px]">{p.description}</p>
               <ul className="space-y-2 mt-4 flex-1">
-                {p.features.map((f) => (
+                {[...limitFeatures(p.id), ...p.features].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-xs text-ink-700 leading-snug">
                     <Check className="size-3.5 text-green-700 shrink-0 mt-0.5" aria-hidden /> {f}
                   </li>

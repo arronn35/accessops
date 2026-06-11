@@ -35,6 +35,9 @@ export async function GET(
       title: report.title,
       workspaceName: workspace?.name ?? "Workspace",
       agencyBranding: agencyBrandingEnabled(workspace?.plan ?? "free"),
+      sections: report.sectionsJson ?? null,
+      reportType: report.reportType,
+      includeEvidence: format !== "csv" && format !== "json",
     });
     if (!input) throw new ApiError(404, "scan_not_found");
     await audit({ userId: ctx.userId, workspaceId: ctx.workspaceId, action: "report.exported", resourceType: "report", resourceId: id, metadata: { format } });

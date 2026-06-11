@@ -212,6 +212,12 @@ export default async function CompliancePage() {
                 </button>
               ))}
             </div>
+            <p className="text-xs text-ink-500 mt-4 leading-relaxed">
+              The region selector records your residency preference. Actual data
+              location follows the configured Firebase project region and worker
+              deployment; switching providers or regions is an infrastructure
+              change handled with support.
+            </p>
           </CardContent>
         </Card>
       </section>

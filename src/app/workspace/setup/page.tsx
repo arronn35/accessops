@@ -67,7 +67,7 @@ export default async function WorkspaceSetupPage() {
                   <option value="ca">Canada</option>
                   <option value="other">Other</option>
                 </Select>
-                <FieldHint>Determines data residency for scans.</FieldHint>
+                <FieldHint>Stored as a residency preference; actual hosting follows the deployment’s provider configuration.</FieldHint>
               </div>
               <div>
                 <Label htmlFor="ws-fw">Primary framework</Label>

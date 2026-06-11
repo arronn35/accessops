@@ -27,7 +27,7 @@ test.describe("authenticated golden path", () => {
 
   test("compliance center exposes privacy controls", async ({ page }) => {
     await page.goto("/app/compliance");
-    await expect(page.getByText(/Export ZIP/i)).toBeVisible();
+    await expect(page.getByText(/Export JSON/i)).toBeVisible();
     await expect(page.getByRole("button", { name: /Delete/i }).first()).toBeVisible();
   });
 

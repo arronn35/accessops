@@ -696,6 +696,55 @@ export async function findIssueInWorkspace(
   return null;
 }
 
+export async function getScanPage(
+  workspaceId: string,
+  scanId: string,
+  pageId: string
+): Promise<ScanPage | null> {
+  return getDoc<ScanPage>(scanRef(workspaceId, scanId).collection("pages").doc(pageId));
+}
+
+export async function updateIssue(
+  workspaceId: string,
+  scanId: string,
+  issueId: string,
+  patch: Partial<
+    Pick<AccessibilityIssue, "status" | "falsePositive" | "humanReviewRequired">
+  >
+): Promise<AccessibilityIssue | null> {
+  const existing = await getIssue(workspaceId, scanId, issueId);
+  if (!existing) return null;
+  await scanRef(workspaceId, scanId)
+    .collection("issues")
+    .doc(issueId)
+    .set(
+      stripUndefined({ ...patch, updatedAt: now() } as Record<string, unknown>),
+      { merge: true }
+    );
+  return getIssue(workspaceId, scanId, issueId);
+}
+
+/**
+ * Soft-delete one visual-evidence record: drops the stored image bytes and
+ * marks the doc deleted so reads (and the image endpoint) stop serving it.
+ */
+export async function softDeleteVisualEvidence(
+  workspaceId: string,
+  evidenceId: string
+): Promise<boolean> {
+  const evidence = await getVisualEvidence(workspaceId, evidenceId);
+  if (!evidence) return false;
+  await db().collection("visualEvidence").doc(evidenceId).set(
+    {
+      deletedAt: now(),
+      imageDataBase64: FieldValue.delete(),
+      imageContentType: FieldValue.delete(),
+    },
+    { merge: true }
+  );
+  return true;
+}
+
 export async function listIssueGroups(
   workspaceId: string,
   scanId: string
@@ -770,6 +819,26 @@ export async function getVisualEvidenceForIssue(
   issueId: string
 ): Promise<VisualEvidence | null> {
   return getVisualEvidence(workspaceId, issueId);
+}
+
+/**
+ * Visual-evidence records for a workspace with image bytes stripped —
+ * used by the privacy export, which ships metadata, not screenshots.
+ */
+export async function listVisualEvidenceMeta(
+  workspaceId: string,
+  limit = 1000
+): Promise<Array<Omit<VisualEvidence, "imageDataBase64">>> {
+  const snap = await db()
+    .collection("visualEvidence")
+    .where("workspaceId", "==", workspaceId)
+    .limit(limit)
+    .get();
+  return snap.docs.map((d) => {
+    const row = readDoc<VisualEvidence>(d.id, d.data())!;
+    delete row.imageDataBase64;
+    return row;
+  });
 }
 
 export async function writeIssueGroup(
@@ -882,6 +951,28 @@ export async function listAuditLogs(workspaceId: string, limit = 50): Promise<Au
 
 export async function listNotifications(workspaceId: string, limit = 20): Promise<AuditLog[]> {
   return listAuditLogs(workspaceId, limit);
+}
+
+function memberRef(workspaceId: string, userId: string) {
+  return db().collection("workspaces").doc(workspaceId).collection("members").doc(userId);
+}
+
+export async function getNotificationsSeenAt(
+  workspaceId: string,
+  userId: string
+): Promise<Date | null> {
+  const member = await getDoc<WorkspaceMember>(memberRef(workspaceId, userId));
+  return member?.notificationsSeenAt ?? null;
+}
+
+export async function markNotificationsSeen(
+  workspaceId: string,
+  userId: string
+): Promise<void> {
+  await memberRef(workspaceId, userId).set(
+    { notificationsSeenAt: now(), updatedAt: now() },
+    { merge: true }
+  );
 }
 
 export interface WorkspaceMemberWithUser {

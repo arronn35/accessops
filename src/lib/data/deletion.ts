@@ -89,7 +89,10 @@ async function countQuery(query: Query): Promise<number> {
 
 /**
  * Delete one scan and everything hanging off it: result subcollections,
- * visual evidence, and the scan document itself.
+ * visual evidence, reports derived from the scan (with their public
+ * shares), scan-linked remediation tasks, and the scan document itself.
+ * Used by single-scan deletion, the retention sweep, and the
+ * whole-workspace deletion job, so all three stay relationally clean.
  */
 export async function deleteScanCompletely(
   workspaceId: string,
@@ -108,6 +111,33 @@ export async function deleteScanCompletely(
       .where("workspaceId", "==", workspaceId)
       .where("scanJobId", "==", scanId)
   );
+
+  // Reports built from this scan, revoking public shares first.
+  const reports = await workspaceRef(workspaceId)
+    .collection("reports")
+    .where("scanJobId", "==", scanId)
+    .get();
+  if (!reports.empty) {
+    const batch = db().batch();
+    for (const doc of reports.docs) {
+      const report = readDoc<Report>(doc.id, doc.data());
+      if (report?.publicShareToken) {
+        batch.delete(db().collection("publicReportShares").doc(report.publicShareToken));
+        counts.reportShares += 1;
+      }
+      batch.delete(doc.ref);
+      counts.reports += 1;
+    }
+    await batch.commit();
+  }
+
+  // Remediation tasks generated from this scan.
+  counts.remediationTasks += await deleteQueryDocs(
+    workspaceRef(workspaceId)
+      .collection("remediationTasks")
+      .where("scanJobId", "==", scanId)
+  );
+
   await scanRef.delete();
   counts.scans = 1;
   return counts;

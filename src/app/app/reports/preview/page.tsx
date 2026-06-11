@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { ArrowLeft, Printer } from "lucide-react";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
-import { getScanJob, listIssues, listScans, listScanPages } from "@/lib/data/firestore";
+import { getScanJob, listScans } from "@/lib/data/firestore";
+import { buildReportInput } from "@/lib/reports/build-input";
 import { renderHtml } from "@/lib/reports/render";
 
 export const metadata = { title: "Report preview — AccessOps AI" };
@@ -18,40 +19,16 @@ export default async function ReportPreviewPage({
     ? await getScanJob(ctx.workspace.id, scanId)
     : (await listScans(ctx.workspace.id, 20)).find((item) => item.status === "completed") ?? null;
   if (!scan) return <EmptyState />;
-  const [issues, pages] = await Promise.all([
-    listIssues(ctx.workspace.id, scan.id),
-    listScanPages(ctx.workspace.id, scan.id),
-  ]);
-  const pageById = new Map(pages.map((p) => [p.id, p]));
-  const counts = { critical: 0, moderate: 0, minor: 0, passed: 0, review: 0 };
-  for (const issue of issues) counts[issue.severity]++;
-  const html = renderHtml({
+  const input = await buildReportInput({
+    scanJobId: scan.id,
+    workspaceId: ctx.workspace.id,
     title: `${hostFromUrl(scan.baseUrl)} accessibility report`,
     workspaceName: ctx.workspace.name,
-    scanId: scan.id,
-    baseUrl: scan.baseUrl,
-    pagesScanned: scan.pagesScanned,
-    scanDate: scan.completedAt ?? scan.createdAt,
-    counts,
     agencyBranding: false,
-    issues: issues.map((issue) => {
-      const page = issue.scanPageId ? pageById.get(issue.scanPageId) : null;
-      return {
-        id: issue.id,
-        groupId: issue.groupId,
-        ruleId: issue.ruleId,
-        severity: issue.severity,
-        impact: issue.impact,
-        description: issue.description,
-        help: issue.help,
-        helpUrl: issue.helpUrl,
-        wcagTags: issue.wcagTagsJson,
-        pageUrl: page?.url ?? null,
-        pageTitle: page?.title ?? null,
-        htmlSnippet: issue.htmlSnippet,
-      };
-    }),
+    includeEvidence: true,
   });
+  if (!input) return <EmptyState />;
+  const html = renderHtml(input);
   return (
     <div className="bg-canvas-2 min-h-full pb-20">
       <div className="no-print sticky top-0 z-10 bg-paper/90 backdrop-blur border-b border-line px-4 lg:px-8 h-14 flex items-center justify-between">

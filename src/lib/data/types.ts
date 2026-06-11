@@ -55,6 +55,8 @@ export interface WorkspaceMember {
   role: WorkspaceRole;
   permissionsJson?: Record<string, boolean> | null;
   status: MemberStatus;
+  /** Last time this member opened the notifications panel (unread cutoff). */
+  notificationsSeenAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
