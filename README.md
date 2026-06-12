@@ -13,13 +13,11 @@ Privacy-first accessibility operations SaaS. AccessOps AI helps teams run bounde
 | Scan processor | Dedicated browser worker container running Playwright + axe-core |
 | Storage | No external screenshot/PDF storage in V1 |
 
-The old Neon/Postgres + Drizzle + Upstash Redis/BullMQ + NextAuth/Resend + S3/R2 path has been removed from the application code.
-
 ## Local Setup
 
 ```bash
-cp .env.example .env.local
 npm install
+npm run secrets:decrypt   # writes .env.local (see docs/secrets.md)
 npm run dev
 ```
 
@@ -61,17 +59,6 @@ Defaults are conservative so provider quota is not the first failure point:
 - Persisted issues per scan: `MAX_PERSISTED_ISSUES_PER_SCAN=100`
 
 When caps are reached, APIs return user-friendly daily capacity messages.
-
-## Migration Helpers
-
-```bash
-npm run postgres:export
-npm run firebase:import -- ./migration-export.json
-```
-
-`postgres:export` expects `DATABASE_URL` and a local `psql` binary. It is kept only as a one-time production data migration helper; the runtime app no longer depends on Postgres packages.
-
-`firebase:import` writes the exported JSON into Firestore using the existing document IDs and creates Firebase Auth users with matching UIDs where possible.
 
 ## Deploy
 

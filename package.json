@@ -15,8 +15,6 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
-    "postgres:export": "tsx scripts/export-postgres-json.ts",
-    "firebase:import": "tsx scripts/import-firestore.ts",
     "worker": "tsx worker/index.ts",
     "worker:typecheck": "tsc --noEmit -p worker/tsconfig.json",
     "secrets:encrypt": "node scripts/secrets-encrypt.mjs",
@@ -36,7 +34,6 @@
     "playwright": "^1.60.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "recharts": "^3.8.1",
     "tailwind-merge": "^3.6.0",
     "zod": "^4.4.3"
   },

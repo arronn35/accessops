@@ -1,7 +1,7 @@
 /**
  * Shared types for the scanner module. These are deliberately
- * decoupled from Drizzle so the scanner can be unit-tested without
- * a DB connection.
+ * decoupled from the persistence layer so the scanner can be
+ * unit-tested without a database connection.
  */
 
 export type Severity = "critical" | "moderate" | "minor" | "passed" | "review";

@@ -16,8 +16,8 @@ Browser → POST /api/scans (Vercel) → Firestore scans/{id} status="queued"
                 status="completed", engine="playwright-axe"
 ```
 
-Dispatch is **Firestore polling** — there is no Redis/BullMQ or Cloudflare
-Queue. Concurrency is bounded by `WORKER_CONCURRENCY`; a crashed worker's
+Dispatch is **Firestore polling** — there is no separate queue
+infrastructure. Concurrency is bounded by `WORKER_CONCURRENCY`; a crashed worker's
 in-flight jobs are reclaimed automatically once their heartbeat goes stale
 (`WORKER_STALE_RUNNING_MS`).
 

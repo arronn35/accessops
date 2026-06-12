@@ -68,16 +68,6 @@ One-time Firestore setup (Google Cloud console → Firestore → TTL):
 
 Correctness does not depend on either policy; they only bound storage growth.
 
-Removed and no longer required:
-
-- `DATABASE_URL`
-- `REDIS_URL`
-- `UPSTASH_*`
-- `AUTH_*` NextAuth secrets
-- `RESEND_*`
-- `S3_*` / R2 storage variables
-- `CF_QUEUE_PUBLISH_URL` / `CF_QUEUE_SHARED_SECRET` (Cloudflare Queues — replaced by the polling worker)
-
 ## Smoke Checklist
 
 - `GET /api/healthz` returns `200` and `ok: true`.

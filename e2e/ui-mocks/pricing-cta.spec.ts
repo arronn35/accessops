@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 
 /**
  * The pricing CTAs for paid plans are client components that POST to
- * /api/plan/select. Stripe was removed; selecting a plan now grants
+ * /api/plan/select. There is no payment step; selecting a plan grants
  * access immediately. We mock the API to lock in the CTA behaviour
  * without needing auth.
  */
