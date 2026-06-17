@@ -1,42 +1,36 @@
-# =============================================================
-# maitrico AccessOps AI — scan worker
-# =============================================================
-# Single Dockerfile that produces a Railway-ready image.
-# Build:  docker build -f Dockerfile.worker -t accessops-worker .
-# Run:    docker run --env-file .env --rm accessops-worker
+# Percevia browser scan worker.
 #
-# Base image is Playwright's official Node + Chromium build so we
-# don't have to install Chromium dependencies by hand. The image is
-# bigger (~1.5 GB) but Railway charges by usage hours, not size.
-# =============================================================
+# Long-running container that polls Firestore for queued scans and runs the
+# real Playwright + axe-core engine. Deploy to any container host (Railway,
+# Fly.io, Render, Cloud Run). The Vercel web app does NOT use this image.
+#
+# The base image ships Chromium + all system libraries, matched to the
+# playwright version in package.json (1.60.0) — do NOT bump one without the
+# other.
+FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
-FROM mcr.microsoft.com/playwright:v1.60.0-jammy AS base
+ENV NODE_ENV=production \
+    # Browsers are baked into the base image; don't re-download on install.
+    PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 WORKDIR /app
-ENV NODE_ENV=production
-ENV WORKER_PROCESS=1
-ENV WORKER_HEALTH_PORT=8080
 
-# ---------- 1. install deps ----------
-# The worker runs TypeScript directly via `tsx`, so it needs the full
-# dependency tree (tsx + drizzle-kit live in devDependencies). We pass
-# --include=dev explicitly and override NODE_ENV for the install step
-# only, since `npm ci` honors NODE_ENV=production by skipping devDeps.
-COPY package.json package-lock.json* ./
-RUN NODE_ENV=development npm ci --include=dev --no-audit --no-fund
+# Install deps first for layer caching. Need devDependencies (tsx, typescript,
+# dotenv) to run the TS worker directly, so do not use --omit=dev.
+COPY package.json package-lock.json ./
+RUN npm ci --include=dev
 
-# ---------- 2. copy source ----------
-COPY tsconfig.json drizzle.config.ts ./
+# App + worker source. tsconfig.json is required for the @/* path alias that
+# tsx resolves at runtime.
+COPY tsconfig.json ./
 COPY src ./src
 COPY worker ./worker
-COPY drizzle ./drizzle
 
-EXPOSE 8080
+# Docker COPY preserves restrictive local modes (for example 0600). Ensure the
+# runtime user can read the application tree without granting write access.
+RUN chmod -R a+rX /app
 
-# Container-level healthcheck so orchestrators can restart a hung worker.
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD node -e "fetch('http://127.0.0.1:'+(process.env.WORKER_HEALTH_PORT||8080)+'/healthz').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
-
-# Drop privileges. The Playwright image already ships with a `pwuser`.
+# Run as the non-root user provided by the Playwright base image.
 USER pwuser
 
 CMD ["npx", "tsx", "worker/index.ts"]

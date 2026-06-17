@@ -31,8 +31,8 @@ const SECTIONS = [
 ] as const;
 
 const FORMATS = [
-  { id: "html", label: "HTML", icon: FileBarChart2 },
-  { id: "pdf", label: "PDF (browser print)", icon: FileText },
+  { id: "html", label: "HTML (download)", icon: FileBarChart2 },
+  { id: "pdf", label: "PDF (auto-download)", icon: FileText },
   { id: "csv", label: "CSV (issues only)", icon: Download },
 ] as const;
 
@@ -85,13 +85,32 @@ export default function ReportBuilderPage() {
         return;
       }
       const { report } = await res.json();
-      // Jump straight to export endpoint, which streams the requested format.
-      window.location.href = `/api/reports/${report.id}/export?format=${format}`;
+      await downloadReportExport(report.id, format);
     } catch (err) {
       setError((err as Error).message);
     } finally {
       setLoading(false);
     }
+  }
+
+  async function downloadReportExport(reportId: string, exportFormat: "html" | "pdf" | "csv") {
+    const exportRes = await fetch(`/api/reports/${reportId}/export?format=${exportFormat}`);
+    if (!exportRes.ok) {
+      const body = await exportRes.json().catch(() => ({}));
+      throw new Error(body.message || `Could not generate ${exportFormat.toUpperCase()} export.`);
+    }
+    const blob = await exportRes.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filenameFromDisposition(
+      exportRes.headers.get("content-disposition"),
+      `percevia-report-${reportId}.${exportFormat}`
+    );
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 
   return (
@@ -214,8 +233,13 @@ export default function ReportBuilderPage() {
               </div>
               {format === "pdf" && (
                 <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-                  We render an HTML report and trigger the browser&apos;s print-to-PDF dialog —
-                  no server-side PDF binary, no file storage costs. Click <em>Print</em> in the new tab.
+                  A PDF is rendered server-side and downloaded automatically.
+                </p>
+              )}
+              {format === "html" && (
+                <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+                  The HTML report downloads as a self-contained file. Use Preview report to review
+                  it in the dashboard first.
                 </p>
               )}
             </CardContent>
@@ -304,4 +328,9 @@ function hostFromUrl(url: string): string {
   } catch {
     return url;
   }
+}
+
+function filenameFromDisposition(disposition: string | null, fallback: string): string {
+  const match = disposition?.match(/filename="([^"]+)"/i);
+  return match?.[1] || fallback;
 }

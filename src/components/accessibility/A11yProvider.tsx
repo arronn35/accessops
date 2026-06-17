@@ -17,7 +17,7 @@ interface A11yState {
 
 const Ctx = createContext<A11yState | null>(null);
 
-const KEY = "accessops:a11y";
+const KEY = "percevia:a11y";
 
 interface StoredPrefs {
   textSize?: TextSize;

@@ -1,8 +1,8 @@
-# maitrico AccessOps AI — Design system
+# maitrico Percevia AI — Design system
 
 ## 1. Product design summary
 
-**maitrico AccessOps AI** is a premium, privacy-first SaaS for accessibility operations. The product
+**maitrico Percevia AI** is a premium, privacy-first SaaS for accessibility operations. The product
 must feel:
 
 - **Calm.** Severity colors are desaturated, alerts are tonal not shouty.
@@ -113,7 +113,7 @@ Toggling `<html data-contrast="high">` switches the entire token block to a stri
 ### Brand (`src/components/brand/`)
 
 - `Logo` — `wordmark` / `mark` / `lockup` / `wordmark-light` variants.
-- `ProductBadge` — the "AccessOps AI" purple chip.
+- `ProductBadge` — the "Percevia AI" purple chip.
 
 ### Navigation (`src/components/nav/`)
 

@@ -10,17 +10,41 @@ export function ExportWorkspaceButton() {
       href="/api/privacy/export-workspace-data"
       className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
     >
-      <Download className="size-4" aria-hidden /> Export ZIP
+      <Download className="size-4" aria-hidden /> Export JSON
     </a>
   );
 }
+
+type DeletionPhase = "idle" | "queued" | "completed";
+
+const DELETION_POLL_MS = 2_500;
+const DELETION_POLL_LIMIT = 24; // ~1 minute before we stop polling
 
 export function DeleteAllScansButton() {
   const [open, setOpen] = useState(false);
   const [confirm, setConfirm] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [done, setDone] = useState(false);
+  const [phase, setPhase] = useState<DeletionPhase>("idle");
+
+  async function pollUntilDone() {
+    for (let i = 0; i < DELETION_POLL_LIMIT; i++) {
+      await new Promise((resolve) => setTimeout(resolve, DELETION_POLL_MS));
+      const res = await fetch("/api/privacy/delete-scan-data").catch(() => null);
+      if (!res?.ok) continue;
+      const body = await res.json().catch(() => ({}));
+      if (body.job?.status === "completed") {
+        setPhase("completed");
+        return;
+      }
+      if (body.job?.status === "failed") {
+        setError("Deletion did not complete. Please retry or contact support.");
+        setPhase("idle");
+        return;
+      }
+    }
+    // Still running after the polling window; the job continues server-side.
+  }
 
   async function runDelete() {
     setLoading(true);
@@ -29,23 +53,33 @@ export function DeleteAllScansButton() {
       const res = await fetch("/api/privacy/delete-scan-data", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ all: true, confirm: "DELETE" }),
+        body: JSON.stringify({ confirm: "DELETE" }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setError(body.message ?? "Could not delete");
         return;
       }
-      setDone(true);
+      setPhase("queued");
+      void pollUntilDone();
     } finally {
       setLoading(false);
     }
   }
 
-  if (done) {
+  if (phase === "completed") {
     return (
       <AlertCallout tone="success" title="Scan data deleted">
-        All scan data for this workspace has been removed.
+        All scan data for this workspace has been removed and verified.
+      </AlertCallout>
+    );
+  }
+
+  if (phase === "queued") {
+    return (
+      <AlertCallout tone="info" title="Deletion in progress">
+        Scan data deletion is running in the background. You can leave this
+        page — the audit log will record completion.
       </AlertCallout>
     );
   }

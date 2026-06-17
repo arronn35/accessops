@@ -1,4 +1,4 @@
-# maitrico AccessOps AI — UX flow map
+# maitrico Percevia AI — UX flow map
 
 ## Primary acquisition → activation flow
 

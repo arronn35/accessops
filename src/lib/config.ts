@@ -16,7 +16,7 @@ export function isDemoMode(): boolean {
   return process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 }
 
-/** Allow mock AI explanations when no Anthropic key is configured. */
+/** Allow mock AI explanations when no OpenAI key is configured. */
 export function aiMockEnabled(): boolean {
   return process.env.AI_MOCK_ENABLED === "true";
 }

@@ -19,7 +19,7 @@ test.describe("pricing page", () => {
   test("Enterprise CTA opens a mailto", async ({ page }) => {
     await page.goto("/pricing");
     const link = page.getByRole("link", { name: /Contact sales/ });
-    await expect(link).toHaveAttribute("href", /^mailto:sales@maitrico\.com/);
+    await expect(link).toHaveAttribute("href", /^mailto:maitritechco@gmail\.com/);
   });
 
   test("footer routes to legal docs", async ({ page }) => {

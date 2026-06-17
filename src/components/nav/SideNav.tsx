@@ -1,10 +1,10 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
   LayoutDashboard,
   ScanLine,
+  Activity,
   KanbanSquare,
   Sparkles,
   FileBarChart2,
@@ -16,11 +16,13 @@ import {
   CreditCard,
 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
+import { PrefetchLink } from "@/components/nav/PrefetchLink";
 import { cn } from "@/lib/utils";
 
 const nav = [
   { href: "/app", label: "Dashboard", icon: LayoutDashboard },
   { href: "/app/scans/new", label: "Scans", icon: ScanLine, match: "/app/scans" },
+  { href: "/app/monitors", label: "Monitors", icon: Activity },
   { href: "/app/remediation", label: "Remediation", icon: KanbanSquare },
   { href: "/app/ai-assistant", label: "AI Assistant", icon: Sparkles },
   { href: "/app/reports/builder", label: "Reports", icon: FileBarChart2, match: "/app/reports" },
@@ -47,22 +49,22 @@ export function SideNav() {
       className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-paper border-r border-line"
     >
       <div className="p-5 border-b border-line">
-        <Link href="/app" aria-label="maitrico AccessOps AI home">
+        <PrefetchLink href="/app" aria-label="percevia home">
           <Logo variant="wordmark" />
-        </Link>
-        <p className="text-[11px] text-ink-500 font-medium uppercase tracking-wider mt-2 ml-9">
-          AccessOps AI
+        </PrefetchLink>
+        <p className="ml-[52px] mt-1 text-[11px] font-medium text-ink-500">
+          maitrico.
         </p>
       </div>
 
       <div className="p-3">
-        <Link
+        <PrefetchLink
           href="/app/scans/new"
           className="flex items-center justify-center gap-2 w-full h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 transition-colors"
         >
           <Plus className="size-4" aria-hidden />
           New scan
-        </Link>
+        </PrefetchLink>
       </div>
 
       <nav className="flex-1 overflow-y-auto p-3 space-y-1">
@@ -70,7 +72,7 @@ export function SideNav() {
           const Icon = item.icon;
           const active = isActive(item);
           return (
-            <Link
+            <PrefetchLink
               key={item.href}
               href={item.href}
               aria-current={active ? "page" : undefined}
@@ -83,7 +85,7 @@ export function SideNav() {
             >
               <Icon className="size-4 shrink-0" aria-hidden />
               {item.label}
-            </Link>
+            </PrefetchLink>
           );
         })}
 
@@ -92,7 +94,7 @@ export function SideNav() {
             const Icon = item.icon;
             const active = isActive(item);
             return (
-              <Link
+              <PrefetchLink
                 key={item.href}
                 href={item.href}
                 aria-current={active ? "page" : undefined}
@@ -105,20 +107,20 @@ export function SideNav() {
               >
                 <Icon className="size-4 shrink-0" aria-hidden />
                 {item.label}
-              </Link>
+              </PrefetchLink>
             );
           })}
         </div>
       </nav>
 
       <div className="p-3 border-t border-line">
-        <Link
+        <PrefetchLink
           href="/pricing"
           className="flex items-center gap-2 px-3 py-2 rounded-md text-xs text-ink-600 hover:bg-canvas-2"
         >
           <CircleHelp className="size-3.5" aria-hidden />
           Plans & pricing
-        </Link>
+        </PrefetchLink>
       </div>
     </aside>
   );

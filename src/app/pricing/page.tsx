@@ -1,12 +1,15 @@
 import Link from "next/link";
-import { Check, ArrowLeft, Sparkles } from "lucide-react";
+import { Check, ArrowLeft, Sparkles, LayoutDashboard } from "lucide-react";
 import { Badge } from "@/components/ui/Badge";
 import { Logo } from "@/components/brand/Logo";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { cn } from "@/lib/utils";
+import { verifySessionCookie } from "@/lib/auth/session";
+import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 import { PricingCta } from "./pricing-cta";
 
-export const metadata = { title: "Pricing — maitrico AccessOps AI" };
+export const metadata = { title: "Pricing — maitrico Percevia AI" };
+export const dynamic = "force-dynamic";
 
 const PLANS = [
   {
@@ -14,12 +17,10 @@ const PLANS = [
     name: "Free",
     price: "€0",
     cadence: "forever",
-    description: "Try a single site. See whether AccessOps AI fits your workflow.",
+    description: "Try a single site. See whether Percevia AI fits your workflow.",
     cta: "Start free",
     features: [
       "1 website",
-      "3 scans per month",
-      "Single-page scan only",
       "Basic findings report (web)",
       "AI explanations (limited)",
     ],
@@ -33,7 +34,6 @@ const PLANS = [
     cta: "Get started",
     features: [
       "3 websites",
-      "Multi-page crawl up to 50 pages",
       "AI explanations & remediation",
       "PDF export",
       "Email support",
@@ -51,7 +51,6 @@ const PLANS = [
       "Multiple client workspaces",
       "Branded client reports",
       "Remediation board",
-      "Up to 200 pages per scan",
       "Priority support",
     ],
   },
@@ -66,7 +65,6 @@ const PLANS = [
       "Roles & permissions",
       "Advanced export (CSV / API)",
       "Shared remediation backlog",
-      "Up to 500 pages per scan",
       "SLA support",
     ],
   },
@@ -87,10 +85,23 @@ const PLANS = [
   },
 ];
 
+/**
+ * Limit lines come from the same source the API enforces
+ * (scanCapsForPlan), so pricing copy cannot drift from real behavior.
+ */
+function limitFeatures(planId: string): string[] {
+  if (planId === "enterprise") return [];
+  const caps = scanCapsForPlan(planId as PlanTier);
+  return [
+    `${caps.dailyScanCap} scan${caps.dailyScanCap === 1 ? "" : "s"} per day`,
+    `Up to ${caps.maxPagesCap} page${caps.maxPagesCap === 1 ? "" : "s"} per scan`,
+  ];
+}
+
 const FAQ = [
   {
-    q: "Does AccessOps AI make my site WCAG compliant?",
-    a: "No. AccessOps AI helps identify and manage accessibility issues. Automated tools cannot detect every issue, and we do not guarantee compliance with WCAG, ADA, EAA, Section 508, or EN 301 549. Always involve qualified accessibility specialists for formal compliance.",
+    q: "Does Percevia AI make my site WCAG compliant?",
+    a: "No. Percevia AI helps identify and manage accessibility issues. Automated tools cannot detect every issue, and we do not guarantee compliance with WCAG, ADA, EAA, Section 508, or EN 301 549. Always involve qualified accessibility specialists for formal compliance.",
   },
   {
     q: "Are AI suggestions safe to apply directly?",
@@ -102,11 +113,12 @@ const FAQ = [
   },
   {
     q: "Is this an accessibility overlay?",
-    a: "No. We do not offer or recommend accessibility overlays. AccessOps AI is for genuine remediation operations.",
+    a: "No. We do not offer or recommend accessibility overlays. Percevia AI is for genuine remediation operations.",
   },
 ];
 
-export default function PricingPage() {
+export default async function PricingPage() {
+  const signedIn = Boolean(await verifySessionCookie().catch(() => null));
   return (
     <div className="bg-canvas-2 min-h-screen pb-20">
       <header className="bg-paper border-b border-line">
@@ -118,12 +130,32 @@ export default function PricingPage() {
             <Link href="/" className="inline-flex items-center gap-1 text-sm text-ink-700 hover:text-ink-900">
               <ArrowLeft className="size-4" aria-hidden /> Back home
             </Link>
-            <Link
-              href="/onboarding"
-              className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-            >
-              Start free scan
-            </Link>
+            {signedIn ? (
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+              >
+                <LayoutDashboard className="size-4" aria-hidden />
+                <span className="hidden min-[420px]:inline">Open dashboard</span>
+                <span className="min-[420px]:hidden">Dashboard</span>
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/auth/sign-in"
+                  className="inline-flex items-center gap-1.5 text-sm text-ink-700 hover:text-ink-900 h-10 px-2 sm:px-3 rounded-md"
+                >
+                  Sign in
+                </Link>
+                <Link
+                  href="/onboarding"
+                  className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+                >
+                  <span className="hidden min-[420px]:inline">Start free scan</span>
+                  <span className="min-[420px]:hidden">Start</span>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -136,7 +168,7 @@ export default function PricingPage() {
           Pricing that scales with your team
         </h1>
         <p className="text-base text-ink-600 mt-3 max-w-2xl mx-auto">
-          Honest tiers. No hidden &quot;compliance&quot; upsells. AccessOps AI is positioned against
+          Honest tiers. No hidden &quot;compliance&quot; upsells. Percevia AI is positioned against
           one-click compliance — every plan reflects that.
         </p>
       </section>
@@ -165,7 +197,7 @@ export default function PricingPage() {
               </p>
               <p className="text-xs text-ink-600 mt-2 leading-relaxed min-h-[48px]">{p.description}</p>
               <ul className="space-y-2 mt-4 flex-1">
-                {p.features.map((f) => (
+                {[...limitFeatures(p.id), ...p.features].map((f) => (
                   <li key={f} className="flex items-start gap-2 text-xs text-ink-700 leading-snug">
                     <Check className="size-3.5 text-green-700 shrink-0 mt-0.5" aria-hidden /> {f}
                   </li>

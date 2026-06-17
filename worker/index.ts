@@ -1,405 +1,534 @@
 /**
- * maitrico AccessOps AI — scan worker.
+ * AccessOps browser scan worker.
  *
- * Runs on Railway (or any Docker host). Connects to:
- *   - Redis (BullMQ queue) via REDIS_URL
- *   - Postgres via DATABASE_URL
+ * A long-running container that polls Firestore for queued scan jobs, claims
+ * them atomically, and runs the real Playwright + axe-core engine
+ * (`runScanJob`). This is the production scan path — Vercel serverless cannot
+ * run Chromium, so all real scanning happens here.
  *
- * Lifecycle:
- *   1. Long-poll the BullMQ queue.
- *   2. For each job: load scan_jobs row, run scanner, persist
- *      scan_pages + accessibility_issues, update progress, mark
- *      completed/failed.
- *   3. SIGTERM → drain in-flight job, close browser, close Redis,
- *      close Postgres pool, exit.
+ * Dispatch is polling (no queue infra): `POST /api/scans` writes a `queued`
+ * job; this worker picks it up. Concurrency is bounded and crash recovery is
+ * automatic via an independent stale-heartbeat sweeper.
  *
- * Health: exposes a tiny HTTP server on WORKER_HEALTH_PORT (default 8080)
- * with GET /healthz returning { ok: true }. Railway and uptime monitors
- * can hit this.
- *
- * Concurrency: WORKER_CONCURRENCY (default 1). Cost guard for free-tier
- * Railway. Scale by adding more worker instances, not by raising
- * concurrency past ~2 per CPU.
+ * Run:  npm run worker        (tsx worker/index.ts)
  */
 import "dotenv/config";
-import { Worker, type Job } from "bullmq";
-import { createServer } from "node:http";
-import { eq, sql } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
+import { createServer, type Server } from "node:http";
 import {
-  db,
-  scanJobs,
-  scanPages,
-  scanSummaries,
-  accessibilityIssues,
-  auditLogs,
-  usageLimits,
-  privacySettings,
-} from "../src/lib/db";
-import { runScanJob } from "../src/lib/scanner";
-import { persistVisualEvidenceForIssue } from "../src/lib/scanner/persistence";
-import { calculateScanScore } from "../src/lib/scanner/scoring";
+  applyPageJobSweepAction,
+  applySweepAction,
+  claimAggregation,
+  claimPageJob,
+  claimScanJob,
+  getScanJob,
+  listAggregationCandidates,
+  listClaimablePageJobRefs,
+  listClaimableScanRefs,
+  listSweepablePageJobs,
+  listSweepableScans,
+  requeuePageJobOnShutdown,
+  requeueScanOnShutdown,
+  updateScanJob,
+  type ClaimablePageJobRef,
+  type ClaimableScanRef,
+} from "@/lib/data/firestore";
+import { sweepScans } from "@/lib/data/scan-sweeper";
+import { sweepPageJobs } from "@/lib/data/page-jobs";
 import {
-  scanQueueName,
-  reportPdfQueueName,
-  getRedisConnectionOptions,
-  type ScanJobPayload,
-  type ReportPdfJobPayload,
-} from "../src/lib/queue";
-import IORedis from "ioredis";
-import type { NormalizedIssue, NormalizedPage } from "../src/lib/scanner/types";
-import { captureException } from "../src/lib/observability";
-import { reportPdfHandler } from "./report-pdf";
-import { storageConfigured } from "../src/lib/storage/r2";
-import { visualEvidenceRetentionDays } from "../src/lib/config";
+  claimDataDeletionJob,
+  listClaimableDataDeletionJobs,
+  runDataDeletionJob,
+  touchDataDeletionJob,
+} from "@/lib/data/deletion";
+import { recordWorkerHeartbeat } from "@/lib/data/worker-health";
+import { firebaseAdminConfigured } from "@/lib/firebase/admin";
+import { processScanJob } from "./process-job";
+import { processPageJob } from "./process-page-job";
+import { getBrowserManager } from "./browser-manager";
+import { aggregateScan } from "@/lib/scanner/persistence";
 
-// ============================================================
-// Config
-// ============================================================
-const CONCURRENCY = Math.max(1, Number(process.env.WORKER_CONCURRENCY ?? 1));
-const SCAN_TIMEOUT_MS = Math.max(15_000, Number(process.env.SCAN_TIMEOUT_MS ?? 60_000));
-const HEALTH_PORT = Number(process.env.WORKER_HEALTH_PORT ?? 8080);
-
-console.log("[worker] starting", {
-  concurrency: CONCURRENCY,
-  timeoutMs: SCAN_TIMEOUT_MS,
-  redisUrl: redact(process.env.REDIS_URL),
-  databaseUrl: redact(process.env.DATABASE_URL),
-});
-
-function redact(s?: string): string {
-  if (!s) return "(unset)";
-  return s.replace(/(\/\/)([^@]+)@/, "$1***@").slice(0, 80);
+function durationFromEnv(name: string, fallback: number, minimum: number): number {
+  const value = Number(process.env[name] ?? fallback);
+  return Number.isFinite(value) ? Math.max(minimum, value) : fallback;
 }
 
-// ============================================================
-// Health endpoint
-// ============================================================
-let healthy = true;
-const healthServer = createServer((req, res) => {
-  if (req.url === "/healthz") {
-    res.writeHead(healthy ? 200 : 503, { "content-type": "application/json" });
-    res.end(JSON.stringify({ ok: healthy, ts: new Date().toISOString() }));
-    return;
-  }
-  res.writeHead(404);
-  res.end();
+const WORKER_ID = `${process.env.HOSTNAME ?? "worker"}-${randomUUID().slice(0, 8)}`;
+const POLL_INTERVAL_MS = durationFromEnv("WORKER_POLL_INTERVAL_MS", 3_000, 500);
+const CONCURRENCY = Math.floor(
+  durationFromEnv("WORKER_CONCURRENCY", 2, 1)
+);
+const HEARTBEAT_MS = durationFromEnv("WORKER_HEARTBEAT_MS", 15_000, 5_000);
+const SWEEP_INTERVAL_MS = 60_000;
+const SHUTDOWN_DRAIN_MS = durationFromEnv(
+  "WORKER_SHUTDOWN_DRAIN_MS",
+  5_000,
+  0
+);
+
+let shuttingDown = false;
+// Set when the shared Chromium can no longer be (re)launched. The worker then
+// fails /healthz and exits nonzero so the platform (Railway) restarts it.
+let browserUnhealthy = false;
+const inflight = new Set<Promise<void>>();
+const activeScans = new Map<
+  string,
+  { ref: ClaimableScanRef; stopHeartbeat: () => void }
+>();
+const activePageJobs = new Map<string, ClaimablePageJobRef>();
+let healthServer: Server | null = null;
+let sweepInProgress = false;
+let preferPageJob = true;
+let resolveShutdownSignal: (() => void) | null = null;
+const shutdownSignal = new Promise<void>((resolve) => {
+  resolveShutdownSignal = resolve;
 });
-healthServer.listen(HEALTH_PORT, () =>
-  console.log(`[worker] health on :${HEALTH_PORT}/healthz`)
-);
 
-// ============================================================
-// Worker
-// ============================================================
-const connection = new IORedis(process.env.REDIS_URL!, getRedisConnectionOptions());
-
-const worker = new Worker<ScanJobPayload>(
-  scanQueueName,
-  async (job: Job<ScanJobPayload>) => processScanJob(job),
-  {
-    connection,
-    concurrency: CONCURRENCY,
-    lockDuration: SCAN_TIMEOUT_MS + 30_000,
-  }
-);
-
-worker.on("active", (job) => console.log("[worker] active", job.id));
-worker.on("completed", (job) => console.log("[worker] completed", job.id));
-worker.on("failed", (job, err) =>
-  console.error("[worker] failed", job?.id, err?.message)
-);
-worker.on("error", (err) => console.error("[worker] error", err));
-
-// ============================================================
-// Report PDF worker (optional, only when R2 / S3 is configured)
-// ============================================================
-let reportPdfWorker: Worker<ReportPdfJobPayload> | null = null;
-if (storageConfigured()) {
-  reportPdfWorker = new Worker<ReportPdfJobPayload>(
-    reportPdfQueueName,
-    async (job: Job<ReportPdfJobPayload>) => reportPdfHandler(job.data),
-    {
-      connection,
-      // PDFs are CPU-light vs. scans; safe to run more at once if a
-      // scan is in flight on the same instance.
-      concurrency: Math.max(1, CONCURRENCY * 2),
-      lockDuration: 90_000,
-    }
-  );
-  reportPdfWorker.on("completed", (job) =>
-    console.log("[worker.pdf] completed", job.id)
-  );
-  reportPdfWorker.on("failed", (job, err) =>
-    console.error("[worker.pdf] failed", job?.id, err?.message)
-  );
-  console.log("[worker] report-pdf queue active");
-} else {
-  console.log("[worker] storage not configured; report-pdf queue is paused");
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// ============================================================
-// Job handler
-// ============================================================
-async function processScanJob(job: Job<ScanJobPayload>) {
-  const { scanJobId } = job.data;
-  const startedAt = new Date();
+function scanKey(ref: ClaimableScanRef): string {
+  return `${ref.workspaceId}/${ref.scanId}`;
+}
 
-  // 1. Load the persisted scan_jobs row (source of truth for params).
-  const [row] = await db
-    .select()
-    .from(scanJobs)
-    .where(eq(scanJobs.id, scanJobId))
-    .limit(1);
+function pageJobKey(ref: ClaimablePageJobRef): string {
+  return `${ref.workspaceId}/${ref.scanId}/${ref.pageJobId}`;
+}
 
-  if (!row) {
-    throw new Error(`scan_job ${scanJobId} not found`);
-  }
+async function claimAndRun(ref: ClaimableScanRef): Promise<void> {
+  const job = await claimScanJob(ref.workspaceId, ref.scanId, WORKER_ID);
+  if (!job) return; // lost the race, or no longer claimable
 
-  if (!row.permissionConfirmed) {
-    // Safety net: API should have already enforced this.
-    await markFailed(scanJobId, "permission_not_confirmed");
-    return;
-  }
+  console.log(`[worker] claimed ${job.id} — ${job.scanType} ${job.baseUrl}`);
+  // Keep the heartbeat fresh during long pages so the job is not mistaken for
+  // orphaned (and so a peer worker does not steal it mid-scan).
+  const heartbeat = setInterval(() => {
+    void updateScanJob(job.workspaceId, job.id, {
+      processorHeartbeatAt: new Date(),
+    }).catch(() => undefined);
+  }, HEARTBEAT_MS);
+  const refForJob = { workspaceId: job.workspaceId, scanId: job.id };
+  const key = scanKey(refForJob);
+  activeScans.set(key, {
+    ref: refForJob,
+    stopHeartbeat: () => clearInterval(heartbeat),
+  });
 
-  const [privacy] = await db
-    .select({
-      visualEvidenceRetentionDays: privacySettings.visualEvidenceRetentionDays,
-    })
-    .from(privacySettings)
-    .where(eq(privacySettings.workspaceId, row.workspaceId))
-    .limit(1);
-
-  // 2. Mark running.
-  await db
-    .update(scanJobs)
-    .set({
-      status: "running",
-      progressStep: "starting_browser",
-      startedAt,
-      updatedAt: new Date(),
-    })
-    .where(eq(scanJobs.id, scanJobId));
-
-  // 3. Race the scan against the overall job timeout.
-  const scanPromise = runScanJob(
-    {
-      jobId: scanJobId,
-      url: row.baseUrl,
-      sourceUrls: row.sourceUrlsJson?.urls,
-      sitemapUrl: row.sourceUrlsJson?.sitemapUrl,
-      maxPages: row.maxPages,
-      scanType: row.scanType,
-      includeScreenshots: row.includeScreenshots,
-      storeScreenshots: row.storeScreenshots,
-      visualEvidenceEnabled: row.includeScreenshots,
-      visualEvidenceMaxScreenshots: row.visualEvidenceMaxScreenshots,
-      timeoutMs: SCAN_TIMEOUT_MS,
-    },
-    async (update) => {
-      await db
-        .update(scanJobs)
-        .set({
-          progressStep: update.step,
-          pagesScanned: update.pagesScanned,
-          pagesDiscovered: update.pagesDiscovered,
-          updatedAt: new Date(),
-        })
-        .where(eq(scanJobs.id, scanJobId));
-    }
-  );
-
-  const timeoutPromise = new Promise<never>((_, reject) =>
-    setTimeout(() => reject(new Error("scan_timeout")), SCAN_TIMEOUT_MS)
-  );
-
-  let outcome;
   try {
-    outcome = await Promise.race([scanPromise, timeoutPromise]);
-  } catch (err) {
-    const msg = (err as Error).message || "scan_failed";
-    console.error("[worker] scan error", scanJobId, msg);
-    // Timeouts and SSRF rejections are expected outcomes — only ship
-    // genuinely unexpected failures to Sentry.
-    if (msg !== "scan_timeout" && !msg.startsWith("Redirect rejected")) {
-      void captureException(err, {
-        scope: "worker",
-        scanJobId,
-        workspaceId: row.workspaceId,
-      });
-    }
-    await markFailed(scanJobId, msg);
+    await processScanJob(job);
+    console.log(`[worker] finished ${job.id}`);
+  } finally {
+    clearInterval(heartbeat);
+    activeScans.delete(key);
+  }
+}
+
+async function claimAndRunPage(ref: ClaimablePageJobRef): Promise<void> {
+  const job = await claimPageJob(
+    ref.workspaceId,
+    ref.scanId,
+    ref.pageJobId,
+    WORKER_ID
+  );
+  if (!job) return;
+  const scan = await getScanJob(ref.workspaceId, ref.scanId);
+  if (!scan) {
+    await requeuePageJobOnShutdown(
+      ref.workspaceId,
+      ref.scanId,
+      ref.pageJobId,
+      WORKER_ID
+    );
     return;
   }
 
-  // 4. Persist results.
-  await db
-    .update(scanJobs)
-    .set({ progressStep: "saving", updatedAt: new Date() })
-    .where(eq(scanJobs.id, scanJobId));
-
-  await persistOutcome(scanJobId, outcome.pages, {
-    workspaceId: row.workspaceId,
-    storeScreenshots: row.storeScreenshots,
-    retentionDays:
-      privacy?.visualEvidenceRetentionDays ?? visualEvidenceRetentionDays(),
-  });
-
-  const summary = calculateScanScore(outcome.pages);
-  await db
-    .insert(scanSummaries)
-    .values({
-      scanJobId,
-      overallScore: summary.overallScore,
-      grade: summary.grade,
-      riskLevel: summary.riskLevel,
-      issueCountsJson: summary.issueCounts,
-      categoryScoresJson: summary.categoryScores,
-      pageScoresJson: summary.pageScores,
-      wcagIssueCount: summary.wcagIssueCount,
-      bestPracticeIssueCount: summary.bestPracticeIssueCount,
-      manualReviewCount: summary.manualReviewCount,
-      scoringVersion: summary.scoringVersion,
-    })
-    .onConflictDoUpdate({
-      target: scanSummaries.scanJobId,
-      set: {
-        overallScore: summary.overallScore,
-        grade: summary.grade,
-        riskLevel: summary.riskLevel,
-        issueCountsJson: summary.issueCounts,
-        categoryScoresJson: summary.categoryScores,
-        pageScoresJson: summary.pageScores,
-        wcagIssueCount: summary.wcagIssueCount,
-        bestPracticeIssueCount: summary.bestPracticeIssueCount,
-        manualReviewCount: summary.manualReviewCount,
-        scoringVersion: summary.scoringVersion,
-      },
-    });
-
-  // 5. Mark complete + bump usage.
-  await db
-    .update(scanJobs)
-    .set({
-      status: "completed",
-      progressStep: "completed",
-      pagesScanned: outcome.pagesScanned,
-      pagesDiscovered: outcome.pagesDiscovered,
-      completedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(scanJobs.id, scanJobId));
-
-  await db
-    .update(usageLimits)
-    .set({
-      pagesScannedThisMonth: sql`${usageLimits.pagesScannedThisMonth} + ${outcome.pagesScanned}`,
-    })
-    .where(eq(usageLimits.workspaceId, row.workspaceId));
-
-  await db.insert(auditLogs).values({
-    userId: row.requestedBy,
-    workspaceId: row.workspaceId,
-    action: "scan.completed",
-    resourceType: "scan_job",
-    resourceId: scanJobId,
-    metadataJson: {
-      pagesScanned: outcome.pagesScanned,
-      durationMs: outcome.durationMs,
-    },
-  });
+  const key = pageJobKey(ref);
+  activePageJobs.set(key, ref);
+  console.log(`[worker] claimed page ${job.id} — ${job.url}`);
+  try {
+    await processPageJob(job, scan);
+  } finally {
+    activePageJobs.delete(key);
+  }
 }
 
-async function persistOutcome(
-  scanJobId: string,
-  pages: NormalizedPage[],
-  options: { workspaceId: string; storeScreenshots: boolean; retentionDays: number }
+async function runAggregationForScan(
+  scan: Awaited<ReturnType<typeof getScanJob>>
 ): Promise<void> {
-  // Postgres batching: one insert per page (we need its UUID for issue FKs).
-  for (const p of pages) {
-    const [pageRow] = await db
-      .insert(scanPages)
-      .values({
-        scanJobId,
-        url: p.url,
-        title: p.title,
-        statusCode: p.statusCode,
-        scannedAt: p.scannedAt,
-        screenshotPath: p.screenshotPath,
-        rawMetadataJson: p.rawMetadata,
-      })
-      .returning({ id: scanPages.id });
+  if (!scan) return;
+  const beat = () =>
+    updateScanJob(scan.workspaceId, scan.id, {
+      claimedBy: WORKER_ID,
+      processorHeartbeatAt: new Date(),
+    });
+  await beat();
+  const heartbeat = setInterval(() => void beat().catch(() => undefined), HEARTBEAT_MS);
+  try {
+    await aggregateScan(scan.id, {
+      workspaceId: scan.workspaceId,
+      userId: scan.requestedBy,
+    });
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
 
-    if (!p.issues.length) continue;
+let deletionInflight = false;
 
-    for (const i of p.issues) {
-      const [issueRow] = await db.insert(accessibilityIssues).values({
-        scanJobId,
-        scanPageId: pageRow.id,
-        ruleId: i.ruleId,
-        impact: i.impact,
-        severity: i.severity,
-        wcagTagsJson: i.wcagTags,
-        description: i.description,
-        help: i.help,
-        helpUrl: i.helpUrl,
-        targetJson: i.target,
-        contextsJson: i.contexts,
-        htmlSnippet: i.htmlSnippet,
-        failureSummary: i.failureSummary,
-        humanReviewRequired: i.humanReviewRequired,
-      }).returning({ id: accessibilityIssues.id });
+async function claimAndRunDeletion(jobId: string): Promise<void> {
+  const job = await claimDataDeletionJob(jobId, WORKER_ID);
+  if (!job) return; // lost the race, or no longer claimable
 
-      if (i.visualEvidence) {
-        await persistVisualEvidenceForIssue({
-          workspaceId: options.workspaceId,
-          scanJobId,
-          scanPageId: pageRow.id,
-          issueId: issueRow.id,
-          evidence: i.visualEvidence,
-          storeScreenshots: options.storeScreenshots,
-          retentionDays: options.retentionDays,
+  console.log(`[worker] claimed deletion job ${job.id} — workspace ${job.workspaceId}`);
+  const heartbeat = setInterval(() => {
+    void touchDataDeletionJob(job.id).catch(() => undefined);
+  }, HEARTBEAT_MS);
+
+  try {
+    const finished = await runDataDeletionJob(job);
+    console.log(
+      `[worker] finished deletion job ${job.id}`,
+      finished.deletedCounts ?? {}
+    );
+  } finally {
+    clearInterval(heartbeat);
+  }
+}
+
+async function tick(): Promise<void> {
+  // Privacy deletion jobs are rare and quick; run at most one alongside scans.
+  if (!deletionInflight && !shuttingDown) {
+    const deletionJobs = await listClaimableDataDeletionJobs(1);
+    if (deletionJobs[0] && !shuttingDown) {
+      deletionInflight = true;
+      const jobId = deletionJobs[0].id;
+      const tracked: Promise<void> = claimAndRunDeletion(jobId)
+        .catch((err) => console.error(`[worker] deletion job ${jobId} error`, err))
+        .finally(() => {
+          deletionInflight = false;
+          inflight.delete(tracked);
         });
+      inflight.add(tracked);
+    }
+  }
+
+  const capacity = CONCURRENCY - inflight.size;
+  if (capacity <= 0) return;
+
+  const [scanRefs, pageRefs] = await Promise.all([
+    listClaimableScanRefs(1),
+    listClaimablePageJobRefs(capacity),
+  ]);
+  const firstScan = scanRefs[0];
+
+  if (capacity === 1) {
+    const runPage = pageRefs[0] && (preferPageJob || !firstScan);
+    preferPageJob = !preferPageJob;
+    if (runPage) {
+      const ref = pageRefs[0];
+      const tracked = claimAndRunPage(ref)
+        .catch((err) => console.error(`[worker] page job ${ref.pageJobId} error`, err))
+        .finally(() => inflight.delete(tracked));
+      inflight.add(tracked);
+    } else if (firstScan) {
+      const tracked = claimAndRun(firstScan)
+        .catch((err) => console.error(`[worker] job ${firstScan.scanId} error`, err))
+        .finally(() => inflight.delete(tracked));
+      inflight.add(tracked);
+    }
+    return;
+  }
+
+  if (firstScan && !shuttingDown) {
+    const tracked = claimAndRun(firstScan)
+      .catch((err) => console.error(`[worker] job ${firstScan.scanId} error`, err))
+      .finally(() => inflight.delete(tracked));
+    inflight.add(tracked);
+  }
+
+  for (const ref of pageRefs) {
+    if (shuttingDown || inflight.size >= CONCURRENCY) break;
+    const tracked = claimAndRunPage(ref)
+      .catch((err) =>
+        console.error(`[worker] page job ${ref.pageJobId} error`, err)
+      )
+      .finally(() => inflight.delete(tracked));
+    inflight.add(tracked);
+  }
+}
+
+async function runSweep(): Promise<void> {
+  if (sweepInProgress || shuttingDown) return;
+  sweepInProgress = true;
+  try {
+    const [scanDocs, pageDocs] = await Promise.all([
+      listSweepableScans(),
+      listSweepablePageJobs(),
+    ]);
+    const at = new Date();
+    const scanActions = sweepScans(at, scanDocs);
+    const pageActions = sweepPageJobs(at, pageDocs);
+    const [scanResults, pageResults] = await Promise.all([
+      Promise.allSettled(scanActions.map(applySweepAction)),
+      Promise.allSettled(pageActions.map(applyPageJobSweepAction)),
+    ]);
+    let applied = 0;
+    for (const result of scanResults) {
+      if (result.status === "fulfilled") {
+        if (result.value) applied += 1;
+      } else {
+        console.error("[worker] sweeper action failed", result.reason);
       }
     }
-  }
-}
+    const aggregationScans = new Set<string>();
+    for (let index = 0; index < pageResults.length; index += 1) {
+      const result = pageResults[index];
+      if (result.status === "fulfilled") {
+        if (result.value.applied) applied += 1;
+        if (result.value.aggregationWon) {
+          const action = pageActions[index];
+          aggregationScans.add(`${action.workspaceId}/${action.scanId}`);
+        }
+      } else {
+        console.error("[worker] page sweeper action failed", result.reason);
+      }
+    }
+    if (applied > 0) {
+      console.log(
+        `[worker] sweeper applied ${applied}/${scanActions.length + pageActions.length} action(s)`
+      );
+    }
 
-async function markFailed(scanJobId: string, errorMessage: string) {
-  await db
-    .update(scanJobs)
-    .set({
-      status: "failed",
-      progressStep: "failed",
-      errorMessage,
-      completedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(scanJobs.id, scanJobId));
-}
+    for (const key of aggregationScans) {
+      const [workspaceId, scanId] = key.split("/");
+      await runAggregationForScan(await getScanJob(workspaceId, scanId));
+    }
 
-// ============================================================
-// Graceful shutdown
-// ============================================================
-async function shutdown(signal: NodeJS.Signals) {
-  console.log("[worker] shutdown signal", signal);
-  healthy = false;
-  try {
-    await worker.close();
-    if (reportPdfWorker) await reportPdfWorker.close();
-    await connection.quit();
-    healthServer.close();
+    const candidates = await listAggregationCandidates();
+    for (const scan of candidates) {
+      if (await claimAggregation(scan.workspaceId, scan.id, WORKER_ID)) {
+        await runAggregationForScan(scan);
+      }
+    }
   } catch (err) {
-    console.error("[worker] shutdown error", err);
+    console.error("[worker] sweep error", err);
   } finally {
-    process.exit(0);
+    sweepInProgress = false;
   }
 }
 
-process.on("SIGTERM", shutdown);
-process.on("SIGINT", shutdown);
-process.on("uncaughtException", (err) => {
-  console.error("[worker] uncaughtException", err);
-});
-process.on("unhandledRejection", (err) => {
-  console.error("[worker] unhandledRejection", err);
-});
+async function waitForInflight(timeoutMs: number): Promise<boolean> {
+  if (inflight.size === 0) return true;
+
+  let timer: NodeJS.Timeout | undefined;
+  const drained = Promise.allSettled([...inflight]).then(() => true);
+  const timedOut = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  const result = await Promise.race([drained, timedOut]);
+  if (timer) clearTimeout(timer);
+  return result;
+}
+
+async function requeueActiveScans(): Promise<void> {
+  let pending = [...activeScans.values()];
+  for (const active of pending) active.stopHeartbeat();
+
+  for (let attempt = 1; attempt <= 3 && pending.length > 0; attempt += 1) {
+    const results = await Promise.allSettled(
+      pending.map(async (active) =>
+        requeueScanOnShutdown(
+          active.ref.workspaceId,
+          active.ref.scanId,
+          WORKER_ID
+        )
+      )
+    );
+    const retry: typeof pending = [];
+    let requeued = 0;
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      if (result.status === "rejected") {
+        retry.push(pending[index]);
+        console.error("[worker] shutdown requeue failed", result.reason);
+      } else if (result.value) {
+        requeued += 1;
+      }
+    }
+    if (requeued > 0) {
+      console.log(`[worker] requeued ${requeued} unfinished scan(s) on shutdown`);
+    }
+    pending = retry;
+    if (pending.length > 0 && attempt < 3) await sleep(250 * attempt);
+  }
+
+  if (pending.length > 0) {
+    throw new Error(`failed_to_requeue_${pending.length}_scan(s)_on_shutdown`);
+  }
+}
+
+async function requeueActivePageJobs(): Promise<void> {
+  let pending = [...activePageJobs.values()];
+  for (let attempt = 1; attempt <= 3 && pending.length > 0; attempt += 1) {
+    const results = await Promise.allSettled(
+      pending.map((ref) =>
+        requeuePageJobOnShutdown(
+          ref.workspaceId,
+          ref.scanId,
+          ref.pageJobId,
+          WORKER_ID
+        )
+      )
+    );
+    const retry: typeof pending = [];
+    let requeued = 0;
+    for (let index = 0; index < results.length; index += 1) {
+      const result = results[index];
+      if (result.status === "rejected") retry.push(pending[index]);
+      else if (result.value) requeued += 1;
+    }
+    if (requeued > 0) {
+      console.log(`[worker] requeued ${requeued} unfinished page job(s) on shutdown`);
+    }
+    pending = retry;
+    if (pending.length > 0 && attempt < 3) await sleep(250 * attempt);
+  }
+  if (pending.length > 0) {
+    throw new Error(`failed_to_requeue_${pending.length}_page_job(s)_on_shutdown`);
+  }
+}
+
+function startHealthServer(): void {
+  const portRaw = process.env.WORKER_HEALTH_PORT ?? process.env.PORT;
+  if (!portRaw) return;
+  const port = Number(portRaw);
+  if (!Number.isInteger(port) || port <= 0) {
+    console.warn(`[worker] invalid health port: ${portRaw}`);
+    return;
+  }
+
+  healthServer = createServer((req, res) => {
+    if (req.url !== "/healthz") {
+      res.writeHead(404, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "not_found" }));
+      return;
+    }
+
+    // A worker whose Chromium can no longer be relaunched is unhealthy: it can
+    // still serve pages a static fallback but its core engine is dead, so report
+    // 503 and let the platform recycle the container.
+    const browser = getBrowserManager().stats();
+    const ok = !shuttingDown && !browserUnhealthy;
+    res.writeHead(ok ? 200 : 503, {
+      "cache-control": "no-store",
+      "content-type": "application/json",
+    });
+    res.end(
+      JSON.stringify({
+        ok,
+        service: "accessops-scan-worker",
+        workerId: WORKER_ID,
+        inflight: inflight.size,
+        shuttingDown,
+        browserHealthy: !browserUnhealthy,
+        browser,
+        ts: new Date().toISOString(),
+      })
+    );
+  });
+
+  healthServer.listen(port, () => {
+    console.log(`[worker] health listening on :${port}/healthz`);
+  });
+}
+
+async function main(): Promise<void> {
+  if (!firebaseAdminConfigured()) {
+    console.error(
+      "[worker] Firebase Admin is not configured. Set FIREBASE_PROJECT_ID, FIREBASE_CLIENT_EMAIL and FIREBASE_PRIVATE_KEY."
+    );
+    process.exit(1);
+  }
+
+  console.log(
+    `[worker] starting ${WORKER_ID} — concurrency=${CONCURRENCY} poll=${POLL_INTERVAL_MS}ms`
+  );
+  startHealthServer();
+
+  // One shared Chromium for the whole process (Phase 4). If it can no longer be
+  // relaunched after a crash, fail fast: flag unhealthy so /healthz 503s and
+  // start a clean shutdown that exits nonzero for the platform to restart us.
+  getBrowserManager().onUnhealthy = (err) => {
+    if (browserUnhealthy) return;
+    browserUnhealthy = true;
+    process.exitCode = 1;
+    console.error(`[worker] browser unrecoverable — exiting for restart: ${err.message}`);
+    if (!shuttingDown) {
+      shuttingDown = true;
+      resolveShutdownSignal?.();
+    }
+  };
+
+  // Worker-level liveness for the web app's deep health check
+  // (GET /api/healthz?deep=1), independent of any claimed job.
+  const beat = () =>
+    recordWorkerHeartbeat({
+      workerId: WORKER_ID,
+      inflight: inflight.size,
+      shuttingDown,
+    }).catch((err) =>
+      console.warn("[worker] heartbeat write failed", (err as Error).message)
+    );
+  await beat();
+  const livenessInterval = setInterval(() => void beat(), HEARTBEAT_MS);
+  void runSweep();
+  const sweepInterval = setInterval(() => void runSweep(), SWEEP_INTERVAL_MS);
+
+  for (const signal of ["SIGTERM", "SIGINT"] as const) {
+    process.on(signal, () => {
+      if (shuttingDown) return;
+      shuttingDown = true;
+      resolveShutdownSignal?.();
+      console.log(
+        `[worker] ${signal} received — draining ${inflight.size} in-flight job(s)...`
+      );
+    });
+  }
+
+  while (!shuttingDown) {
+    try {
+      await tick();
+    } catch (err) {
+      console.error("[worker] poll error", err);
+    }
+    if (shuttingDown) break;
+    await Promise.race([sleep(POLL_INTERVAL_MS), shutdownSignal]);
+  }
+
+  clearInterval(sweepInterval);
+  const drained = await waitForInflight(SHUTDOWN_DRAIN_MS);
+  if (!drained) {
+    try {
+      await Promise.all([requeueActiveScans(), requeueActivePageJobs()]);
+    } catch (err) {
+      console.error("[worker] could not hand off all scans before shutdown", err);
+      process.exitCode = 1;
+    }
+  }
+  // Tear down the shared Chromium once in-flight jobs have drained / handed off.
+  await getBrowserManager().close().catch(() => undefined);
+  clearInterval(livenessInterval);
+  await beat(); // record the drained, shutting-down state
+  await new Promise<void>((resolve) => {
+    if (!healthServer) {
+      resolve();
+      return;
+    }
+    healthServer.close(() => resolve());
+  });
+  console.log("[worker] shutdown complete.");
+  process.exit(Number(process.exitCode ?? 0));
+}
+
+void main();

@@ -1,4 +1,4 @@
-# maitrico AccessOps AI — Microcopy library
+# maitrico Percevia AI — Microcopy library
 
 All canonical compliance / disclaimer strings live in
 [`src/lib/microcopy/compliance.ts`](../src/lib/microcopy/compliance.ts) and are exported as

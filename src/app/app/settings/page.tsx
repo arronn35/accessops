@@ -1,7 +1,7 @@
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { SettingsClient } from "./settings-client";
 
-export const metadata = { title: "Settings — AccessOps AI" };
+export const metadata = { title: "Settings — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function SettingsPage() {

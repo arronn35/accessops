@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Input, Label, Select, FieldHint } from "@/components/ui/Input";
@@ -130,9 +131,9 @@ export function SettingsClient({
                 <FieldHint>
                   These defaults pre-fill new scans. Individual scans can override them.
                   Privacy and AI-processing toggles live in the{" "}
-                  <a href="/app/compliance" className="underline font-medium">
+                  <Link href="/app/compliance" className="underline font-medium">
                     Privacy &amp; Compliance Center
-                  </a>
+                  </Link>
                   .
                 </FieldHint>
                 {canEditWorkspace && (
@@ -154,7 +155,7 @@ export function SettingsClient({
           <Card>
             <CardHeader>
               <CardTitle>Notifications</CardTitle>
-              <CardDescription>Choose when AccessOps AI emails you.</CardDescription>
+              <CardDescription>Choose when Percevia AI emails you.</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4 divide-y divide-line">
               <div className="pt-4 first:pt-0">

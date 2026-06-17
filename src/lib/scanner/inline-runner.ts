@@ -1,83 +1,141 @@
-import { eq } from "drizzle-orm";
-import { db, scanJobs } from "@/lib/db";
 import { captureException } from "@/lib/observability";
 import { completeScanJob, markScanFailed, persistScanOutcome } from "./persistence";
 import { runStaticScanJob } from "./static-runner";
-import { visualEvidenceRetentionDays } from "@/lib/config";
+import { findScanJob, updateScanJob } from "@/lib/data/firestore";
+import type { ProgressUpdate, ScanInput, ScanOutcome } from "./types";
 
 const INLINE_SCAN_TIMEOUT_MS = Math.max(
   10_000,
   Number(process.env.INLINE_SCAN_TIMEOUT_MS ?? 25_000)
 );
 
+/**
+ * Static HTML scan processor: fetch-only, no browser, no screenshots. Queue
+ * consumers call this path through the internal Vercel endpoint.
+ */
 export function inlineScanFallbackEnabled(): boolean {
-  return process.env.INLINE_SCAN_FALLBACK_ENABLED === "true";
+  return true;
 }
 
-export async function processScanInline(scanJobId: string): Promise<void> {
-  if (!inlineScanFallbackEnabled()) {
+/**
+ * Some queue failures mean the scanner engine itself is unavailable rather
+ * than the scan request being invalid. Keep a small retry-friendly fallback
+ * classification for older queued jobs and transient transport errors.
+ */
+export function inlineScanFallbackAllowedForQueueError(err: unknown): boolean {
+  if (inlineScanFallbackEnabled()) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return [
+    "max requests limit exceeded",
+    "queue configuration is required",
+    "ECONNREFUSED",
+    "ETIMEDOUT",
+    "Connection is closed",
+    "Connection is closed.",
+    "Reached the max retries per request limit",
+  ].some((needle) => message.includes(needle));
+}
+
+export async function processScanInline(
+  scanJobId: string,
+  options: { allowQueueFailureFallback?: boolean } = {}
+): Promise<void> {
+  if (!options.allowQueueFailureFallback && !inlineScanFallbackEnabled()) {
     throw new Error("inline_scan_fallback_disabled");
   }
 
-  const [row] = await db
-    .select()
-    .from(scanJobs)
-    .where(eq(scanJobs.id, scanJobId))
-    .limit(1);
+  const row = await findScanJob(scanJobId);
 
   if (!row) throw new Error(`scan_job ${scanJobId} not found`);
+  if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") {
+    return;
+  }
+  if (
+    row.status === "running" &&
+    row.startedAt &&
+    Date.now() - row.startedAt.getTime() < INLINE_SCAN_TIMEOUT_MS + 30_000
+  ) {
+    return;
+  }
   if (!row.permissionConfirmed) {
-    await markScanFailed(scanJobId, "permission_not_confirmed");
+    await markScanFailed(row.workspaceId, scanJobId, "permission_not_confirmed");
     return;
   }
 
-  await db
-    .update(scanJobs)
-    .set({
-      status: "running",
-      progressStep: "starting_browser",
-      startedAt: new Date(),
-      updatedAt: new Date(),
-    })
-    .where(eq(scanJobs.id, scanJobId));
+  await updateScanJob(row.workspaceId, scanJobId, {
+    status: "running",
+    progressStep: row.storeScreenshots ? "starting_browser" : "crawling",
+    startedAt: new Date(),
+    processorStartedAt: new Date(),
+    processorHeartbeatAt: new Date(),
+    processorError: null,
+    errorMessage:
+      row.includeScreenshots && !row.storeScreenshots
+        ? "Screenshot capture was requested, but workspace screenshot storage consent is disabled."
+        : row.errorMessage ?? null,
+  });
 
   try {
-    const outcome = await runStaticScanJob(
-      {
-        jobId: scanJobId,
-        url: row.baseUrl,
-        sourceUrls: row.sourceUrlsJson?.urls,
-        sitemapUrl: row.sourceUrlsJson?.sitemapUrl,
-        maxPages: row.maxPages,
-        scanType: row.scanType,
-        includeScreenshots: row.includeScreenshots,
-        storeScreenshots: row.storeScreenshots,
-        visualEvidenceEnabled: false,
-        visualEvidenceMaxScreenshots: 0,
-        timeoutMs: INLINE_SCAN_TIMEOUT_MS,
-      },
-      async (update) => {
-        await db
-          .update(scanJobs)
-          .set({
-            progressStep: update.step,
-            pagesScanned: update.pagesScanned,
-            pagesDiscovered: update.pagesDiscovered,
-            updatedAt: new Date(),
-          })
-          .where(eq(scanJobs.id, scanJobId));
-      }
-    );
+    const scanInput: ScanInput = {
+      jobId: scanJobId,
+      url: row.baseUrl,
+      sourceUrls: row.sourceUrlsJson?.urls,
+      sitemapUrl: row.sourceUrlsJson?.sitemapUrl,
+      maxPages: row.maxPages,
+      scanType: row.scanType,
+      includeScreenshots: row.includeScreenshots,
+      storeScreenshots: row.storeScreenshots,
+      visualEvidenceEnabled: row.storeScreenshots,
+      visualEvidenceMaxScreenshots: row.visualEvidenceMaxScreenshots,
+      timeoutMs: INLINE_SCAN_TIMEOUT_MS,
+    };
+    const onProgress = async (update: ProgressUpdate) => {
+      await updateScanJob(row.workspaceId, scanJobId, {
+        progressStep: update.step,
+        pagesScanned: update.pagesScanned,
+        pagesDiscovered: update.pagesDiscovered,
+        processorHeartbeatAt: new Date(),
+      });
+    };
 
-    await db
-      .update(scanJobs)
-      .set({ progressStep: "saving", updatedAt: new Date() })
-      .where(eq(scanJobs.id, scanJobId));
+    const staticInput: ScanInput = {
+      ...scanInput,
+      includeScreenshots: false,
+      storeScreenshots: false,
+      visualEvidenceEnabled: false,
+      visualEvidenceMaxScreenshots: 0,
+    };
+    let outcome: ScanOutcome = await runStaticScanJob(staticInput, onProgress);
+    if (row.storeScreenshots) {
+      await updateScanJob(row.workspaceId, scanJobId, {
+        progressStep: "browser_fallback",
+        processorError: "serverless_static_only",
+        errorMessage:
+          "Screenshot capture requires a dedicated browser worker. Completed a static accessibility scan instead.",
+      });
+      outcome = {
+        ...outcome,
+        pages: outcome.pages.map((page) => ({
+          ...page,
+          rawMetadata: {
+            ...(page.rawMetadata ?? {}),
+            browserScanSkipped: true,
+            browserSkipReason: "serverless_static_only",
+            screenshotCaptureStatus: "serverless_static_fallback",
+          },
+        })),
+      };
+    }
+
+    await updateScanJob(row.workspaceId, scanJobId, { progressStep: "saving" });
 
     await persistScanOutcome(scanJobId, outcome.pages, {
       workspaceId: row.workspaceId,
-      storeScreenshots: row.storeScreenshots,
-      retentionDays: visualEvidenceRetentionDays(),
+      storeScreenshots: false,
+    });
+    await updateScanJob(row.workspaceId, scanJobId, {
+      processorHeartbeatAt: new Date(),
+      processorError: null,
     });
     await completeScanJob(scanJobId, outcome, {
       userId: row.requestedBy,
@@ -92,7 +150,11 @@ export async function processScanInline(scanJobId: string): Promise<void> {
         workspaceId: row.workspaceId,
       });
     }
-    await markScanFailed(scanJobId, msg);
+    await markScanFailed(row.workspaceId, scanJobId, msg);
+    await updateScanJob(row.workspaceId, scanJobId, {
+      processorHeartbeatAt: new Date(),
+      processorError: msg,
+    });
     throw err;
   }
 }

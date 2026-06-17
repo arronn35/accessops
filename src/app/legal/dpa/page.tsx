@@ -1,7 +1,7 @@
 export const metadata = {
-  title: "Data Processing Addendum — AccessOps AI",
+  title: "Data Processing Addendum — Percevia AI",
   description:
-    "Default Data Processing Addendum for maitrico AccessOps AI customers.",
+    "Default Data Processing Addendum for maitrico Percevia AI customers.",
 };
 
 const EFFECTIVE = "2026-05-23";
@@ -18,22 +18,21 @@ export default function DpaPage() {
         <a href="/legal/terms"> Terms of Service</a> between you
         (&ldquo;Customer&rdquo;) and maitrico (&ldquo;Processor&rdquo;). It applies
         whenever Processor processes personal data on Customer&apos;s behalf in
-        connection with the AccessOps AI Service.
+        connection with the Percevia AI Service.
       </p>
       <p>
         By using a paid plan that involves the processing of personal data, you
         accept this DPA. Enterprise customers may sign a counter-signed copy by
-        emailing <a href="mailto:legal@maitrico.com">legal@maitrico.com</a>.
+        emailing <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a>.
       </p>
 
       <h2>1. Definitions</h2>
       <p>
-        &ldquo;Personal Data&rdquo;, &ldquo;Controller&rdquo;,
-        &ldquo;Processor&rdquo;, &ldquo;Sub-processor&rdquo;,
-        &ldquo;Processing&rdquo;, and &ldquo;Data Subject&rdquo; have the
-        meanings given in the EU General Data Protection Regulation
-        (Regulation 2016/679, &ldquo;GDPR&rdquo;) and the UK GDPR where
-        applicable.
+        &ldquo;Personal Data&rdquo; means information that identifies or can
+        reasonably be linked to an individual. &ldquo;Customer Data&rdquo; means
+        data submitted to the Service by Customer or its authorized users.
+        &ldquo;Subprocessor&rdquo; means a vendor maitrico uses to operate the
+        Service.
       </p>
 
       <h2>2. Roles</h2>
@@ -117,12 +116,10 @@ export default function DpaPage() {
 
       <h2>8. International transfers</h2>
       <p>
-        EU/UK personal data is hosted in the EU by default. Where processing
-        involves transfer to a non-adequate country (for example, an AI
-        provider in the United States), Processor relies on the European
-        Commission&apos;s Standard Contractual Clauses and the UK
-        International Data Transfer Addendum, supplemented by encryption and
-        access controls.
+        Customer Data is processed in the regions used by maitrico and its
+        subprocessors. Current providers are listed on the Subprocessors page.
+        maitrico uses contractual, technical, and organizational safeguards
+        designed to protect Customer Data during vendor processing.
       </p>
 
       <h2>9. Data subject requests</h2>
@@ -130,7 +127,7 @@ export default function DpaPage() {
         Processor will assist Customer in responding to data subject requests
         by providing the tools available in the Privacy &amp; Compliance Center
         (export, deletion, AI toggle) and by responding to escalations sent to{" "}
-        <a href="mailto:privacy@maitrico.com">privacy@maitrico.com</a> within a
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a> within a
         reasonable time, generally five (5) business days.
       </p>
 
@@ -172,12 +169,8 @@ export default function DpaPage() {
 
       <h2>Contact</h2>
       <p>
-        <a href="mailto:privacy@maitrico.com">privacy@maitrico.com</a> for data
-        protection,{" "}
-        <a href="mailto:security@maitrico.com">security@maitrico.com</a> for
-        security incidents,{" "}
-        <a href="mailto:legal@maitrico.com">legal@maitrico.com</a> for contract
-        questions.
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a> for
+        data protection, security incidents, and contract questions.
       </p>
     </>
   );

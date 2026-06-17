@@ -6,7 +6,7 @@ import type {
   ScanScoreSummary,
 } from "./types";
 
-export const SCORING_VERSION = "accessops-score-v1";
+export const SCORING_VERSION = "percevia-score-v1";
 
 const IMPACT_WEIGHTS: Record<Impact | "review", number> = {
   critical: 10,

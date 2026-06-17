@@ -1,11 +1,9 @@
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { scanJobs } from "@/lib/db/schema";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { getScanJob } from "@/lib/data/firestore";
 import { ProgressClient } from "./progress-client";
 
-export const metadata = { title: "Scan running — AccessOps AI" };
+export const metadata = { title: "Scan running — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function ScanProgressPage({
@@ -16,11 +14,7 @@ export default async function ScanProgressPage({
   const { id } = await params;
   const ctx = await getCurrentWorkspaceOrRedirect();
 
-  const [job] = await db
-    .select()
-    .from(scanJobs)
-    .where(and(eq(scanJobs.id, id), eq(scanJobs.workspaceId, ctx.workspace.id)))
-    .limit(1);
+  const job = await getScanJob(ctx.workspace.id, id);
 
   if (!job) {
     redirect("/app");

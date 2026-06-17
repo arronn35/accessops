@@ -1,9 +1,9 @@
 export const metadata = {
-  title: "Subprocessors — AccessOps AI",
-  description: "Current list of subprocessors used by maitrico AccessOps AI.",
+  title: "Subprocessors — Percevia AI",
+  description: "Current list of subprocessors used by maitrico Percevia AI.",
 };
 
-const EFFECTIVE = "2026-05-23";
+const EFFECTIVE = "2026-06-01";
 
 interface Row {
   vendor: string;
@@ -20,58 +20,22 @@ const ROWS: Row[] = [
     region: "Global edge, EU/US compute",
   },
   {
+    vendor: "Google Firebase (US)",
+    purpose: "Authentication and Firestore database",
+    data: "Accounts, workspace data, scans, issues, reports, privacy settings, audit logs",
+    region: "Configured Firebase project region",
+  },
+  {
     vendor: "Railway Corp. (US)",
-    purpose: "Scan worker hosting (Playwright + axe-core)",
-    data: "Transient HTML for the duration of a scan; not persisted unless screenshots are enabled",
-    region: "EU/US",
-  },
-  {
-    vendor: "Neon (US)",
-    purpose: "Postgres database",
-    data: "All workspace data (accounts, scans, issues, tasks, reports, privacy settings, audit logs, billing linkage)",
-    region: "EU (Frankfurt) by default",
-  },
-  {
-    vendor: "Upstash Inc. (US)",
-    purpose: "Redis (BullMQ queue + rate limiter)",
-    data: "Job IDs and rate-limit keys; no scan content",
-    region: "EU/US",
-  },
-  {
-    vendor: "Resend Inc. (US)",
-    purpose: "Transactional email (magic-link auth, invitations)",
-    data: "Recipient email and message body",
-    region: "EU/US",
-  },
-  {
-    vendor: "Anthropic, PBC (US)",
-    purpose: "AI explanations (only when enabled per workspace)",
-    data: "Issue context (description, snippet, selectors). No account email or screenshots.",
+    purpose: "Hosts the browser scan worker (Playwright + axe-core)",
+    data: "Scanned page content processed transiently in memory; results written to Firestore. No page HTML retained on the worker.",
     region: "US",
   },
   {
-    vendor: "Stripe, Inc. (US/IE)",
-    purpose: "Payments, subscription billing, customer portal",
-    data: "Email, billing address, tax ID, card token (handled by Stripe)",
-    region: "EU/US",
-  },
-  {
-    vendor: "Cloudflare R2 (US)",
-    purpose: "Object storage (optional — only when PDF/screenshot storage is enabled)",
-    data: "Rendered PDF reports, optional screenshots",
-    region: "Configurable",
-  },
-  {
-    vendor: "Sentry (US)",
-    purpose: "Optional error monitoring",
-    data: "Stack traces, request metadata; no page HTML",
-    region: "EU/US",
-  },
-  {
-    vendor: "PostHog (US)",
-    purpose: "Optional product analytics",
-    data: "Anonymous event data; off by default per workspace",
-    region: "EU/US",
+    vendor: "OpenAI, L.L.C. (US)",
+    purpose: "GPT explanations and remediation suggestions (only when enabled per workspace)",
+    data: "Issue context (description, snippet, selectors). No account email or screenshots.",
+    region: "US",
   },
 ];
 
@@ -117,7 +81,7 @@ export default function SubprocessorsPage() {
       <p>
         We email workspace owners at least 14 days before any addition or
         replacement. To object, reply to that email or contact{" "}
-        <a href="mailto:privacy@maitrico.com">privacy@maitrico.com</a>.
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a>.
       </p>
     </>
   );

@@ -11,6 +11,11 @@ import { Checkbox } from "@/components/ui/Checkbox";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import {
+  estimateScanPlan,
+  ANALYSIS_PASSES_PER_VIEWPORT,
+} from "@/lib/scanner/estimate";
+import { SCAN_INTERACTIVE_STATES } from "@/lib/scanner/types";
 import { cn } from "@/lib/utils";
 
 const SCAN_TYPES = [
@@ -42,6 +47,23 @@ export default function NewScanPage() {
     permission &&
     !submitting &&
     (type !== "manual" || parsedManualUrls.length > 0);
+
+  // Estimated scope shown before the user commits, so the cost of a
+  // multi-page + screenshots run is never a surprise. Derived from the SAME
+  // shared plan the worker executes (no 18-vs-33 drift).
+  const plan = estimateScanPlan({
+    scanType: type,
+    maxPages,
+    manualUrlCount: parsedManualUrls.length,
+    includeScreenshots: screenshots,
+  });
+  const {
+    pages: estimatedPages,
+    viewports: VIEWPORT_COUNT,
+    passesPerPage,
+    totalPasses,
+    estLabel,
+  } = plan;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -260,6 +282,27 @@ export default function NewScanPage() {
           </CardContent>
         </Card>
 
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <ListChecks className="size-4 text-ink-500" aria-hidden /> Estimated scope
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <ScopeStat label="Pages" value={`${estimatedPages}`} />
+              <ScopeStat label="Viewports" value={`${VIEWPORT_COUNT}`} hint="Desktop · Tablet · Mobile" />
+              <ScopeStat label="Analysis passes" value={`${totalPasses}`} hint={`${passesPerPage}/page`} />
+              <ScopeStat label="Est. time" value={`~${estLabel}`} hint={screenshots ? "incl. screenshots" : undefined} />
+            </div>
+            <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+              Each page is analysed across {VIEWPORT_COUNT} viewports and {SCAN_INTERACTIVE_STATES.length} interactive
+              states ({ANALYSIS_PASSES_PER_VIEWPORT} passes per viewport). Page count may be lower if the crawler
+              finds fewer same-domain links. Time is a rough estimate, not a guarantee.
+            </p>
+          </CardContent>
+        </Card>
+
         <NoGuaranteeBanner variant="compact" />
 
         {error && (
@@ -294,6 +337,24 @@ export default function NewScanPage() {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+function ScopeStat({
+  label,
+  value,
+  hint,
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+}) {
+  return (
+    <div className="rounded-md ring-1 ring-line bg-canvas-2 p-3">
+      <p className="text-lg font-semibold text-ink-900 tabular-nums leading-none">{value}</p>
+      <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mt-1.5">{label}</p>
+      {hint && <p className="text-[11px] text-ink-500 mt-0.5">{hint}</p>}
     </div>
   );
 }

@@ -1,0 +1,37 @@
+rules_version = '2';
+
+// Percevia Firestore security rules.
+//
+// The app reads and writes virtually everything through the Firebase Admin
+// SDK on the server (Next.js route handlers + the scan worker), which bypasses
+// these rules entirely. The ONLY client-side read path is the realtime scan
+// progress page, which subscribes (onSnapshot) directly to a scan document.
+//
+// Therefore: deny everything by default, and grant exactly one narrow read —
+// a workspace member reading scan documents in their own workspace. Nothing
+// else is loosened.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // True when the signed-in user is an ACTIVE member of the workspace.
+    // Membership docs are keyed by uid at workspaces/{ws}/members/{uid}.
+    function isActiveWorkspaceMember(workspaceId) {
+      return request.auth != null
+        && exists(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid))
+        && get(/databases/$(database)/documents/workspaces/$(workspaceId)/members/$(request.auth.uid)).data.status == 'active';
+    }
+
+    // Realtime scan progress: members may READ their workspace's scans from the
+    // client. Writes remain server-only (Admin SDK), so no write rule is granted.
+    match /workspaces/{workspaceId}/scans/{scanId} {
+      allow read: if isActiveWorkspaceMember(workspaceId);
+    }
+
+    // Monitors (workspaces/{ws}/monitors/{id}) are intentionally NOT granted a
+    // client rule: the app only touches them through the Admin SDK (CRUD API +
+    // scheduler), so they stay denied here. Add a read rule only if a realtime
+    // client view of monitors is ever introduced.
+
+    // Everything else is denied to clients (no catch-all allow).
+  }
+}

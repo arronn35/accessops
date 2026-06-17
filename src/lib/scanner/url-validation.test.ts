@@ -111,6 +111,32 @@ describe("validateUrl (no DNS)", () => {
     });
   });
 
+  it("rejects decimal-encoded loopback (2130706433 = 127.0.0.1)", async () => {
+    await expect(validateUrl("http://2130706433/")).rejects.toMatchObject({
+      code: "private_ip",
+    });
+  });
+
+  it("rejects hex-encoded loopback (0x7f000001)", async () => {
+    await expect(validateUrl("http://0x7f000001/")).rejects.toMatchObject({
+      code: "private_ip",
+    });
+  });
+
+  it("rejects short-form loopback (127.1)", async () => {
+    await expect(validateUrl("http://127.1/")).rejects.toMatchObject({
+      code: "private_ip",
+    });
+  });
+
+  it("rejects decimal-encoded metadata IP (2852039166 = 169.254.169.254)", async () => {
+    // The URL parser canonicalises the integer to 169.254.169.254, which
+    // hits the specific metadata-address guard.
+    await expect(validateUrl("http://2852039166/")).rejects.toMatchObject({
+      code: "metadata_address",
+    });
+  });
+
   it("throws UrlValidationFailed instance", async () => {
     try {
       await validateUrl("not-a-url");

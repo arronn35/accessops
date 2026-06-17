@@ -1,29 +1,33 @@
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
-import { and, asc, eq } from "drizzle-orm";
+import { IssueGroupSection } from "@/components/scan/IssueGroupSection";
 import {
-  AlertTriangle, ArrowLeft, Download, FileBarChart2, Filter, Globe, Sparkles,
+  AlertTriangle, ArrowLeft, Download, Filter, GitCompare, Globe, Sparkles,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { ScanScoreRing } from "@/components/scan/ScanScoreRing";
+import { FailedPagesNotice } from "@/components/scan/FailedPagesNotice";
 import { IssueCard } from "@/components/scan/IssueCard";
 import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { HumanReviewBanner } from "@/components/compliance/HumanReviewBanner";
-import { db } from "@/lib/db";
-import {
-  scanJobs,
-  scanPages,
-  accessibilityIssues,
-  scanSummaries,
-  visualEvidence,
-} from "@/lib/db/schema";
+import { ManualReviewChecklist } from "@/components/compliance/ManualReviewChecklist";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import {
+  getScanJob,
+  getScanSummary,
+  listIssueGroups,
+  listIssues,
+  listPageJobs,
+  listScanPages,
+} from "@/lib/data/firestore";
 import { type IssueCategory } from "@/lib/mock/issues";
 import { formatDate, formatRelative } from "@/lib/utils";
+import { ScanReportActions } from "./scan-report-actions";
+import { MonitorScanButton } from "./monitor-scan-button";
 
-export const metadata = { title: "Scan results — AccessOps AI" };
+export const metadata = { title: "Scan results — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function ScanResultsPage({
@@ -34,57 +38,49 @@ export default async function ScanResultsPage({
   const { id } = await params;
   const ctx = await getCurrentWorkspaceOrRedirect();
 
-  const [scan] = await db
-    .select()
-    .from(scanJobs)
-    .where(and(eq(scanJobs.id, id), eq(scanJobs.workspaceId, ctx.workspace.id)))
-    .limit(1);
+  const scan = await getScanJob(ctx.workspace.id, id);
 
   if (!scan) notFound();
   if (scan.status !== "completed") {
     redirect(`/app/scans/${id}/progress`);
   }
 
-  const issueRows = await db
-    .select({
-      id: accessibilityIssues.id,
-      ruleId: accessibilityIssues.ruleId,
-      severity: accessibilityIssues.severity,
-      impact: accessibilityIssues.impact,
-      description: accessibilityIssues.description,
-      help: accessibilityIssues.help,
-      helpUrl: accessibilityIssues.helpUrl,
-      wcagTagsJson: accessibilityIssues.wcagTagsJson,
-      targetJson: accessibilityIssues.targetJson,
-      contextsJson: accessibilityIssues.contextsJson,
-      htmlSnippet: accessibilityIssues.htmlSnippet,
-      humanReviewRequired: accessibilityIssues.humanReviewRequired,
-      status: accessibilityIssues.status,
-      pageUrl: scanPages.url,
-      pageTitle: scanPages.title,
-      evidenceStatus: visualEvidence.screenshotStatus,
-      evidenceDeletedAt: visualEvidence.deletedAt,
-      evidenceExpiresAt: visualEvidence.expiresAt,
-      evidenceKey: visualEvidence.screenshotKey,
-    })
-    .from(accessibilityIssues)
-    .leftJoin(scanPages, eq(accessibilityIssues.scanPageId, scanPages.id))
-    .leftJoin(visualEvidence, eq(visualEvidence.issueId, accessibilityIssues.id))
-    .where(eq(accessibilityIssues.scanJobId, scan.id))
-    .orderBy(asc(accessibilityIssues.severity));
+  const [issues, pages, summary, groups, pageJobs] = await Promise.all([
+    listIssues(ctx.workspace.id, scan.id),
+    listScanPages(ctx.workspace.id, scan.id),
+    getScanSummary(ctx.workspace.id, scan.id),
+    listIssueGroups(ctx.workspace.id, scan.id),
+    scan.usePageJobs ? listPageJobs(ctx.workspace.id, scan.id) : Promise.resolve([]),
+  ]);
+  const failedPageJobs = pageJobs.filter((job) => job.status === "failed");
+  const pageById = new Map(pages.map((p) => [p.id, p]));
+  const issueRows = issues.map((issue) => {
+    const page = issue.scanPageId ? pageById.get(issue.scanPageId) : null;
+    return {
+      ...issue,
+      pageUrl: page?.url ?? null,
+      pageTitle: page?.title ?? null,
+      evidenceStatus: null,
+      evidenceDeletedAt: null,
+      evidenceExpiresAt: null,
+      evidenceKey: null,
+    };
+  });
 
-  const pages = await db
-    .select()
-    .from(scanPages)
-    .where(eq(scanPages.scanJobId, scan.id));
+  // Bucket each finding under its root-cause group. Findings without a
+  // groupId (legacy scans run before grouping shipped) fall back to the flat
+  // list rendered below.
+  const instancesByGroup = new Map<string, typeof issueRows>();
+  for (const row of issueRows) {
+    if (!row.groupId) continue;
+    const bucket = instancesByGroup.get(row.groupId);
+    if (bucket) bucket.push(row);
+    else instancesByGroup.set(row.groupId, [row]);
+  }
+  const hasGroups = groups.length > 0 && instancesByGroup.size > 0;
+  const topFixes = groups.filter((g) => g.severity !== "review").slice(0, 5);
 
-  const [summary] = await db
-    .select()
-    .from(scanSummaries)
-    .where(eq(scanSummaries.scanJobId, scan.id))
-    .limit(1);
-
-  const scanProfile = readScanProfile(pages);
+  const scanProfile = readScanProfile(pages.map((page) => ({ rawMetadataJson: page.rawMetadataJson ?? null })));
 
   const counts = {
     critical: 0,
@@ -104,7 +100,45 @@ export default async function ScanResultsPage({
   }
 
   const score = summary?.overallScore ?? legacyScore(counts);
-  const contextSummary = summarizeContexts(issueRows);
+  const contextSummary = summarizeContexts(issueRows.map((issue) => ({ contextsJson: issue.contextsJson ?? null })));
+
+  const renderRow = (issue: (typeof issueRows)[number]) => (
+    <div key={issue.id} className="space-y-1">
+      <ContextLine contexts={issue.contextsJson ?? []} />
+      <IssueCard
+        scanId={scan.id}
+        evidenceAvailable={false}
+        issue={{
+          id: issue.id,
+          title: issue.help,
+          severity: issue.severity as "critical" | "moderate" | "minor" | "passed" | "review",
+          category: inferCategory(issue.ruleId),
+          page: issue.pageUrl ?? scan.baseUrl,
+          pageTitle: issue.pageTitle ?? "",
+          element: issue.targetJson?.[0] ?? "",
+          wcag: {
+            criterion:
+              (issue.wcagTagsJson ?? []).find((t: string) => /^wcag\d/.test(t)) ?? "—",
+            level: (issue.wcagTagsJson ?? []).includes("wcag2aaa")
+              ? "AAA"
+              : (issue.wcagTagsJson ?? []).includes("wcag2aa")
+              ? "AA"
+              : "A",
+            version: "2.2",
+          },
+          whyMatters: issue.description,
+          whoAffects: [],
+          howToFix: "",
+          before: { language: "html", code: "" },
+          after: { language: "html", code: "" },
+          aiExplanation: "",
+          humanReviewRequired: issue.humanReviewRequired,
+          status: "to_review",
+          manualChecks: [],
+        }}
+      />
+    </div>
+  );
 
   return (
     <div className="px-4 lg:px-8 py-8 space-y-6 max-w-[1400px]">
@@ -115,21 +149,25 @@ export default async function ScanResultsPage({
         >
           <ArrowLeft className="size-3.5" aria-hidden /> Dashboard
         </Link>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <Link
+            href={`/app/scans/${scan.id}/compare`}
+            className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm text-ink-700 hover:bg-canvas-2"
+          >
+            <GitCompare className="size-4" aria-hidden /> Compare
+          </Link>
+          <MonitorScanButton scanId={scan.id} />
           <Link
             href={`/api/scans/${scan.id}/issues?format=csv`}
             className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm text-ink-700 hover:bg-canvas-2"
           >
             <Download className="size-4" aria-hidden /> Export issues
           </Link>
-          <Link
-            href={`/app/reports/builder?scanId=${scan.id}`}
-            className="inline-flex items-center gap-2 h-10 px-3 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-          >
-            <FileBarChart2 className="size-4" aria-hidden /> Build report
-          </Link>
+          <ScanReportActions scanId={scan.id} />
         </div>
       </div>
+
+      <FailedPagesNotice jobs={failedPageJobs} pagesScanned={scan.pagesScanned} />
 
       <Card>
         <CardContent className="pt-5">
@@ -145,7 +183,9 @@ export default async function ScanResultsPage({
             <ScanScoreRing score={score} size="lg" />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <Badge tone="success" size="sm">Complete</Badge>
+                <Badge tone={failedPageJobs.length > 0 ? "warning" : "success"} size="sm">
+                  {failedPageJobs.length > 0 ? "Complete with errors" : "Complete"}
+                </Badge>
                 <Badge tone="neutral" size="sm" className="font-mono">{scan.id}</Badge>
                 <span className="text-xs text-ink-500">
                   Scanned {formatRelative(scan.startedAt ?? scan.createdAt)} ·{" "}
@@ -230,8 +270,9 @@ export default async function ScanResultsPage({
               <Filter className="size-3.5" aria-hidden /> Viewport:
             </span>
             <FilterChip label="Desktop" count={contextSummary.desktop} />
+            <FilterChip label="Tablet" count={contextSummary.tablet} />
             <FilterChip label="Mobile" count={contextSummary.mobile} />
-            <FilterChip label="Both" count={contextSummary.both} />
+            <FilterChip label="Multiple" count={contextSummary.both} />
             <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700 ml-2">
               State:
             </span>
@@ -240,56 +281,72 @@ export default async function ScanResultsPage({
             ))}
           </div>
 
-          <div className="space-y-2.5">
-            {issueRows.map((issue) => (
-              <div key={issue.id} className="space-y-1">
-                <ContextLine contexts={issue.contextsJson ?? []} />
-                <IssueCard
-                  scanId={scan.id}
-                  evidenceAvailable={
-                    !!issue.evidenceKey &&
-                    !issue.evidenceDeletedAt &&
-                    !!issue.evidenceExpiresAt &&
-                    issue.evidenceExpiresAt > new Date() &&
-                    (issue.evidenceStatus === "captured" || issue.evidenceStatus === "redacted")
-                  }
-                  issue={{
-                    id: issue.id,
-                    title: issue.help,
-                    severity: issue.severity as "critical" | "moderate" | "minor" | "passed" | "review",
-                    category: inferCategory(issue.ruleId),
-                    page: issue.pageUrl ?? scan.baseUrl,
-                    pageTitle: issue.pageTitle ?? "",
-                    element: issue.targetJson?.[0] ?? "",
-                    wcag: {
-                      criterion: (issue.wcagTagsJson ?? []).find((t: string) =>
-                        /^wcag\d/.test(t)
-                      ) ?? "—",
-                      level: (issue.wcagTagsJson ?? []).includes("wcag2aaa")
-                        ? "AAA"
-                        : (issue.wcagTagsJson ?? []).includes("wcag2aa")
-                        ? "AA"
-                        : "A",
-                      version: "2.2",
-                    },
-                    whyMatters: issue.description,
-                    whoAffects: [],
-                    howToFix: "",
-                    before: { language: "html", code: "" },
-                    after: { language: "html", code: "" },
-                    aiExplanation: "",
-                    humanReviewRequired: issue.humanReviewRequired,
-                    status: "to_review",
-                    manualChecks: [],
-                  }}
-                />
-              </div>
-            ))}
-          </div>
+          {hasGroups && topFixes.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm">Top priority fixes</CardTitle>
+                <CardDescription>
+                  Ordered by impact — fixing these root causes clears the most findings.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <ol className="space-y-2">
+                  {topFixes.map((g, idx) => (
+                    <li key={g.id} className="flex items-start gap-3 text-sm">
+                      <span className="mt-0.5 size-5 shrink-0 rounded-full bg-navy-900 text-paper text-[11px] font-semibold grid place-items-center tabular-nums">
+                        {idx + 1}
+                      </span>
+                      <span className="flex-1 min-w-0">
+                        <span className="font-medium text-ink-900">{g.title}</span>
+                        <span className="ml-2 text-[11px] text-ink-500 tabular-nums">
+                          {g.affectedCount} instance{g.affectedCount === 1 ? "" : "s"}
+                        </span>
+                        <span className="block text-[11px] text-ink-500 font-mono">{g.ruleId}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </CardContent>
+            </Card>
+          )}
+
+          {hasGroups ? (
+            <div className="space-y-2.5">
+              {groups.map((g, idx) => {
+                const instances = instancesByGroup.get(g.id) ?? [];
+                if (!instances.length) return null;
+                return (
+                  <IssueGroupSection
+                    key={g.id}
+                    defaultOpen={idx === 0}
+                    group={{
+                      id: g.id,
+                      title: g.title,
+                      ruleId: g.ruleId,
+                      severity: g.severity as
+                        | "critical"
+                        | "moderate"
+                        | "minor"
+                        | "passed"
+                        | "review",
+                      affectedCount: g.affectedCount,
+                      primaryWcagTag: g.primaryWcagTag,
+                      recommendedFix: g.recommendedFix,
+                    }}
+                  >
+                    {instances.map(renderRow)}
+                  </IssueGroupSection>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="space-y-2.5">{issueRows.map(renderRow)}</div>
+          )}
         </div>
 
         <aside className="space-y-5">
           <HumanReviewBanner />
+          <ManualReviewChecklist />
           <NoGuaranteeBanner variant="default" />
 
           <Card>
@@ -518,7 +575,7 @@ function ProfileRow({ label, value }: { label: string; value: string }) {
 }
 
 type IssueContext = {
-  viewport: "desktop" | "mobile";
+  viewport: "desktop" | "tablet" | "mobile";
   state:
     | "initial"
     | "menu-open"
@@ -553,12 +610,14 @@ function summarizeContexts(
   issues: Array<{ contextsJson: IssueContext[] | null }>
 ): {
   desktop: number;
+  tablet: number;
   mobile: number;
   both: number;
   states: Record<IssueContext["state"], number>;
 } {
   const summary = {
     desktop: 0,
+    tablet: 0,
     mobile: 0,
     both: 0,
     states: {
@@ -574,8 +633,9 @@ function summarizeContexts(
     const contexts = issue.contextsJson ?? [];
     const viewports = new Set(contexts.map((ctx) => ctx.viewport));
     if (viewports.has("desktop")) summary.desktop++;
+    if (viewports.has("tablet")) summary.tablet++;
     if (viewports.has("mobile")) summary.mobile++;
-    if (viewports.has("desktop") && viewports.has("mobile")) summary.both++;
+    if (viewports.size > 1) summary.both++;
     for (const state of new Set(contexts.map((ctx) => ctx.state))) {
       if (state in summary.states) {
         summary.states[state as IssueContext["state"]]++;

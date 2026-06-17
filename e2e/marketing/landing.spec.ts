@@ -10,7 +10,7 @@ import { test, expect } from "@playwright/test";
 test.describe("landing page", () => {
   test("renders hero, trust strip, and CTA", async ({ page }) => {
     await page.goto("/");
-    await expect(page).toHaveTitle(/maitrico AccessOps AI/);
+    await expect(page).toHaveTitle(/maitrico Percevia AI/);
     await expect(
       page.getByRole("heading", {
         name: /Find accessibility issues before they become user and compliance problems/i,

@@ -5,7 +5,7 @@ import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 
-export const metadata = { title: "States gallery — AccessOps AI" };
+export const metadata = { title: "States gallery — Percevia AI" };
 
 export default function StatesGalleryPage() {
   return (
@@ -18,7 +18,7 @@ export default function StatesGalleryPage() {
           Empty &amp; error states gallery
         </h1>
         <p className="text-sm text-ink-600 mt-2 max-w-2xl">
-          Canonical empty and warning states used across AccessOps AI. Reused via{" "}
+          Canonical empty and warning states used across Percevia AI. Reused via{" "}
           <code className="text-xs px-1.5 py-0.5 rounded bg-canvas-2 font-mono">EmptyState</code>{" "}
           and{" "}
           <code className="text-xs px-1.5 py-0.5 rounded bg-canvas-2 font-mono">AlertCallout</code>.
@@ -92,7 +92,7 @@ export default function StatesGalleryPage() {
             publicly reachable.
           </AlertCallout>
           <AlertCallout tone="warning" title="Scan blocked by robots.txt">
-            The target site disallows automated crawling. Add an exception for AccessOps AI&apos;s
+            The target site disallows automated crawling. Add an exception for Percevia AI&apos;s
             crawler or use a manual URL list instead.
           </AlertCallout>
           <AlertCallout tone="warning" title="Scan timed out">

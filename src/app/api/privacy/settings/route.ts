@@ -1,17 +1,7 @@
-/**
- * GET   /api/privacy/settings — read privacy_settings for the workspace
- * PATCH /api/privacy/settings — update toggles
- *
- * Only owners and admins can change privacy settings. Every change is
- * audit-logged so the Compliance Center activity feed reflects it.
- */
-import { NextRequest } from "next/server";
-import { eq } from "drizzle-orm";
 import { z } from "zod";
-import { db } from "@/lib/db";
-import { privacySettings } from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
-import { audit } from "@/lib/api/audit";
+import { audit, getPrivacySettings, updatePrivacySettings } from "@/lib/data/firestore";
+import { roleHasPermission } from "@/lib/entitlements";
 
 const Patch = z.object({
   aiProcessingEnabled: z.boolean().optional(),
@@ -25,41 +15,34 @@ const Patch = z.object({
 export async function GET() {
   try {
     const ctx = await requireSession();
-    const [row] = await db
-      .select()
-      .from(privacySettings)
-      .where(eq(privacySettings.workspaceId, ctx.workspaceId))
-      .limit(1);
-    return Response.json({ settings: row ?? null });
+    return Response.json({ settings: await getPrivacySettings(ctx.workspaceId) });
   } catch (err) {
     return apiError(err);
   }
 }
 
-export async function PATCH(req: NextRequest) {
+export async function PATCH(req: Request) {
   try {
     const ctx = await requireSession();
-    if (ctx.role !== "owner" && ctx.role !== "admin") {
-      throw new ApiError(403, "forbidden");
-    }
-    const body = await req.json().catch(() => ({}));
-    const parsed = Patch.safeParse(body);
+    if (!roleHasPermission(ctx.role, "manage_privacy")) throw new ApiError(403, "forbidden");
+    const parsed = Patch.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) throw new ApiError(400, "invalid_input");
-
-    await db
-      .update(privacySettings)
-      .set({ ...parsed.data, updatedAt: new Date() })
-      .where(eq(privacySettings.workspaceId, ctx.workspaceId));
-
+    const patch = { ...parsed.data };
+    if (patch.visualEvidenceEnabled === false) {
+      patch.screenshotStorageEnabled = false;
+    }
+    if (patch.screenshotStorageEnabled === true) {
+      patch.visualEvidenceEnabled = true;
+    }
+    await updatePrivacySettings(ctx.workspaceId, patch);
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       action: "privacy.updated",
       resourceType: "privacy_settings",
-      metadata: parsed.data,
+      metadata: patch,
     });
-
-    return Response.json({ ok: true });
+    return Response.json({ ok: true, settings: await getPrivacySettings(ctx.workspaceId) });
   } catch (err) {
     return apiError(err);
   }

@@ -46,7 +46,7 @@ describe("analyzeHtml", () => {
         </head>
         <body>
           <main>
-            <img src="/logo.png" alt="AccessOps">
+            <img src="/logo.png" alt="Percevia">
             <button>Save</button>
             <a href="/reports">Reports</a>
             <label for="email">Email</label>
@@ -68,9 +68,9 @@ describe("analyzeHtml", () => {
         <a href="/pricing">Pricing</a>
         <a href="mailto:test@example.com">Mail</a>
       </main></body></html>
-    `, "https://accessops.example/app");
+    `, "https://percevia.example/app");
 
-    expect(out.links).toContain("https://accessops.example/pricing");
+    expect(out.links).toContain("https://percevia.example/pricing");
     expect(out.links.some((link) => link.startsWith("mailto:"))).toBe(false);
   });
 
@@ -106,6 +106,35 @@ describe("analyzeHtml", () => {
       engine: "static-html-fallback",
       fallbackMode: true,
       resultConfidence: "low",
+    });
+  });
+
+  it("completes with a manual-review page when page retrieval fails", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("network_unreachable");
+      })
+    );
+
+    const out = await runStaticScanJob({
+      jobId: "test",
+      url: "http://93.184.216.34/",
+      maxPages: 1,
+      scanType: "single",
+      includeScreenshots: false,
+      storeScreenshots: false,
+      timeoutMs: 1000,
+    });
+
+    expect(out.pagesScanned).toBe(1);
+    expect(out.pages[0].rawMetadata).toMatchObject({
+      fetchFailureReason: "network_unreachable",
+    });
+    expect(out.pages[0].issues[0]).toMatchObject({
+      ruleId: "page-unavailable",
+      severity: "review",
+      humanReviewRequired: true,
     });
   });
 });

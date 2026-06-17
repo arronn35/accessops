@@ -1,7 +1,7 @@
 /**
  * Map axe-core's Result objects to our NormalizedIssue shape.
  *
- * axe → AccessOps mapping decisions, documented because tweaking these
+ * axe → Percevia mapping decisions, documented because tweaking these
  * shifts what appears as "critical" in the UI:
  *
  *   axe.impact   →  severity
@@ -60,7 +60,7 @@ export function normalizeAxeViolation(
   const baseHumanReview = incomplete || NEEDS_HUMAN_REVIEW.has(result.id);
 
   // axe groups multiple offending nodes under one rule. Each node
-  // becomes its own AccessOps Issue so the remediation board has
+  // becomes its own Percevia Issue so the remediation board has
   // task-sized units.
   return result.nodes.map<NormalizedIssue>((node) => {
     const impactKey = (node.impact ??

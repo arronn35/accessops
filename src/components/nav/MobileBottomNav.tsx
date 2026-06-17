@@ -1,13 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutDashboard, ScanLine, KanbanSquare, ShieldCheck, Settings } from "lucide-react";
+import { PrefetchLink } from "@/components/nav/PrefetchLink";
 import { cn } from "@/lib/utils";
 
 const items = [
   { href: "/app", label: "Home", icon: LayoutDashboard },
-  { href: "/app/scans/sc_2025_05_12", label: "Scans", icon: ScanLine, match: "/app/scans" },
+  { href: "/app/scans/new", label: "Scans", icon: ScanLine, match: "/app/scans" },
   { href: "/app/remediation", label: "Tasks", icon: KanbanSquare },
   { href: "/app/compliance", label: "Privacy", icon: ShieldCheck },
   { href: "/app/settings", label: "Settings", icon: Settings },
@@ -27,7 +27,7 @@ export function MobileBottomNav() {
           const active = item.match ? pathname?.startsWith(item.match) : pathname === item.href;
           return (
             <li key={item.href} className="flex-1">
-              <Link
+              <PrefetchLink
                 href={item.href}
                 aria-current={active ? "page" : undefined}
                 className={cn(
@@ -37,7 +37,7 @@ export function MobileBottomNav() {
               >
                 <Icon className={cn("size-5", active && "text-navy-900")} aria-hidden />
                 {item.label}
-              </Link>
+              </PrefetchLink>
             </li>
           );
         })}

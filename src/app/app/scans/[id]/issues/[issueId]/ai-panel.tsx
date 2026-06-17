@@ -9,6 +9,9 @@ import { Checkbox } from "@/components/ui/Checkbox";
 
 interface InitialAi {
   explanationPlain: string;
+  remediationSummary: string | null;
+  codeFixExample: string | null;
+  verification: string | null;
   framework: string | null;
   modelProvider: string;
   createdAt: string;
@@ -41,7 +44,7 @@ export function AiExplanationPanel({
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        if (body.error === "ai_disabled") {
+        if (body.error === "ai_disabled" || body.error === "ai_processing_disabled") {
           setError(
             "AI processing is disabled. Enable it in Privacy & Compliance Center."
           );
@@ -57,6 +60,9 @@ export function AiExplanationPanel({
       const { aiExplanation } = await res.json();
       setCurrent({
         explanationPlain: aiExplanation.explanationPlain,
+        remediationSummary: aiExplanation.remediationSummary ?? null,
+        codeFixExample: aiExplanation.codeFixExample ?? null,
+        verification: aiExplanation.verification ?? null,
         framework: aiExplanation.framework,
         modelProvider: aiExplanation.modelProvider,
         createdAt: aiExplanation.createdAt,
@@ -70,9 +76,10 @@ export function AiExplanationPanel({
 
   if (current) {
     return (
-      <AiSuggestionBlock title={`AI explanation · ${current.modelProvider}`}>
-        <p className="whitespace-pre-wrap">{current.explanationPlain}</p>
-      </AiSuggestionBlock>
+      <AiFixCard
+        ai={current}
+        onRegenerate={aiEnabled ? () => setCurrent(null) : undefined}
+      />
     );
   }
 
@@ -142,6 +149,93 @@ export function AiExplanationPanel({
         {loading ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
         {loading ? "Generating…" : "Generate"}
       </button>
+    </div>
+  );
+}
+
+function AiFixCard({
+  ai,
+  onRegenerate,
+}: {
+  ai: InitialAi;
+  onRegenerate?: () => void;
+}) {
+  const [mode, setMode] = useState<"plain" | "technical">("plain");
+  const hasTechnical = Boolean(ai.codeFixExample || ai.remediationSummary || ai.verification);
+
+  return (
+    <AiSuggestionBlock title={`AI fix card · ${ai.modelProvider}`}>
+      <div className="flex items-center justify-between gap-3 mb-3">
+        {hasTechnical ? (
+          <div
+            role="tablist"
+            aria-label="Explanation detail level"
+            className="inline-flex rounded-md ring-1 ring-line bg-paper p-0.5 text-xs"
+          >
+            <button
+              role="tab"
+              aria-selected={mode === "plain"}
+              onClick={() => setMode("plain")}
+              className={`px-2.5 py-1 rounded ${mode === "plain" ? "bg-purple-500 text-paper font-medium" : "text-ink-600 hover:text-ink-900"}`}
+            >
+              Plain language
+            </button>
+            <button
+              role="tab"
+              aria-selected={mode === "technical"}
+              onClick={() => setMode("technical")}
+              className={`px-2.5 py-1 rounded ${mode === "technical" ? "bg-purple-500 text-paper font-medium" : "text-ink-600 hover:text-ink-900"}`}
+            >
+              Developer
+            </button>
+          </div>
+        ) : (
+          <span />
+        )}
+        {onRegenerate && (
+          <button
+            onClick={onRegenerate}
+            className="text-xs font-medium text-purple-700 hover:underline"
+          >
+            Regenerate
+          </button>
+        )}
+      </div>
+
+      {mode === "plain" || !hasTechnical ? (
+        <p className="whitespace-pre-wrap">{ai.explanationPlain}</p>
+      ) : (
+        <div className="space-y-4">
+          {ai.remediationSummary && (
+            <FixSection label="Recommended fix">
+              <p className="whitespace-pre-wrap">{ai.remediationSummary}</p>
+            </FixSection>
+          )}
+          {ai.codeFixExample && (
+            <FixSection label={`Code example${ai.framework ? ` · ${ai.framework}` : ""}`}>
+              <pre className="text-xs leading-relaxed font-mono text-ink-900 bg-canvas-2 p-3 rounded-md overflow-x-auto">
+                <code>{ai.codeFixExample}</code>
+              </pre>
+            </FixSection>
+          )}
+          {ai.verification && (
+            <FixSection label="How to verify">
+              <p className="whitespace-pre-wrap">{ai.verification}</p>
+            </FixSection>
+          )}
+        </div>
+      )}
+    </AiSuggestionBlock>
+  );
+}
+
+function FixSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div>
+      <h5 className="text-[11px] font-semibold uppercase tracking-wider text-ink-500 mb-1.5">
+        {label}
+      </h5>
+      {children}
     </div>
   );
 }

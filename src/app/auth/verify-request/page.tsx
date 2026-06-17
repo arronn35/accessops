@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Mail } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 
-export const metadata = { title: "Check your email — AccessOps AI" };
+export const metadata = { title: "Check your email — Percevia AI" };
 
 export default function VerifyRequestPage() {
   return (

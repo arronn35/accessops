@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
 
-const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://accessops-chi.vercel.app";
+const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "https://percevia-chi.vercel.app";
 
 export default function sitemap(): MetadataRoute.Sitemap {
   const now = new Date();

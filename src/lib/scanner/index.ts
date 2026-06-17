@@ -44,4 +44,11 @@ export type {
 
 // Heavy imports — only loaded inside the worker. Re-exported but tree-shaken
 // out of any client bundle because Next.js never includes worker entry points.
-export { runScanJob, scanSinglePage, crawlSameDomain, launchBrowser } from "./playwright-runner";
+export {
+  runScanJob,
+  scanSinglePage,
+  crawlSameDomain,
+  launchBrowser,
+  resolveScanTargets,
+  createDeadline,
+} from "./playwright-runner";

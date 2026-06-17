@@ -4,13 +4,12 @@ import { useState } from "react";
 import { cn } from "@/lib/utils";
 
 /**
- * Self-serve upgrade CTA used inside the public pricing grid.
+ * Pricing-page CTA.
  *
- * - Authenticated user: POST /api/billing/checkout → Stripe Checkout.
- * - Unauthenticated: bounce to /auth/sign-in?callbackUrl=/pricing so
- *   they come right back here after sign-in.
- * - Stripe not configured on this deployment: server returns 503 with
- *   `billing_unavailable`; we surface a polite "contact sales" fallback.
+ * Payment processing has been removed; selecting a plan grants the
+ * workspace access to that tier immediately. If the visitor isn't
+ * signed in we send them to sign-in with a callback URL that resumes
+ * the plan selection after they authenticate.
  */
 export function PricingCta({
   planId,
@@ -23,14 +22,11 @@ export function PricingCta({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState(false);
 
-  // Free always routes to onboarding; Enterprise to a mailto.
   if (planId === "free") {
     return (
-      <a
-        href="/onboarding"
-        className={ctaClasses(highlighted)}
-      >
+      <a href="/onboarding" className={ctaClasses(highlighted)}>
         {label}
       </a>
     );
@@ -38,7 +34,7 @@ export function PricingCta({
   if (planId === "enterprise") {
     return (
       <a
-        href="mailto:sales@maitrico.com?subject=AccessOps%20Enterprise%20inquiry"
+        href="mailto:maitritechco@gmail.com?subject=Percevia%20Enterprise%20inquiry"
         className={ctaClasses(highlighted)}
       >
         {label}
@@ -50,13 +46,12 @@ export function PricingCta({
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch("/api/billing/checkout", {
+      const res = await fetch("/api/plan/select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ plan: planId }),
       });
       if (res.status === 401) {
-        // Not signed in — send them through auth and back.
         const cb = encodeURIComponent(`/app/settings/billing?plan=${planId}`);
         window.location.assign(`/auth/sign-in?callbackUrl=${cb}`);
         return;
@@ -66,16 +61,13 @@ export function PricingCta({
         window.location.assign("/onboarding");
         return;
       }
-      if (!res.ok || !data.url) {
-        setError(
-          data.message ||
-            data.error ||
-            "Self-serve checkout is unavailable right now. Please contact sales."
-        );
+      if (!res.ok) {
+        setError(data.message || data.error || "Could not switch plan.");
         setBusy(false);
         return;
       }
-      window.location.assign(data.url);
+      setDone(true);
+      setTimeout(() => window.location.assign("/app/settings/billing"), 800);
     } catch (err) {
       setError((err as Error).message ?? "Network error");
       setBusy(false);
@@ -87,10 +79,10 @@ export function PricingCta({
       <button
         type="button"
         onClick={go}
-        disabled={busy}
+        disabled={busy || done}
         className={ctaClasses(highlighted)}
       >
-        {busy ? "Redirecting…" : label}
+        {done ? "Plan activated ✓" : busy ? "Activating…" : label}
       </button>
       {error && (
         <p className="mt-2 text-[11px] text-rose-700 leading-snug">{error}</p>

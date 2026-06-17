@@ -60,7 +60,7 @@ export function A11ySettingsPanel() {
       <div>
         <h3 className="text-lg font-semibold text-ink-900">Accessibility preferences</h3>
         <p className="text-sm text-ink-600 mt-1">
-          These settings apply to the AccessOps AI interface only. We respect your operating
+          These settings apply to the Percevia AI interface only. We respect your operating
           system&apos;s reduced-motion preference automatically.
         </p>
       </div>

@@ -1,6 +1,6 @@
 export const metadata = {
-  title: "Privacy Policy — AccessOps AI",
-  description: "How maitrico AccessOps AI processes your data.",
+  title: "Privacy Policy — Percevia AI",
+  description: "How maitrico Percevia AI processes your data.",
 };
 
 const EFFECTIVE = "2026-05-23";
@@ -13,10 +13,10 @@ export default function PrivacyPolicyPage() {
       </p>
       <h1>Privacy Policy</h1>
       <p>
-        This Privacy Policy explains what data maitrico AccessOps AI collects,
-        how we use it, and the choices you have. It applies to the website at
-        accessops.maitrico.com (and any deployment that serves the same app)
-        and the underlying scan worker.
+        This Privacy Policy explains what data maitrico Percevia AI collects,
+        how we use it, and the choices you have. It applies to the website
+        where Percevia is hosted, any deployment that serves the same app, and
+        the underlying scan worker.
       </p>
 
       <h2>Data we collect</h2>
@@ -52,7 +52,7 @@ export default function PrivacyPolicyPage() {
         <li>
           When AI processing is enabled by a workspace owner/admin, the issue
           context (description, snippet, selectors) is sent to our AI provider
-          (Anthropic) to generate an explanation. We do not send your account
+          (OpenAI) to generate an explanation. We do not send your account
           email, screenshots, or unrelated workspace data with these requests.
         </li>
         <li>
@@ -73,19 +73,21 @@ export default function PrivacyPolicyPage() {
           HTML; they contain action names, identifiers, and timestamps.
         </li>
         <li>
-          Billing data managed by Stripe (we store the Stripe customer ID,
-          subscription ID, and current period end — not card numbers).
+          Plan selection metadata (chosen tier, change history). Card
+          processing is not currently handled; if and when it is reinstated
+          we will update this Policy first.
         </li>
       </ul>
 
       <h2>Where data is stored</h2>
       <p>
-        Workspace data is stored in Neon Postgres in the EU region by default.
-        Higher tiers can opt in to US or UK regions. The scan worker runs on
-        Railway and processes pages in memory; raw HTML is not persisted unless
-        you turn on screenshot storage (and even then, only the resulting image
-        is kept). Stripe processes payments in their own infrastructure under
-        their privacy policy.
+        Workspace data is stored in Firebase Firestore in the configured
+        Firebase project region. Scan jobs are queued in Firestore and
+        processed by a dedicated browser worker that holds page content only
+        transiently in memory. Raw HTML is not persisted. If your workspace
+        enables visual evidence, redacted screenshots of affected page
+        regions are stored in Firestore with an expiry date and can be
+        deleted at any time; separate object storage is not used.
       </p>
 
       <h2>How we use data</h2>
@@ -93,8 +95,8 @@ export default function PrivacyPolicyPage() {
         <li>To operate the Service — run scans, render reports, send auth emails.</li>
         <li>To enforce safety controls — SSRF defense, rate limits, plan caps.</li>
         <li>
-          To communicate transactional messages (sign-in links, billing
-          receipts). We do not send marketing emails without your opt-in.
+          To communicate transactional messages through Firebase Auth. We do
+          not send marketing emails without your opt-in.
         </li>
         <li>To improve and secure the Service — diagnostics, incident response.</li>
       </ul>
@@ -112,10 +114,10 @@ export default function PrivacyPolicyPage() {
 
       <h2>Subprocessors</h2>
       <p>
-        The Service relies on a short list of subprocessors (Neon, Upstash,
-        Vercel, Railway, Resend, Anthropic, Stripe, Sentry, PostHog).
-        See <a href="/legal/subprocessors">/legal/subprocessors</a> for the
-        current list and what each one processes.
+        The Service relies on a short list of subprocessors (Vercel, Firebase,
+        Railway, and OpenAI). See{" "}
+        <a href="/legal/subprocessors">/legal/subprocessors</a> for the current
+        list and what each one processes.
       </p>
 
       <h2>Retention</h2>
@@ -151,17 +153,14 @@ export default function PrivacyPolicyPage() {
       </ul>
       <p>
         For other requests, email{" "}
-        <a href="mailto:privacy@maitrico.com">privacy@maitrico.com</a>. EU/EEA
-        and UK residents may also lodge a complaint with their local data
-        protection authority.
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a>.
       </p>
 
       <h2>Cookies</h2>
       <p>
-        We use a single first-party session cookie issued by Auth.js (database
-        session strategy). No advertising cookies, no third-party tracking
-        cookies. Optional analytics (PostHog) is off by default and enabled
-        only at the workspace owner&apos;s discretion.
+        We use a first-party Firebase session cookie to keep you signed in. No
+        advertising cookies and no third-party tracking cookies are required to
+        use the Service.
       </p>
 
       <h2>Changes</h2>
@@ -173,8 +172,7 @@ export default function PrivacyPolicyPage() {
       <h2>Contact</h2>
       <p>
         Data protection inquiries:{" "}
-        <a href="mailto:privacy@maitrico.com">privacy@maitrico.com</a>. Security
-        issues: <a href="mailto:security@maitrico.com">security@maitrico.com</a>.
+        <a href="mailto:maitritechco@gmail.com">maitritechco@gmail.com</a>.
       </p>
     </>
   );

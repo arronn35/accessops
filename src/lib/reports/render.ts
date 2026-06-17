@@ -15,6 +15,13 @@
  */
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 
+export interface ReportEvidence {
+  /** base64 PNG data URI — durable in HTML + PDF, no signed-URL expiry. */
+  dataUri: string;
+  selector: string | null;
+  redactionApplied: boolean;
+}
+
 export interface ReportInputIssue {
   id: string;
   ruleId: string;
@@ -27,6 +34,19 @@ export interface ReportInputIssue {
   pageUrl: string | null;
   pageTitle: string | null;
   htmlSnippet?: string | null;
+  evidence?: ReportEvidence | null;
+  groupId?: string | null;
+}
+
+export interface ReportGroup {
+  id: string;
+  ruleId: string;
+  title: string;
+  severity: string;
+  affectedCount: number;
+  primaryWcagTag: string | null;
+  recommendedFix: string | null;
+  priority: number;
 }
 
 export interface ReportInput {
@@ -38,16 +58,75 @@ export interface ReportInput {
   scanDate: Date;
   issues: ReportInputIssue[];
   counts: { critical: number; moderate: number; minor: number; passed: number; review: number };
+  groups?: ReportGroup[];
+  /**
+   * Agency / white-label branding. When `agencyBranding` is true the
+   * footer presents the workspace as the author; otherwise the report
+   * carries Percevia AI attribution.
+   */
+  agencyBranding?: boolean;
+  /** Builder-selected section ids; empty/null renders every section. */
+  sections?: string[] | null;
+  /** Executive reports collapse to summary + roadmap unless sections are explicit. */
+  reportType?: "full" | "executive" | "csv";
+}
+
+export type ReportSectionId =
+  | "exec"
+  | "tech"
+  | "pages"
+  | "wcag"
+  | "roadmap"
+  | "checklist"
+  | "disclaimer";
+
+const ALL_SECTIONS: ReportSectionId[] = [
+  "exec",
+  "tech",
+  "pages",
+  "wcag",
+  "roadmap",
+  "checklist",
+  "disclaimer",
+];
+
+/** Disclaimer is always included; unknown ids from older docs are dropped. */
+function resolveSections(input: ReportInput): Set<string> {
+  const explicit = (input.sections ?? []).filter((s) =>
+    (ALL_SECTIONS as string[]).includes(s)
+  );
+  if (explicit.length > 0) return new Set([...explicit, "disclaimer"]);
+  if (input.reportType === "executive") {
+    return new Set(["exec", "roadmap", "checklist", "disclaimer"]);
+  }
+  return new Set(ALL_SECTIONS);
 }
 
 const DISCLAIMER = COMPLIANCE_COPY.REPORT_NOT_LEGAL;
 
 export function renderHtml(input: ReportInput): string {
   const sevCount = input.counts;
+  const evidenceCount = input.issues.filter((i) => i.evidence).length;
   const issuesBySeverity = ["critical", "moderate", "minor", "review"].map((sev) => ({
     sev,
     items: input.issues.filter((i) => i.severity === sev),
   }));
+  const groups = input.groups ?? [];
+  const useGroups = groups.length > 0;
+  const issuesByGroup = new Map<string, ReportInputIssue[]>();
+  for (const issue of input.issues) {
+    if (!issue.groupId) continue;
+    const bucket = issuesByGroup.get(issue.groupId);
+    if (bucket) bucket.push(issue);
+    else issuesByGroup.set(issue.groupId, [issue]);
+  }
+  const topFixes = groups.filter((g) => g.severity !== "review").slice(0, 5);
+
+  const enabled = resolveSections(input);
+  const has = (id: ReportSectionId) => enabled.has(id);
+  const hasTech = has("tech");
+  let sectionNo = 0;
+  const num = () => ++sectionNo;
 
   return `<!doctype html>
 <html lang="en">
@@ -78,6 +157,10 @@ export function renderHtml(input: ReportInput): string {
   .pill-moderate { background: #FBF1DE; color: #8C6217; }
   .pill-minor    { background: #EEF3FF; color: #2A50BF; }
   .pill-review   { background: #EFEDFE; color: #5E4FD9; }
+  .evidence { margin-top: 8px; }
+  .evidence img { max-width: 100%; border: 1px solid #E4E8F0; border-radius: 6px; display: block; }
+  .evidence-meta { font-size: 11px; color: #4B5570; margin-top: 4px; }
+  .redacted { display: inline-block; background: #F8E5E9; color: #8A2F40; border-radius: 4px; padding: 0 6px; font-size: 10px; font-weight: 600; }
   .disclaimer { margin-top: 48px; padding: 18px; border-top: 1px solid #E4E8F0; color: #4B5570; font-size: 12px; }
   @media print {
     body { background: #fff; }
@@ -96,9 +179,9 @@ export function renderHtml(input: ReportInput): string {
     scanned ${input.scanDate.toLocaleDateString()}
   </p>
 
-  <h2>1. Executive summary</h2>
+  ${!has("exec") ? "" : `<h2>${num()}. Executive summary</h2>
   <p>
-    AccessOps AI scanned <strong>${input.pagesScanned}</strong> page(s) of
+    Percevia AI scanned <strong>${input.pagesScanned}</strong> page(s) of
     <code>${escapeHtml(input.baseUrl)}</code> against WCAG 2.2 AA-oriented checks via axe-core.
     The scan surfaced ${sevCount.critical + sevCount.moderate + sevCount.minor + sevCount.review}
     automated findings, of which ${sevCount.critical} are critical and ${sevCount.moderate} are
@@ -110,20 +193,65 @@ export function renderHtml(input: ReportInput): string {
     <div class="stat mod"><div class="n">${sevCount.moderate}</div><div class="l">Moderate</div></div>
     <div class="stat min"><div class="n">${sevCount.minor}</div><div class="l">Minor</div></div>
     <div class="stat rev"><div class="n">${sevCount.review}</div><div class="l">Needs review</div></div>
-  </div>
+  </div>`}
 
-  <h2>2. Scan scope &amp; limitations</h2>
+  <h2>${num()}. Scan scope &amp; limitations</h2>
   <ul>
     <li>Pages scanned: ${input.pagesScanned}</li>
     <li>Standard: WCAG 2.2 AA-oriented (axe-core ruleset)</li>
     <li>Automated tools detect ~30–50% of accessibility issues; human review remains required.</li>
     <li>Authenticated pages and visual issues that require manual inspection were not covered.</li>
+    ${evidenceCount > 0 ? `<li>${evidenceCount} finding(s) include diagnostic visual evidence (screenshots); sensitive regions are redacted where detected.</li>` : ""}
   </ul>
 
-  <h2>3. Findings by severity</h2>
-  ${issuesBySeverity
-    .map(
-      ({ sev, items }) => `
+  ${
+    hasTech && useGroups && topFixes.length > 0
+      ? `<h2>${num()}. Top priority fixes</h2>
+  <p>Findings are grouped by root cause. Fixing these collapses the most instances at once.</p>
+  <ol>
+    ${topFixes
+      .map(
+        (g) =>
+          `<li><strong>${escapeHtml(g.title)}</strong> — ${g.affectedCount} instance(s) · <code>${escapeHtml(g.ruleId)}</code></li>`
+      )
+      .join("")}
+  </ol>`
+      : ""
+  }
+
+  ${!hasTech ? "" : `<h2>${num()}. Findings ${useGroups ? "by root cause" : "by severity"}</h2>`}
+  ${
+    !hasTech
+      ? ""
+      : useGroups
+      ? groups
+          .map((g) => {
+            const items = issuesByGroup.get(g.id) ?? [];
+            if (!items.length) return "";
+            const sev = g.severity;
+            const pages = Array.from(
+              new Set(items.map((i) => i.pageUrl).filter(Boolean))
+            ) as string[];
+            const evidenceItem = items.find((i) => i.evidence);
+            return `
+    <h3><span class="pill pill-${sev}">${capitalize(sev)}</span> ${escapeHtml(g.title)} <span style="color:#6B7590;font-weight:400">(${g.affectedCount} instance${g.affectedCount === 1 ? "" : "s"})</span></h3>
+    <p style="color:#6B7590;font-size:13px;margin:4px 0">
+      <code>${escapeHtml(g.ruleId)}</code> · ${escapeHtml(g.primaryWcagTag ?? "—")}${g.recommendedFix ? ` · ${escapeHtml(g.recommendedFix)}` : ""}
+    </p>
+    ${
+      pages.length
+        ? `<p style="font-size:12px;color:#4B5570">Affected pages: ${pages
+            .slice(0, 8)
+            .map((p) => `<code>${escapeHtml(p)}</code>`)
+            .join(", ")}${pages.length > 8 ? ` +${pages.length - 8} more` : ""}</p>`
+        : ""
+    }
+    ${evidenceItem ? renderEvidence(evidenceItem) : ""}`;
+          })
+          .join("")
+      : issuesBySeverity
+          .map(
+            ({ sev, items }) => `
     <h3>${capitalize(sev)} (${items.length})</h3>
     ${
       items.length === 0
@@ -138,7 +266,7 @@ export function renderHtml(input: ReportInput): string {
             <td><span class="pill pill-${sev}">${capitalize(sev)}</span><br/><code>${escapeHtml(i.ruleId)}</code></td>
             <td><code>${escapeHtml(i.pageUrl ?? "")}</code></td>
             <td><code>${escapeHtml(i.wcagTags.join(" ") || "—")}</code></td>
-            <td>${escapeHtml(i.help)}<br/><span style="color:#6B7590;font-size:12px">${escapeHtml(i.description)}</span></td>
+            <td>${escapeHtml(i.help)}<br/><span style="color:#6B7590;font-size:12px">${escapeHtml(i.description)}</span>${renderEvidence(i)}</td>
           </tr>`
           )
           .join("")}
@@ -146,33 +274,49 @@ export function renderHtml(input: ReportInput): string {
     </table>`
     }
   `
-    )
-    .join("")}
+          )
+          .join("")
+  }
 
-  <h2>4. Remediation roadmap</h2>
+  ${has("pages") && input.issues.length > 0 ? pagesSection(input, num()) : ""}
+  ${has("wcag") && input.issues.length > 0 ? wcagSection(input, num()) : ""}
+  ${!has("roadmap") ? "" : `<h2>${num()}. Remediation roadmap</h2>
   <ol>
     <li><strong>Week 1 — Critical blockers.</strong> Address every critical finding before non-critical work.</li>
     <li><strong>Week 2 — Forms &amp; keyboard.</strong> Fix form labels, focus visibility, and keyboard traps.</li>
     <li><strong>Week 3 — Structure.</strong> Headings, landmarks, page titles, language attributes.</li>
     <li><strong>Ongoing.</strong> Manual screen-reader pass per release; quarterly multi-page scans.</li>
-  </ol>
+  </ol>`}
 
-  <h2>5. Human review checklist</h2>
+  ${!has("checklist") ? "" : `<h2>${num()}. Human review checklist</h2>
   <ul>
     <li>Keyboard-only walkthrough of primary user journeys</li>
     <li>Screen reader pass on home, product detail, checkout</li>
     <li>Mobile gesture and zoom test at 200% and 400%</li>
     <li>Reduced-motion preference verification</li>
     <li>Color/contrast manual sampling on hover, focus, and error states</li>
-  </ul>
+  </ul>`}
 
-  <div class="disclaimer">${escapeHtml(DISCLAIMER)}</div>
+  <div class="disclaimer">
+    ${escapeHtml(DISCLAIMER)}
+    <p style="margin-top:10px;color:#6B7590">${
+      input.agencyBranding
+        ? `Prepared by ${escapeHtml(input.workspaceName)}.`
+        : `Prepared with Percevia AI by ${escapeHtml(input.workspaceName)}.`
+    }</p>
+  </div>
 </main>
 </body>
 </html>`;
 }
 
+/**
+ * Per-instance CSV — one row per affected element. Each row also carries
+ * its root-cause group columns (id / title / affected count) so the flat
+ * export can be pivoted back into the grouped view in a spreadsheet.
+ */
 export function renderCsv(input: ReportInput): string {
+  const groupById = new Map((input.groups ?? []).map((g) => [g.id, g]));
   const header = [
     "issue_id",
     "rule_id",
@@ -180,25 +324,180 @@ export function renderCsv(input: ReportInput): string {
     "impact",
     "wcag_tags",
     "page_url",
+    "page_title",
     "description",
     "help",
     "help_url",
+    "html_snippet",
+    "has_screenshot",
+    "screenshot_redacted",
+    "group_id",
+    "group_title",
+    "group_affected_count",
   ];
-  const rows = input.issues.map((i) => [
-    i.id,
-    i.ruleId,
-    i.severity,
-    i.impact,
-    i.wcagTags.join(";"),
-    i.pageUrl ?? "",
-    i.description.replace(/\s+/g, " ").trim(),
-    i.help.replace(/\s+/g, " ").trim(),
-    i.helpUrl ?? "",
-  ]);
+  const rows = input.issues.map((i) => {
+    const group = i.groupId ? groupById.get(i.groupId) : undefined;
+    return [
+      i.id,
+      i.ruleId,
+      i.severity,
+      i.impact,
+      i.wcagTags.join(";"),
+      i.pageUrl ?? "",
+      i.pageTitle ?? "",
+      i.description.replace(/\s+/g, " ").trim(),
+      i.help.replace(/\s+/g, " ").trim(),
+      i.helpUrl ?? "",
+      (i.htmlSnippet ?? "").replace(/\s+/g, " ").trim().slice(0, 500),
+      i.evidence ? "yes" : "no",
+      i.evidence?.redactionApplied ? "yes" : "no",
+      i.groupId ?? "",
+      group?.title ?? "",
+      group ? String(group.affectedCount) : "",
+    ];
+  });
   const all = [header, ...rows, ["DISCLAIMER", DISCLAIMER]];
   return all
     .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
     .join("\n");
+}
+
+/**
+ * Machine-readable JSON export: normalized + grouped issues with
+ * screenshot metadata. Screenshot binaries are intentionally excluded
+ * (only metadata is emitted) to keep the payload lean; the HTML/PDF
+ * exports carry the embedded images.
+ */
+export function renderJson(input: ReportInput): string {
+  const instanceIdsByGroup = new Map<string, string[]>();
+  for (const i of input.issues) {
+    if (!i.groupId) continue;
+    const arr = instanceIdsByGroup.get(i.groupId);
+    if (arr) arr.push(i.id);
+    else instanceIdsByGroup.set(i.groupId, [i.id]);
+  }
+
+  const payload = {
+    schemaVersion: "percevia-report-v1",
+    report: {
+      title: input.title,
+      workspaceName: input.workspaceName,
+      generatedAt: new Date().toISOString(),
+    },
+    scan: {
+      id: input.scanId,
+      baseUrl: input.baseUrl,
+      pagesScanned: input.pagesScanned,
+      scanDate: input.scanDate.toISOString(),
+    },
+    summary: {
+      counts: input.counts,
+      total:
+        input.counts.critical +
+        input.counts.moderate +
+        input.counts.minor +
+        input.counts.review,
+    },
+    groups: (input.groups ?? []).map((g) => ({
+      id: g.id,
+      ruleId: g.ruleId,
+      title: g.title,
+      severity: g.severity,
+      affectedCount: g.affectedCount,
+      primaryWcagTag: g.primaryWcagTag,
+      recommendedFix: g.recommendedFix,
+      priority: g.priority,
+      instanceIds: instanceIdsByGroup.get(g.id) ?? [],
+    })),
+    issues: input.issues.map((i) => ({
+      id: i.id,
+      groupId: i.groupId ?? null,
+      ruleId: i.ruleId,
+      severity: i.severity,
+      impact: i.impact,
+      wcagTags: i.wcagTags,
+      pageUrl: i.pageUrl,
+      pageTitle: i.pageTitle,
+      description: i.description,
+      help: i.help,
+      helpUrl: i.helpUrl ?? null,
+      htmlSnippet: i.htmlSnippet ?? null,
+      screenshot: i.evidence
+        ? {
+            captured: true,
+            selector: i.evidence.selector,
+            redactionApplied: i.evidence.redactionApplied,
+          }
+        : { captured: false },
+    })),
+    disclaimer: DISCLAIMER,
+  };
+  return JSON.stringify(payload, null, 2);
+}
+
+function pagesSection(input: ReportInput, n: number): string {
+  const byPage = new Map<
+    string,
+    { critical: number; moderate: number; minor: number; review: number }
+  >();
+  for (const issue of input.issues) {
+    const key = issue.pageUrl ?? input.baseUrl;
+    const row = byPage.get(key) ?? { critical: 0, moderate: 0, minor: 0, review: 0 };
+    if (issue.severity in row) row[issue.severity as keyof typeof row] += 1;
+    byPage.set(key, row);
+  }
+  if (byPage.size === 0) return "";
+  return `
+  <h2>${n}. Findings by page</h2>
+  <table>
+    <thead><tr><th>Page</th><th>Critical</th><th>Moderate</th><th>Minor</th><th>Review</th></tr></thead>
+    <tbody>
+      ${[...byPage.entries()]
+        .map(
+          ([url, c]) =>
+            `<tr><td><code>${escapeHtml(url)}</code></td><td>${c.critical}</td><td>${c.moderate}</td><td>${c.minor}</td><td>${c.review}</td></tr>`
+        )
+        .join("")}
+    </tbody>
+  </table>`;
+}
+
+function wcagSection(input: ReportInput, n: number): string {
+  const byTag = new Map<string, number>();
+  for (const issue of input.issues) {
+    for (const tag of issue.wcagTags.filter((t) => /^wcag/.test(t))) {
+      byTag.set(tag, (byTag.get(tag) ?? 0) + 1);
+    }
+  }
+  if (byTag.size === 0) return "";
+  const rows = [...byTag.entries()].sort((a, b) => b[1] - a[1]);
+  return `
+  <h2>${n}. WCAG mapping</h2>
+  <table>
+    <thead><tr><th>WCAG tag</th><th>Findings</th></tr></thead>
+    <tbody>
+      ${rows
+        .map(
+          ([tag, count]) =>
+            `<tr><td><code>${escapeHtml(tag)}</code></td><td>${count}</td></tr>`
+        )
+        .join("")}
+    </tbody>
+  </table>`;
+}
+
+function renderEvidence(i: ReportInputIssue): string {
+  if (!i.evidence) return "";
+  const selector = i.evidence.selector
+    ? `<span class="evidence-meta">Selector: <code>${escapeHtml(i.evidence.selector)}</code></span>`
+    : "";
+  const redacted = i.evidence.redactionApplied
+    ? `<span class="redacted">Sensitive regions redacted</span>`
+    : "";
+  return `<div class="evidence">
+    <img src="${i.evidence.dataUri}" alt="Visual evidence for ${escapeHtml(i.ruleId)}" />
+    <div class="evidence-meta">${selector} ${redacted}</div>
+  </div>`;
 }
 
 function escapeHtml(s: string): string {

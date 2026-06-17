@@ -1,3 +1,4 @@
+import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 interface LogoProps {
@@ -8,32 +9,27 @@ interface LogoProps {
 export function Logo({ variant = "wordmark", className }: LogoProps) {
   if (variant === "mark") {
     return (
-      <svg
-        viewBox="0 0 48 48"
-        className={cn("size-8", className)}
-        role="img"
-        aria-label="maitrico"
-      >
-        <rect x="0" y="0" width="48" height="48" rx="12" fill="#0B1220" />
-        <path
-          d="M12 34V14h4l6 10 6-10h4v20h-4V21l-5 8h-2l-5-8v13h-4z"
-          fill="#F7F8FB"
-        />
-        <circle cx="38" cy="14" r="4" fill="#7A6CF0" />
-      </svg>
+      <Image
+        src="/brand/percevia-logo.png"
+        alt="percevia"
+        width={620}
+        height={620}
+        priority
+        className={cn("size-10 shrink-0 bg-black object-contain", className)}
+      />
     );
   }
 
   if (variant === "lockup") {
     return (
       <div className={cn("inline-flex items-center gap-3", className)}>
-        <Logo variant="mark" className="size-9" />
-        <div className="flex items-baseline gap-2.5">
+        <Logo variant="mark" className="size-12" />
+        <div className="flex flex-col leading-none">
           <span className="text-[22px] font-semibold tracking-tight text-navy-900">
-            maitrico
+            percevia
           </span>
-          <span className="inline-flex items-center rounded-full bg-purple-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-purple-600 ring-1 ring-purple-100">
-            AccessOps AI
+          <span className="mt-1 text-[10px] font-semibold uppercase tracking-wider text-purple-600">
+            maitrico.
           </span>
         </div>
       </div>
@@ -44,14 +40,14 @@ export function Logo({ variant = "wordmark", className }: LogoProps) {
 
   return (
     <div className={cn("inline-flex items-center gap-2.5", className)}>
-      <Logo variant="mark" className="size-7" />
+      <Logo variant="mark" className="size-10" />
       <span
         className={cn(
           "text-[19px] font-semibold tracking-tight",
           textColor
         )}
       >
-        maitrico
+        percevia
       </span>
     </div>
   );
@@ -65,7 +61,7 @@ export function ProductBadge({ className }: { className?: string }) {
         className
       )}
     >
-      AccessOps AI
+      Percevia AI
     </span>
   );
 }

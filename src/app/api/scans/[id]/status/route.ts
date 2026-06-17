@@ -1,13 +1,9 @@
-/**
- * GET /api/scans/:id/status — lightweight polling endpoint used by
- * the Scan Progress UI. Returns only the fields needed to render the
- * timeline so we don't push a heavy payload every few seconds.
- */
 import { NextRequest } from "next/server";
-import { and, eq } from "drizzle-orm";
-import { db } from "@/lib/db";
-import { scanJobs } from "@/lib/db/schema";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { getScanJob } from "@/lib/data/firestore";
+import { isScanWorkerHeartbeatStale } from "@/lib/data/scan-lifecycle";
+
+export const maxDuration = 60;
 
 export async function GET(
   _req: NextRequest,
@@ -16,25 +12,37 @@ export async function GET(
   try {
     const ctx = await requireSession();
     const { id } = await params;
-    const [job] = await db
-      .select({
-        id: scanJobs.id,
-        status: scanJobs.status,
-        progressStep: scanJobs.progressStep,
-        pagesScanned: scanJobs.pagesScanned,
-        pagesDiscovered: scanJobs.pagesDiscovered,
-        startedAt: scanJobs.startedAt,
-        completedAt: scanJobs.completedAt,
-        errorMessage: scanJobs.errorMessage,
-      })
-      .from(scanJobs)
-      .where(and(eq(scanJobs.id, id), eq(scanJobs.workspaceId, ctx.workspaceId)))
-      .limit(1);
-
+    const job = await getScanJob(ctx.workspaceId, id);
     if (!job) throw new ApiError(404, "not_found");
-    return Response.json(job, {
-      headers: { "cache-control": "no-store" },
-    });
+    const workerHeartbeatStale = isScanWorkerHeartbeatStale(job);
+
+    return Response.json(
+      {
+        id: job.id,
+        status: job.status,
+        phase: job.phase ?? null,
+        progressStep: job.progressStep,
+        pagesScanned: job.pagesScanned,
+        pagesDiscovered: job.pagesDiscovered,
+        pagesDone: job.pagesDone ?? job.pagesScanned,
+        pagesFailed: job.pagesFailed ?? 0,
+        pagesTotal:
+          job.pagesTotal ?? Math.max(job.pagesScanned, job.pagesDiscovered),
+        currentUrl: job.currentUrl ?? null,
+        currentStep: job.currentStep ?? job.progressStep,
+        currentState: job.currentState ?? null,
+        startedAt: job.startedAt,
+        completedAt: job.completedAt,
+        lastProgressAt: job.lastProgressAt ?? null,
+        errorMessage: job.errorMessage,
+        errorCode: job.errorCode ?? null,
+        queueAttempts: job.queueAttempts ?? 0,
+        processorStartedAt: job.processorStartedAt,
+        processorHeartbeatAt: job.processorHeartbeatAt,
+        workerHeartbeatStale,
+      },
+      { headers: { "cache-control": "no-store" } }
+    );
   } catch (err) {
     return apiError(err);
   }

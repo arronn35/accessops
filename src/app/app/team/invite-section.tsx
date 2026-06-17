@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { Mail, Trash2 } from "lucide-react";
+import { sendInviteEmail } from "@/lib/firebase/invite-email";
 
 interface Invitation {
   id: string;
@@ -10,15 +11,16 @@ interface Invitation {
   status: string;
   createdAt: string;
   expiresAt: string;
+  inviteUrl?: string;
 }
 
-const ROLE_OPTIONS = [
-  { value: "admin", label: "Admin" },
-  { value: "developer", label: "Developer" },
-  { value: "auditor", label: "Auditor" },
-  { value: "client_viewer", label: "Client viewer" },
-  { value: "report_viewer", label: "Report viewer" },
-];
+const ROLE_LABEL: Record<string, string> = {
+  admin: "Admin",
+  developer: "Developer",
+  auditor: "Auditor",
+  client_viewer: "Client viewer",
+  report_viewer: "Report viewer",
+};
 
 /**
  * Invite UI for the Team page. Owners/admins only — the page renders
@@ -27,9 +29,27 @@ const ROLE_OPTIONS = [
  * DELETE and filter the list. Everything else (membership rows in the
  * Members table above) stays server-rendered.
  */
-export function InviteSection({ canInvite }: { canInvite: boolean }) {
+export function InviteSection({
+  canInvite,
+  allowedRoles,
+  seatsRemaining,
+  planName,
+  memberLimit,
+}: {
+  canInvite: boolean;
+  allowedRoles: string[];
+  seatsRemaining: number;
+  planName: string;
+  memberLimit: number;
+}) {
+  const roleOptions = allowedRoles
+    .filter((r) => ROLE_LABEL[r])
+    .map((r) => ({ value: r, label: ROLE_LABEL[r] }));
+  const defaultRole = roleOptions.find((r) => r.value === "developer")?.value
+    ?? roleOptions[0]?.value
+    ?? "";
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState("developer");
+  const [role, setRole] = useState(defaultRole);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
@@ -78,14 +98,21 @@ export function InviteSection({ canInvite }: { canInvite: boolean }) {
           status: "pending",
           createdAt: new Date().toISOString(),
           expiresAt: data.expiresAt,
+          inviteUrl: data.inviteUrl,
         },
         ...prev,
       ]);
       setEmail("");
+      // Delivery goes through Firebase Auth's email-link service from the
+      // browser — no SMTP provider involved. On failure we fall back to
+      // manual link sharing (the pending list always shows the URL).
+      const emailSent = data.inviteUrl
+        ? await sendInviteEmail(data.email, data.inviteUrl)
+        : false;
       setInfo(
-        data.emailSent
-          ? `Invite emailed to ${data.email}.`
-          : `Invite created for ${data.email}. Email delivery was not configured, so share the link with them manually.`
+        emailSent
+          ? `Invite emailed to ${data.email}. They'll sign in from the link and land on the invitation.`
+          : `Invite created for ${data.email}, but the email could not be sent automatically — share the link below with them manually.`
       );
     } catch (err) {
       setError((err as Error).message ?? "Network error");
@@ -118,8 +145,25 @@ export function InviteSection({ canInvite }: { canInvite: boolean }) {
     );
   }
 
+  if (roleOptions.length === 0) {
+    return (
+      <p className="text-xs text-ink-500">
+        The current plan ({planName}) is single-seat. Upgrade to invite
+        teammates.
+      </p>
+    );
+  }
+
+  const outOfSeats = seatsRemaining <= 0;
+
   return (
     <div className="space-y-5">
+      {outOfSeats && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 text-xs p-3">
+          You&apos;ve used all {memberLimit} seat(s) on the {planName} plan.
+          Upgrade your plan to invite more teammates.
+        </div>
+      )}
       <form
         onSubmit={submit}
         className="grid sm:grid-cols-[1fr_180px_auto] gap-2 items-end"
@@ -154,7 +198,7 @@ export function InviteSection({ canInvite }: { canInvite: boolean }) {
             onChange={(e) => setRole(e.target.value)}
             className="w-full h-10 px-2 rounded-md ring-1 ring-line bg-paper text-sm"
           >
-            {ROLE_OPTIONS.map((o) => (
+            {roleOptions.map((o) => (
               <option key={o.value} value={o.value}>
                 {o.label}
               </option>
@@ -163,7 +207,7 @@ export function InviteSection({ canInvite }: { canInvite: boolean }) {
         </div>
         <button
           type="submit"
-          disabled={busy}
+          disabled={busy || outOfSeats}
           className="inline-flex items-center gap-1.5 h-10 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 disabled:opacity-50"
         >
           <Mail className="size-4" aria-hidden />
@@ -202,6 +246,9 @@ export function InviteSection({ canInvite }: { canInvite: boolean }) {
                   <p className="text-xs text-ink-500">
                     {inv.role} · expires {new Date(inv.expiresAt).toLocaleDateString()}
                   </p>
+                  {inv.inviteUrl && (
+                    <p className="text-xs text-blue-600 truncate">{inv.inviteUrl}</p>
+                  )}
                 </div>
                 <button
                   type="button"

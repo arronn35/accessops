@@ -6,10 +6,10 @@ export const COMPLIANCE_COPY = {
   POSITIONING: "Accessibility operations, not one-click compliance.",
 
   NO_GUARANTEE_SHORT:
-    "AccessOps AI helps identify and manage accessibility issues. It does not guarantee legal compliance.",
+    "Percevia AI helps identify and manage accessibility issues. It does not guarantee legal compliance.",
 
   NO_GUARANTEE_FULL:
-    "AccessOps AI helps identify and manage accessibility issues. Automated tools cannot detect every accessibility issue, and this product does not guarantee ADA, EAA, WCAG, Section 508, or EN 301 549 compliance. Consult a qualified accessibility or legal professional for formal compliance claims.",
+    "Percevia AI helps identify and manage accessibility issues. Automated tools cannot detect every accessibility issue, and this product does not guarantee ADA, EAA, WCAG, Section 508, or EN 301 549 compliance. Consult a qualified accessibility or legal professional for formal compliance claims.",
 
   AUTOMATED_LIMITATIONS:
     "Automated accessibility scanning has limitations. Human review may be required to verify findings and identify issues that automated checks cannot detect.",
@@ -32,13 +32,13 @@ export const COMPLIANCE_COPY = {
     "Do not scan private dashboards or pages containing sensitive personal data. Use authenticated scanning carefully and only on properties you own or operate.",
 
   ONBOARDING_BOUNDARY:
-    "AccessOps AI helps you identify and manage accessibility issues. It does not provide legal certification or guarantee compliance with any specific law, regulation, or standard.",
+    "Percevia AI helps you identify and manage accessibility issues. It does not provide legal certification or guarantee compliance with any specific law, regulation, or standard.",
 
   ONBOARDING_ACK:
     "I understand that automated accessibility scanning has limitations and that human review may be required.",
 
   OVERLAY_STANCE:
-    "AccessOps AI is not an accessibility overlay. We do not recommend overlay-only fixes as a substitute for real remediation.",
+    "Percevia AI is not an accessibility overlay. We do not recommend overlay-only fixes as a substitute for real remediation.",
 
   DELETE_SCAN_WARNING:
     "Deleting scan data is permanent. Reports built from this scan will lose their underlying findings.",
