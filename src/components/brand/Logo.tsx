@@ -2,11 +2,26 @@ import Image from "next/image";
 import { cn } from "@/lib/utils";
 
 interface LogoProps {
-  variant?: "wordmark" | "mark" | "lockup" | "wordmark-light";
+  variant?: "wordmark" | "mark" | "lockup" | "wordmark-light" | "site";
   className?: string;
 }
 
 export function Logo({ variant = "wordmark", className }: LogoProps) {
+  // The public-site lockup: square mark offset in accent, heavy wordmark.
+  if (variant === "site") {
+    return (
+      <span className={cn("inline-flex items-center gap-3", className)}>
+        <Logo
+          variant="mark"
+          className="size-8 shadow-[5px_5px_0_var(--color-accent)]"
+        />
+        <span className="text-[17px] sm:text-[19px] font-extrabold tracking-[-0.03em] text-navy-900">
+          Percevia AI
+        </span>
+      </span>
+    );
+  }
+
   if (variant === "mark") {
     return (
       <Image

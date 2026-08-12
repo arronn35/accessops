@@ -1,36 +1,71 @@
+import { z } from "zod";
 import { apiError, ApiError, rateLimitError, requireSession } from "@/lib/api/context";
 import { checkRateLimit } from "@/lib/api/rate-limit";
 import { roleHasPermission } from "@/lib/entitlements";
 import { explainIssue, AiUnavailableError } from "@/lib/ai/explain";
-import { audit, findIssueInWorkspace, getPrivacySettings } from "@/lib/data/firestore";
+import { audit, getIssue, getPrivacySettings, getScanJob } from "@/lib/data/firestore";
+
+const BodySchema = z
+  .object({
+    scanJobId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(120)
+      .regex(/^[A-Za-z0-9_-]+$/),
+    // Backward-compatible field name: this acknowledges output limitations;
+    // workspace and scan settings remain the data-processing consent gates.
+    consentChecked: z.literal(true),
+    framework: z
+      .enum(["react", "html", "shopify", "wordpress", "webflow", "framer"])
+      .default("react"),
+    mode: z
+      .enum(["issue", "react", "client", "test", "html", "shopify", "wordpress"])
+      .default("issue"),
+    prompt: z.string().trim().max(2000).optional(),
+  })
+  .strict();
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireSession();
     if (!roleHasPermission(ctx.role, "view_ai")) throw new ApiError(403, "forbidden");
     const { id } = await params;
-    const found = await findIssueInWorkspace(ctx.workspaceId, id);
-    if (!found) throw new ApiError(404, "not_found");
-    const privacy = await getPrivacySettings(ctx.workspaceId);
+
+    const parsed = BodySchema.safeParse(await req.json().catch(() => undefined));
+    if (!parsed.success) throw new ApiError(400, "invalid_input");
+
+    const rl = await checkRateLimit("aiExplain", ctx.workspaceId);
+    if (!rl.ok) throw rateLimitError(rl.reset, rl.remaining, "Too many AI requests recently.");
+
+    const input = parsed.data;
+    const [scan, issue, privacy] = await Promise.all([
+      getScanJob(ctx.workspaceId, input.scanJobId),
+      getIssue(ctx.workspaceId, input.scanJobId, id),
+      getPrivacySettings(ctx.workspaceId),
+    ]);
+    if (!scan || !issue) throw new ApiError(404, "not_found");
     if (!privacy.aiProcessingEnabled) {
       throw new ApiError(409, "ai_processing_disabled", "Enable AI processing in Privacy & Compliance first.");
     }
-    const rl = await checkRateLimit("aiExplain", ctx.userId);
-    if (!rl.ok) throw rateLimitError(rl.reset, rl.remaining, "Too many AI requests recently.");
-    const body = (await req.json().catch(() => ({}))) as {
-      framework?: string;
-      mode?: "issue" | "react" | "client" | "test" | "html" | "shopify" | "wordpress";
-      prompt?: string;
-    };
+    if (!scan.aiExplanationsEnabled) {
+      throw new ApiError(
+        409,
+        "ai_disabled_for_scan",
+        "This scan was started with AI explanations turned off."
+      );
+    }
+
+    const outputAcknowledgedAt = new Date().toISOString();
     const explanation = await explainIssue({
-      ruleId: found.issue.ruleId,
-      description: found.issue.description,
-      help: found.issue.help,
-      wcagTags: found.issue.wcagTagsJson,
-      htmlSnippet: found.issue.htmlSnippet ?? undefined,
-      framework: body.framework,
-      mode: body.mode,
-      userPrompt: body.prompt,
+      ruleId: issue.ruleId,
+      description: issue.description,
+      help: issue.help,
+      wcagTags: issue.wcagTagsJson,
+      htmlSnippet: issue.htmlSnippet ?? undefined,
+      framework: input.framework,
+      mode: input.mode,
+      userPrompt: input.prompt,
     });
     await audit({
       userId: ctx.userId,
@@ -38,13 +73,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       action: "ai.explain",
       resourceType: "issue",
       resourceId: id,
-      metadata: { provider: explanation.modelProvider, model: explanation.model ?? null },
+      metadata: {
+        provider: explanation.modelProvider,
+        model: explanation.model ?? null,
+        scanId: scan.id,
+        outputAcknowledgedAt,
+      },
     });
     const payload = {
-        ...explanation,
-        framework: body.framework ?? null,
-        createdAt: new Date().toISOString(),
-      };
+      ...explanation,
+      framework: input.framework,
+      createdAt: new Date().toISOString(),
+    };
     return Response.json({ explanation: payload, aiExplanation: payload });
   } catch (err) {
     if (err instanceof AiUnavailableError) {

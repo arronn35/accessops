@@ -145,9 +145,9 @@ export function FirebaseSignInForm() {
 
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
-      <header className="bg-paper border-b border-line">
+      <header className="bg-paper border-b border-rule">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/"><Logo variant="wordmark" /></Link>
+          <Link href="/"><Logo variant="site" /></Link>
           <Link href="/" className="text-xs text-ink-600 hover:text-ink-900">
             Back home
           </Link>
@@ -184,7 +184,7 @@ export function FirebaseSignInForm() {
           </AlertCallout>
         )}
 
-        <form onSubmit={sendEmailLink} className="mt-6 space-y-4 bg-paper rounded-lg ring-1 ring-line p-6">
+        <form onSubmit={sendEmailLink} className="mt-6 space-y-4 bg-paper border border-rule p-6">
           <div>
             <Label htmlFor="email" required>Email address</Label>
             <Input
@@ -205,7 +205,7 @@ export function FirebaseSignInForm() {
           <button
             type="submit"
             disabled={!configured || status === "sending" || status === "signing-in"}
-            className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 disabled:opacity-60"
+            className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-bold hover:bg-navy-800 disabled:opacity-60"
           >
             <Mail className="size-4" aria-hidden />
             {pendingLink
@@ -227,7 +227,7 @@ export function FirebaseSignInForm() {
           type="button"
           onClick={() => void githubSignIn()}
           disabled={!configured || status === "signing-in"}
-          className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-900 hover:bg-canvas-2 disabled:opacity-60"
+          className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 border border-rule bg-paper text-sm font-medium text-ink-900 hover:bg-canvas-2 disabled:opacity-60"
         >
           {status === "signing-in" ? "Signing in..." : "Continue with GitHub"}
           <ArrowRight className="size-4" aria-hidden />

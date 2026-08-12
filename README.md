@@ -9,8 +9,8 @@ Privacy-first accessibility operations SaaS. Percevia AI helps teams run bounded
 | Web hosting | Vercel + Next.js App Router |
 | Auth | Firebase Auth, email link + GitHub provider |
 | Data | Firebase Firestore via Firebase Admin SDK |
-| Dispatch | Firestore polling (`queued` scan jobs) |
-| Scan processor | Dedicated browser worker container running Playwright + axe-core |
+| Dispatch | Google Cloud Tasks + recovery/monitor Cloud Scheduler jobs |
+| Scan processor | Private Google Cloud Run worker running Playwright + axe-core |
 | Storage | No external screenshot/PDF storage in V1 |
 
 ## Local Setup
@@ -33,7 +33,7 @@ Required local env for signed-in app flows:
 - `FIREBASE_SESSION_COOKIE_NAME=percevia_session`
 - `FIREBASE_SESSION_DAYS=7`
 
-Browser worker processing requires:
+Local poll-worker processing requires:
 
 - `FIREBASE_PROJECT_ID`
 - `FIREBASE_CLIENT_EMAIL`
@@ -43,7 +43,7 @@ Browser worker processing requires:
 ## Scan Flow
 
 1. `POST /api/scans` validates the URL, checks workspace membership, enforces quota, and creates a Firestore scan job with `status: "queued"`.
-2. The dedicated browser worker polls Firestore, atomically claims queued jobs, and flips them to `running`.
+2. The web app enqueues a Cloud Task. Cloud Tasks invokes the private Cloud Run worker through OIDC.
 3. The worker runs the Playwright + axe-core scanner and persists pages, grouped issues, and summaries in Firestore.
 4. The progress UI polls `GET /api/scans/:id/status` until the job moves `queued -> running -> completed`.
 
@@ -77,11 +77,16 @@ firebase deploy --only firestore:indexes
 Browser scan worker:
 
 ```bash
-docker build -f Dockerfile.worker -t percevia-worker .
-docker run --rm --env-file .env.local -e WORKER_HEALTH_PORT=3001 percevia-worker
+PROJECT=accessops-720e4 REGION=europe-west1 \
+TASK_CREATOR_SERVICE_ACCOUNT=<firebase-admin-service-account> \
+INTERNAL_WORKER_SECRET=<shared-secret> CRON_SECRET=<cron-secret> \
+VERCEL_APP_URL=https://percevia-chi.vercel.app \
+./scripts/deploy-cloud-run.sh
 ```
 
-Deploy `Dockerfile.worker` to Railway, Fly.io, Render, or Cloud Run and scale to at least one instance. See `docs/worker-deploy.md`.
+The script builds `Dockerfile.worker` with Cloud Build, deploys Cloud Run,
+creates the queue, service accounts, least-privilege IAM and both Scheduler
+jobs. See `docs/worker-deploy.md`.
 
 ## Verification
 

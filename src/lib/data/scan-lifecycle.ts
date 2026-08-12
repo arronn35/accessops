@@ -48,3 +48,16 @@ export function isScanWorkerHeartbeatStale(
   if (!reference) return true;
   return at - reference.getTime() > WORKER_STALE_RUNNING_MS;
 }
+
+export function isScanOwnedByWorker<
+  T extends Pick<ScanJob, "status" | "claimedBy">
+>(
+  job: T | null,
+  workerId: string
+): job is T {
+  return (
+    job?.status === "running" &&
+    Boolean(workerId) &&
+    job.claimedBy === workerId
+  );
+}

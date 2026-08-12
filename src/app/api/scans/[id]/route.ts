@@ -46,6 +46,8 @@ export async function GET(
             manualReviewCount: summary.manualReviewCount,
             categoryScores: summary.categoryScoresJson,
             pageScores: summary.pageScoresJson,
+            pagesFailedToScan: summary.pagesFailedToScan ?? 0,
+            failedPageUrls: summary.failedPageUrls ?? [],
             scoringVersion: summary.scoringVersion,
             createdAt: summary.createdAt,
           }

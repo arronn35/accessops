@@ -1,25 +1,53 @@
 # Browser scan worker — deployment
 
-The worker (`worker/index.ts`) is the production scan engine. It polls Firestore
-for `queued` scan jobs, claims them atomically, and runs the real
-Playwright + axe-core scanner. The Vercel web app only creates jobs; it never
-runs Chromium.
+The worker is the production scan engine: it claims `queued` scan jobs and runs
+the real Playwright + axe-core scanner. The Vercel web app only creates jobs; it
+never runs Chromium.
 
-## Architecture
+There are **two dispatch models**, selected by `SCAN_DISPATCH_MODE`:
+
+| Mode | Entrypoint | Host | Cost | Use |
+|---|---|---|---|---|
+| `cloud-tasks` (recommended) | `worker/serve.ts` | Cloud Run (scale-to-zero) | pay-per-scan (~$0 at low volume) | production |
+| `poll` (legacy) | `worker/index.ts` | any always-on container | fixed monthly | local / always-on |
+
+## Architecture — `cloud-tasks` (push, scale-to-zero)
+
+```
+Browser → POST /api/scans (Vercel) → Firestore scans/{id} status="queued"
+                                   └→ Cloud Tasks enqueue (POST /process)
+                                          │  durable delivery + retries
+                Cloud Run worker (Playwright image, serve.ts) wakes from zero
+                atomic claim → real axe scan → persist + complete → aggregate
+                                          │  scales back to zero when idle
+Cloud Scheduler (1–2 min) → POST /api/internal/scans/sweep (Vercel, no Chromium)
+                requeues stale/crashed jobs, fails timeouts, re-enqueues a task
+```
+
+`POST /api/scans` writes the `queued` job and enqueues a Cloud Task; the task
+wakes the Cloud Run worker, which **drains all claimable work** (scans, page
+jobs, one deletion job) then aggregates and returns. The enqueue is best-effort:
+if it fails the job stays `queued` and the **sweeper** re-enqueues it, so a scan
+is never stranded. Correctness across overlapping invocations is guaranteed by
+the same atomic Firestore claims the poller uses — every job runs at most once.
+
+The sweeper is browser-free Firestore bookkeeping: it requeues jobs whose
+heartbeat is older than `WORKER_STALE_RUNNING_MS`, fails repeatedly-stale and
+timed-out jobs, aggregates finished scans, and wakes the worker for any pending
+work. Running it on a Cloud Scheduler cron (not in-process) is what lets the
+heavy container scale to zero.
+
+## Architecture — `poll` (legacy, always-on)
 
 ```
 Browser → POST /api/scans (Vercel) → Firestore scans/{id} status="queued"
                                           │  poll + atomic claim
-                Worker container (Playwright image) → runScanJob()
-                real axe-core scan → persistScanOutcome() + completeScanJob()
-                                          │
-                status="completed", engine="playwright-axe"
+                Worker container (Playwright image, index.ts) → runScanJob()
 ```
 
-Dispatch is **Firestore polling** — there is no separate queue
-infrastructure. Concurrency is bounded by `WORKER_CONCURRENCY`. An independent
-60-second sweeper requeues crashed workers' jobs once their heartbeat is older
-than `WORKER_STALE_RUNNING_MS` and fails jobs cleanly after repeated reclaims.
+Dispatch is Firestore polling — no queue infrastructure, and an in-process
+60-second sweeper handles recovery. Set `SCAN_DISPATCH_MODE=poll` (or leave it
+unset) and run `worker/index.ts`. Override the Docker `CMD` to `tsx worker/index.ts`.
 
 ## Browser lifecycle & memory
 
@@ -30,7 +58,8 @@ long-lived. This is what keeps a 2 GB instance stable — there is no full brows
 launch per job.
 
 - **Supported baseline: `WORKER_CONCURRENCY=2` (two concurrent contexts) on a
-  2 GB Railway instance.** Raise concurrency only with proportionally more RAM.
+  2 GB instance (Cloud Run `--memory 2Gi`).** Raise concurrency only with
+  proportionally more RAM.
 - **Crash recovery:** the worker listens for Chromium's `disconnected` event. A
   crash marks the in-flight page job for retry (it requeues via the normal
   page-job retry path) and relaunches Chromium with exponential backoff (up to
@@ -53,16 +82,18 @@ The poll uses collection-group queries on `scans`. Create these once (the first
 run also prints a console link that builds them for you):
 
 - `scans` (collection group): `status` ASC, `createdAt` ASC
+- `scans.status` single-field indexes: ASC/DESC for both normal collection
+  queries and collection-group queries
 Or via `firestore.indexes.json` + `firebase deploy --only firestore:indexes`.
 
 ## Environment
 
-Set the Firebase Admin vars (same as the web app) plus the worker tuning vars:
+Cloud Run uses its runtime service account as Firebase Admin Application
+Default Credentials. Grant that account `roles/datastore.user`; do not copy the
+Vercel Firebase private key into Cloud Run.
 
 ```
 FIREBASE_PROJECT_ID=...
-FIREBASE_CLIENT_EMAIL=...
-FIREBASE_PRIVATE_KEY=...        # newlines escaped as \n
 SCAN_RENDER_PROFILE=real
 WORKER_CONCURRENCY=2             # concurrent contexts; 2 on a 2GB instance is the baseline
 WORKER_POLL_INTERVAL_MS=3000
@@ -71,47 +102,88 @@ WORKER_HEARTBEAT_MS=15000
 WORKER_STALE_RUNNING_MS=45000
 WORKER_STALE_RECLAIM_LIMIT=3
 SWEEP_QUEUE_TIMEOUT_MS=1800000
-WORKER_SHUTDOWN_DRAIN_MS=5000
-WORKER_HEALTH_PORT=3001          # optional; Railway can use PORT instead
+WORKER_SHUTDOWN_DRAIN_MS=5000   # poll mode only
+WORKER_PROCESS_BUDGET_MS=240000 # serve mode: budget per POST /process; keep < Cloud Run --timeout
+# Cloud Run provides PORT; serve.ts listens on it (default 8080).
 # Browser lifecycle / memory hardening:
 WORKER_MAX_RSS_MB=1536              # recycle Chromium above this RSS
 WORKER_BROWSER_RECYCLE_JOBS=50     # ...or after this many page jobs
 WORKER_BROWSER_RELAUNCH_ATTEMPTS=3 # crash relaunches before going unhealthy + exit
 WORKER_BROWSER_RELAUNCH_BASE_MS=500 # exponential backoff base between relaunches
+# serve mode: shared secret the worker requires on POST /process (must match
+# the value Vercel uses to enqueue Cloud Tasks).
+INTERNAL_WORKER_SECRET=...
 # Optional visual evidence (also needs workspace consent):
 VISUAL_EVIDENCE_ENABLED=true
 VISUAL_EVIDENCE_STORAGE_ENABLED=true
 ```
 
+The **Vercel web app** (not the worker) holds the dispatch config:
+`SCAN_DISPATCH_MODE=cloud-tasks`, `GCP_PROJECT_ID`, `CLOUD_TASKS_LOCATION`,
+`CLOUD_TASKS_QUEUE`, `SCAN_WORKER_URL`, `INTERNAL_WORKER_SECRET`, `CRON_SECRET`
+and `CLOUD_TASKS_OIDC_SERVICE_ACCOUNT`. See `.env.example`.
+
 ## Build & run locally
 
 ```
 docker build -f Dockerfile.worker -t percevia-worker .
-docker run --rm --env-file .env.local percevia-worker
+
+# serve mode (default CMD): HTTP server on :8080
+docker run --rm -p 8080:8080 --env-file .env.local percevia-worker
+# trigger a drain by hand:
+curl -XPOST localhost:8080/process -H "x-internal-worker-secret: $INTERNAL_WORKER_SECRET"
+curl localhost:8080/healthz
+
+# poll mode: override the command
+docker run --rm --env-file .env.local percevia-worker npx tsx worker/index.ts
 ```
 
-You should see `[worker] starting ...`. Create a scan from the app and watch it
-go `queued → running → completed`.
+In serve mode you should see `[serve] listening on :8080`. Create a scan from the
+app (with `SCAN_DISPATCH_MODE=cloud-tasks` it is enqueued automatically; locally
+you can hit `/process` directly) and watch it go `queued → running → completed`.
+`GET /healthz` returns 503 once the shared Chromium is unrecoverable so Cloud Run
+recycles the instance.
 
-If `PORT` or `WORKER_HEALTH_PORT` is set, the worker also serves
-`GET /healthz` with the worker id, in-flight count, and shutdown status. This is
-for container health checks only; scan dispatch still happens through Firestore
-polling.
+## Deploy — Cloud Run + Cloud Tasks + Cloud Scheduler (recommended)
 
-## Deploy (Railway / Fly.io / Render / Cloud Run)
+Everything lives in the **same Google Cloud project as Firebase**.
+`scripts/deploy-cloud-run.sh` builds the explicitly named `Dockerfile.worker`,
+creates dedicated runtime/invoker identities and grants least-privilege IAM.
+Run it after `gcloud auth login`.
 
-The image is host-agnostic. Examples:
+```bash
+PROJECT=your-firebase-project
+# Region MUST match your Firestore location (the worker is Firestore-chatty;
+# cross-region adds latency + egress cost). The product is "EU-hosted by
+# default", so europe-west1 (Belgium) is the recommended default — it is also
+# where Firestore's `eur3` EU multi-region lives. Confirm yours in
+# Firebase Console → Firestore → Location and match it (e.g. europe-west3 for
+# Frankfurt). Cloud Tasks + Cloud Scheduler must use the same region.
+REGION=europe-west1
+TASK_CREATOR_SERVICE_ACCOUNT=<firebase-admin-service-account-used-by-vercel>
+INTERNAL_WORKER_SECRET=<strong-random-secret>
+CRON_SECRET=<strong-random-secret>
+VERCEL_APP_URL=https://<your-app>
 
-**Railway** — New Service → Deploy from repo → set Dockerfile path to
-`Dockerfile.worker`, add the env vars above, deploy. Scale to ≥1 instance.
+./scripts/deploy-cloud-run.sh
+```
 
-**Fly.io** — `fly launch --dockerfile Dockerfile.worker --no-deploy`, set secrets
-with `fly secrets set FIREBASE_PROJECT_ID=... FIREBASE_CLIENT_EMAIL=... FIREBASE_PRIVATE_KEY=...`,
-then `fly deploy`. Provision ~2 GB for the baseline `WORKER_CONCURRENCY=2`; bump
-memory before raising concurrency (the single shared Chromium grows with the
-number of concurrent contexts).
+The script prints the exact Vercel variables to set, including the generated
+Cloud Run URL and OIDC invoker identity. Set them and redeploy the web app.
 
-**Render** — New → Background Worker → Docker → `Dockerfile.worker`, add env, deploy.
+**Cost:** at low volume the worker stays at zero and fits the Cloud Run free
+tier — effectively $0/mo. You pay only for compute while scans run.
+
+**Cold start:** the Playwright image is large, so the first scan after idle
+waits ~10–30 s for the container to start. Scans are async (queued), so this is
+not user-blocking. Raise `--min-instances 1` to remove cold starts at the cost
+of a fixed always-on charge.
+
+### Legacy poll deploy (any always-on host)
+
+Set `SCAN_DISPATCH_MODE=poll`, override the container command to
+`tsx worker/index.ts`, provision ~2 GB, and run ≥1 instance. No Cloud Tasks or
+Scheduler needed (the in-process sweeper handles recovery).
 
 ## Operations
 

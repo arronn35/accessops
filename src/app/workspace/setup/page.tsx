@@ -5,7 +5,7 @@ import { Input, Label, Select, FieldHint } from "@/components/ui/Input";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { updateWorkspaceAction } from "@/lib/server/workspace-actions";
 
-export const metadata = { title: "Workspace setup — AccessOps AI" };
+export const metadata = { title: "Workspace setup — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function WorkspaceSetupPage() {
@@ -13,9 +13,9 @@ export default async function WorkspaceSetupPage() {
 
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
-      <header className="bg-paper border-b border-line">
+      <header className="bg-paper border-b border-rule">
         <div className="max-w-3xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/"><Logo variant="wordmark" /></Link>
+          <Link href="/"><Logo variant="site" /></Link>
           <p className="text-xs text-ink-500">Step 2 of 3</p>
         </div>
       </header>
@@ -34,7 +34,7 @@ export default async function WorkspaceSetupPage() {
         <form action={updateWorkspaceAction} className="mt-8 space-y-6">
           <input type="hidden" name="redirectTo" value="/app" />
 
-          <div className="space-y-6 bg-paper rounded-lg ring-1 ring-line p-6">
+          <div className="space-y-6 bg-paper border border-rule p-6">
             <div>
               <Label htmlFor="ws-name" required>Workspace name</Label>
               <Input
@@ -108,7 +108,7 @@ export default async function WorkspaceSetupPage() {
             </Link>
             <button
               type="submit"
-              className="inline-flex items-center gap-2 h-11 px-5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
+              className="inline-flex items-center gap-2 h-11 px-5 rounded-md bg-navy-900 text-paper text-sm font-bold hover:bg-navy-800"
             >
               Save &amp; continue <ArrowRight className="size-4" aria-hidden />
             </button>

@@ -10,6 +10,7 @@ import { ScanScoreRing } from "@/components/scan/ScanScoreRing";
 import { FailedPagesNotice } from "@/components/scan/FailedPagesNotice";
 import { IssueCard } from "@/components/scan/IssueCard";
 import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
+import { EmptyState } from "@/components/empty/EmptyState";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { HumanReviewBanner } from "@/components/compliance/HumanReviewBanner";
 import { ManualReviewChecklist } from "@/components/compliance/ManualReviewChecklist";
@@ -23,19 +24,38 @@ import {
   listScanPages,
 } from "@/lib/data/firestore";
 import { type IssueCategory } from "@/lib/mock/issues";
-import { formatDate, formatRelative } from "@/lib/utils";
+import { cn, formatDate, formatRelative } from "@/lib/utils";
 import { ScanReportActions } from "./scan-report-actions";
 import { MonitorScanButton } from "./monitor-scan-button";
+import {
+  buildFindingsFilterHref,
+  filterFindings,
+  FINDING_STATES,
+  formatFindingState,
+  parseFindingFilters,
+  summarizeFindingContexts,
+  type FindingContext,
+  type FindingState,
+  type SeverityFilter,
+  type ViewportFilter,
+} from "./finding-filters";
 
 export const metadata = { title: "Scan results — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function ScanResultsPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{
+    sev?: string | string[];
+    vp?: string | string[];
+    state?: string | string[];
+  }>;
 }) {
   const { id } = await params;
+  const filters = parseFindingFilters(await searchParams);
   const ctx = await getCurrentWorkspaceOrRedirect();
 
   const scan = await getScanJob(ctx.workspace.id, id);
@@ -53,6 +73,25 @@ export default async function ScanResultsPage({
     scan.usePageJobs ? listPageJobs(ctx.workspace.id, scan.id) : Promise.resolve([]),
   ]);
   const failedPageJobs = pageJobs.filter((job) => job.status === "failed");
+  const failedStoredPageUrls = pages
+    .filter((page) => {
+      const metadata = page.rawMetadataJson;
+      return (
+        metadata !== null &&
+        typeof metadata === "object" &&
+        (metadata as Record<string, unknown>).scanFailed === true
+      );
+    })
+    .map((page) => page.url);
+  const failedPageUrls =
+    summary?.failedPageUrls ??
+    Array.from(new Set(failedStoredPageUrls));
+  const pagesIncludedInScore =
+    summary?.pageScoresJson.length ??
+    Math.max(0, pages.length - failedStoredPageUrls.length);
+  const hasFailedPages =
+    failedPageJobs.length > 0 ||
+    (summary?.pagesFailedToScan ?? failedPageUrls.length) > 0;
   const pageById = new Map(pages.map((p) => [p.id, p]));
   const issueRows = issues.map((issue) => {
     const page = issue.scanPageId ? pageById.get(issue.scanPageId) : null;
@@ -67,18 +106,29 @@ export default async function ScanResultsPage({
     };
   });
 
-  // Bucket each finding under its root-cause group. Findings without a
-  // groupId (legacy scans run before grouping shipped) fall back to the flat
-  // list rendered below.
-  const instancesByGroup = new Map<string, typeof issueRows>();
-  for (const row of issueRows) {
+  const filteredRows = filterFindings(issueRows, filters);
+  const isFiltered =
+    filters.severity !== "all" ||
+    filters.viewport !== "all" ||
+    filters.state !== null;
+
+  // Rebuild the group buckets from the filtered set. Counts above the list
+  // continue to describe the complete scan rather than shifting with filters.
+  const filteredInstancesByGroup = new Map<string, typeof issueRows>();
+  for (const row of filteredRows) {
     if (!row.groupId) continue;
-    const bucket = instancesByGroup.get(row.groupId);
+    const bucket = filteredInstancesByGroup.get(row.groupId);
     if (bucket) bucket.push(row);
-    else instancesByGroup.set(row.groupId, [row]);
+    else filteredInstancesByGroup.set(row.groupId, [row]);
   }
-  const hasGroups = groups.length > 0 && instancesByGroup.size > 0;
-  const topFixes = groups.filter((g) => g.severity !== "review").slice(0, 5);
+  const filteredGroups = groups.filter((group) =>
+    filteredInstancesByGroup.has(group.id)
+  );
+  const hasGroups =
+    filteredGroups.length > 0 && filteredInstancesByGroup.size > 0;
+  const topFixes = filteredGroups
+    .filter((group) => group.severity !== "review")
+    .slice(0, 5);
 
   const scanProfile = readScanProfile(pages.map((page) => ({ rawMetadataJson: page.rawMetadataJson ?? null })));
 
@@ -100,7 +150,23 @@ export default async function ScanResultsPage({
   }
 
   const score = summary?.overallScore ?? legacyScore(counts);
-  const contextSummary = summarizeContexts(issueRows.map((issue) => ({ contextsJson: issue.contextsJson ?? null })));
+  const contextSummary = summarizeFindingContexts(issueRows);
+  // Pulled out of `scan` because the notFound() narrowing above does not
+  // carry into the nested closure below.
+  const scanId = scan.id;
+  const clearFiltersHref = buildFindingsFilterHref(scanId, filters, {
+    severity: null,
+    viewport: null,
+    state: null,
+  });
+
+  function filterHref(patch: {
+    severity?: SeverityFilter | null;
+    viewport?: ViewportFilter | null;
+    state?: FindingState | null;
+  }) {
+    return buildFindingsFilterHref(scanId, filters, patch);
+  }
 
   const renderRow = (issue: (typeof issueRows)[number]) => (
     <div key={issue.id} className="space-y-1">
@@ -167,7 +233,11 @@ export default async function ScanResultsPage({
         </div>
       </div>
 
-      <FailedPagesNotice jobs={failedPageJobs} pagesScanned={scan.pagesScanned} />
+      <FailedPagesNotice
+        jobs={failedPageJobs}
+        failedUrls={failedPageUrls}
+        pagesScanned={pagesIncludedInScore}
+      />
 
       <Card>
         <CardContent className="pt-5">
@@ -176,6 +246,11 @@ export default async function ScanResultsPage({
               <AlertTriangle className="size-4 shrink-0 mt-0.5" aria-hidden />
               <p>
                 This scan used a degraded static fallback and may miss JavaScript-rendered accessibility issues.
+                {fallbackDetail(scanProfile) && (
+                  <span className="block mt-1 text-xs">
+                    {fallbackDetail(scanProfile)}
+                  </span>
+                )}
               </p>
             </div>
           )}
@@ -183,8 +258,8 @@ export default async function ScanResultsPage({
             <ScanScoreRing score={score} size="lg" />
             <div className="min-w-0">
               <div className="flex flex-wrap items-center gap-2 mb-2">
-                <Badge tone={failedPageJobs.length > 0 ? "warning" : "success"} size="sm">
-                  {failedPageJobs.length > 0 ? "Complete with errors" : "Complete"}
+                <Badge tone={hasFailedPages ? "warning" : "success"} size="sm">
+                  {hasFailedPages ? "Complete with errors" : "Complete"}
                 </Badge>
                 <Badge tone="neutral" size="sm" className="font-mono">{scan.id}</Badge>
                 <span className="text-xs text-ink-500">
@@ -198,7 +273,7 @@ export default async function ScanResultsPage({
               </h1>
               <div className="flex flex-wrap items-center gap-3 mt-3 text-sm text-ink-600">
                 <span>
-                  <strong className="text-ink-900 font-semibold">{scan.pagesScanned}</strong> pages
+                  <strong className="text-ink-900 font-semibold">{pagesIncludedInScore}</strong> scored pages
                 </span>
                 <span className="text-ink-300">·</span>
                 <span>
@@ -245,7 +320,7 @@ export default async function ScanResultsPage({
             <AiSuggestionBlock title="What this scan tells you">
               <p>
                 The scan surfaced {counts.critical + counts.moderate} blocking and moderate-impact
-                issues across {scan.pagesScanned} page(s). Critical findings typically reuse patterns
+                issues across {pagesIncludedInScore} scored page(s). Critical findings typically reuse patterns
                 across many pages, so fixing the top rules often eliminates multiple findings at once.
                 {counts.review > 0 &&
                   ` ${counts.review} item(s) need human review where automated checks could not decide.`}
@@ -253,33 +328,142 @@ export default async function ScanResultsPage({
             </AiSuggestionBlock>
           )}
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
-              <Filter className="size-3.5" aria-hidden /> Filter:
-            </span>
-            <FilterChip label="All" count={issueRows.length} active />
-            <FilterChip label="Critical" count={counts.critical} severity="critical" />
-            <FilterChip label="Serious" count={counts.serious} severity="serious" />
-            <FilterChip label="Moderate" count={counts.moderate} severity="moderate" />
-            <FilterChip label="Minor" count={counts.minor} severity="minor" />
-            <FilterChip label="Needs review" count={counts.review} severity="review" />
-          </div>
+          <nav aria-label="Filter findings" className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
+                <Filter className="size-3.5" aria-hidden /> Severity:
+              </span>
+              <FilterChip
+                href={filterHref({ severity: null })}
+                label="All"
+                count={issueRows.length}
+                active={filters.severity === "all"}
+              />
+              <FilterChip
+                href={filterHref({ severity: "critical" })}
+                label="Critical"
+                count={counts.critical}
+                severity="critical"
+                active={filters.severity === "critical"}
+              />
+              <FilterChip
+                href={filterHref({ severity: "serious" })}
+                label="Serious"
+                count={counts.serious}
+                severity="serious"
+                active={filters.severity === "serious"}
+              />
+              <FilterChip
+                href={filterHref({ severity: "moderate" })}
+                label="Moderate"
+                count={counts.moderate}
+                severity="moderate"
+                active={filters.severity === "moderate"}
+              />
+              <FilterChip
+                href={filterHref({ severity: "minor" })}
+                label="Minor"
+                count={counts.minor}
+                severity="minor"
+                active={filters.severity === "minor"}
+              />
+              <FilterChip
+                href={filterHref({ severity: "review" })}
+                label="Needs review"
+                count={counts.review}
+                severity="review"
+                active={filters.severity === "review"}
+              />
+            </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
-              <Filter className="size-3.5" aria-hidden /> Viewport:
-            </span>
-            <FilterChip label="Desktop" count={contextSummary.desktop} />
-            <FilterChip label="Tablet" count={contextSummary.tablet} />
-            <FilterChip label="Mobile" count={contextSummary.mobile} />
-            <FilterChip label="Multiple" count={contextSummary.both} />
-            <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700 ml-2">
-              State:
-            </span>
-            {Object.entries(contextSummary.states).map(([state, count]) => (
-              <FilterChip key={state} label={state} count={count} />
-            ))}
-          </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
+                <Filter className="size-3.5" aria-hidden /> Viewport:
+              </span>
+              <FilterChip
+                href={filterHref({ viewport: null })}
+                label="All"
+                count={issueRows.length}
+                active={filters.viewport === "all"}
+              />
+              <FilterChip
+                href={filterHref({ viewport: "desktop" })}
+                label="Desktop"
+                count={contextSummary.desktop}
+                active={filters.viewport === "desktop"}
+              />
+              <FilterChip
+                href={filterHref({ viewport: "tablet" })}
+                label="Tablet"
+                count={contextSummary.tablet}
+                active={filters.viewport === "tablet"}
+              />
+              <FilterChip
+                href={filterHref({ viewport: "mobile" })}
+                label="Mobile"
+                count={contextSummary.mobile}
+                active={filters.viewport === "mobile"}
+              />
+              <FilterChip
+                href={filterHref({ viewport: "multiple" })}
+                label="Multiple"
+                count={contextSummary.multiple}
+                active={filters.viewport === "multiple"}
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="inline-flex items-center gap-2 text-xs font-medium text-ink-700">
+                <Filter className="size-3.5" aria-hidden /> State:
+              </span>
+              <FilterChip
+                href={filterHref({ state: null })}
+                label="All"
+                count={issueRows.length}
+                active={filters.state === null}
+              />
+              {FINDING_STATES.map((state) => (
+                <FilterChip
+                  key={state}
+                  href={filterHref({ state })}
+                  label={formatFindingState(state)}
+                  count={contextSummary.states[state]}
+                  active={filters.state === state}
+                />
+              ))}
+            </div>
+          </nav>
+
+          <p
+            role="status"
+            aria-live="polite"
+            className="min-h-[1.25rem] text-xs text-ink-600"
+          >
+            {isFiltered ? (
+              <>
+                Showing{" "}
+                <strong className="font-semibold text-ink-900">
+                  {filteredRows.length}
+                </strong>{" "}
+                of {issueRows.length} findings.{" "}
+                <Link
+                  href={clearFiltersHref}
+                  scroll={false}
+                  className="font-medium text-blue-600 underline underline-offset-2"
+                >
+                  Clear filters
+                </Link>
+              </>
+            ) : (
+              <>
+                Showing all{" "}
+                <strong className="font-semibold text-ink-900">
+                  {issueRows.length}
+                </strong>{" "}
+                findings.
+              </>
+            )}
+          </p>
 
           {hasGroups && topFixes.length > 0 && (
             <Card>
@@ -299,7 +483,10 @@ export default async function ScanResultsPage({
                       <span className="flex-1 min-w-0">
                         <span className="font-medium text-ink-900">{g.title}</span>
                         <span className="ml-2 text-[11px] text-ink-500 tabular-nums">
-                          {g.affectedCount} instance{g.affectedCount === 1 ? "" : "s"}
+                          {filteredInstancesByGroup.get(g.id)?.length ?? 0} instance
+                          {(filteredInstancesByGroup.get(g.id)?.length ?? 0) === 1
+                            ? ""
+                            : "s"}
                         </span>
                         <span className="block text-[11px] text-ink-500 font-mono">{g.ruleId}</span>
                       </span>
@@ -310,10 +497,25 @@ export default async function ScanResultsPage({
             </Card>
           )}
 
-          {hasGroups ? (
+          {filteredRows.length === 0 && issueRows.length > 0 ? (
+            <EmptyState
+              icon={Filter}
+              title="No findings match these filters"
+              description="Try a different severity, viewport, or state, or clear the filters to see everything."
+              action={
+                <Link
+                  href={clearFiltersHref}
+                  scroll={false}
+                  className="inline-flex h-10 items-center rounded-md bg-navy-900 px-3.5 text-sm font-medium text-paper hover:bg-navy-800"
+                >
+                  Clear filters
+                </Link>
+              }
+            />
+          ) : hasGroups ? (
             <div className="space-y-2.5">
-              {groups.map((g, idx) => {
-                const instances = instancesByGroup.get(g.id) ?? [];
+              {filteredGroups.map((g, idx) => {
+                const instances = filteredInstancesByGroup.get(g.id) ?? [];
                 if (!instances.length) return null;
                 return (
                   <IssueGroupSection
@@ -329,7 +531,7 @@ export default async function ScanResultsPage({
                         | "minor"
                         | "passed"
                         | "review",
-                      affectedCount: g.affectedCount,
+                      affectedCount: instances.length,
                       primaryWcagTag: g.primaryWcagTag,
                       recommendedFix: g.recommendedFix,
                     }}
@@ -340,13 +542,13 @@ export default async function ScanResultsPage({
               })}
             </div>
           ) : (
-            <div className="space-y-2.5">{issueRows.map(renderRow)}</div>
+            <div className="space-y-2.5">{filteredRows.map(renderRow)}</div>
           )}
         </div>
 
         <aside className="space-y-5">
           <HumanReviewBanner />
-          <ManualReviewChecklist />
+          <ManualReviewChecklist scanId={scan.id} />
           <NoGuaranteeBanner variant="default" />
 
           <Card>
@@ -392,16 +594,28 @@ export default async function ScanResultsPage({
               <CardTitle className="flex items-center gap-2 text-sm">
                 <Sparkles className="size-4 text-purple-600" aria-hidden /> Pages scanned
               </CardTitle>
-              <CardDescription>{pages.length} page(s)</CardDescription>
+              <CardDescription>
+                {pagesIncludedInScore} scored page(s)
+                {hasFailedPages ? ` · ${failedPageUrls.length || failedPageJobs.length} not scored` : ""}
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <ul className="space-y-2 text-xs">
-                {pages.map((p) => (
-                  <li key={p.id} className="flex items-start justify-between gap-2 py-1.5 border-b border-line/60 last:border-0">
-                    <span className="text-ink-700 truncate font-mono">{p.url}</span>
-                    <span className="text-ink-500 shrink-0">{p.statusCode ?? "—"}</span>
-                  </li>
-                ))}
+                {pages.map((p) => {
+                  const metadata = p.rawMetadataJson;
+                  const scanFailed =
+                    metadata !== null &&
+                    typeof metadata === "object" &&
+                    (metadata as Record<string, unknown>).scanFailed === true;
+                  return (
+                    <li key={p.id} className="flex items-start justify-between gap-2 py-1.5 border-b border-line/60 last:border-0">
+                      <span className="text-ink-700 truncate font-mono">{p.url}</span>
+                      <span className={scanFailed ? "text-amber-700 shrink-0" : "text-ink-500 shrink-0"}>
+                        {scanFailed ? "Not scored" : p.statusCode ?? "—"}
+                      </span>
+                    </li>
+                  );
+                })}
               </ul>
             </CardContent>
           </Card>
@@ -455,42 +669,54 @@ function FilterChip({
   count,
   active,
   severity,
+  href,
 }: {
   label: string;
   count: number;
   active?: boolean;
   severity?: "critical" | "serious" | "moderate" | "minor" | "review";
+  href: string;
 }) {
-  const baseClasses = active
-    ? "bg-navy-900 text-paper ring-navy-900"
-    : "bg-paper text-ink-700 ring-line hover:bg-canvas-2";
+  const dotClass =
+    severity === "critical"
+      ? "bg-rose-500"
+      : severity === "serious" || severity === "moderate"
+      ? "bg-amber-500"
+      : severity === "minor"
+      ? "bg-blue-500"
+      : severity === "review"
+      ? "bg-purple-500"
+      : null;
+
   return (
-    <span
-      className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium ring-1 min-h-[32px] ${baseClasses}`}
-    >
-      {severity && (
-        <span
-          aria-hidden
-          className="size-1.5 rounded-full"
-          style={{
-            background:
-              severity === "critical"
-                ? "var(--color-rose-500)"
-                : severity === "serious"
-                ? "var(--color-amber-500)"
-                : severity === "moderate"
-                ? "var(--color-amber-500)"
-                : severity === "minor"
-                ? "var(--color-blue-500)"
-                : "var(--color-purple-500)",
-          }}
-        />
+    <Link
+      href={href}
+      scroll={false}
+      aria-current={active ? "true" : undefined}
+      aria-label={`${label}: ${count} finding${count === 1 ? "" : "s"}${
+        active ? ", selected" : ""
+      }`}
+      className={cn(
+        "inline-flex min-h-[32px] items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-colors",
+        active
+          ? "bg-navy-900 text-paper ring-navy-900"
+          : "bg-paper text-ink-700 ring-line hover:bg-canvas-2 hover:ring-line-strong"
       )}
-      {label}
-      <span className={`text-[10px] tabular-nums ${active ? "text-paper/80" : "text-ink-500"}`}>
+    >
+      {dotClass && (
+        <span aria-hidden className={cn("size-1.5 rounded-full", dotClass)} />
+      )}
+      <span aria-hidden>{label}</span>
+      <span
+        aria-hidden
+        className={cn(
+          "text-[10px] tabular-nums",
+          active ? "text-paper/80" : "text-ink-500"
+        )}
+      >
         {count}
       </span>
-    </span>
+    </Link>
   );
 }
 
@@ -511,6 +737,9 @@ interface ScanProfile {
   states: string | null;
   fallbackMode: boolean;
   resultConfidence: string | null;
+  code: string | null;
+  message: string | null;
+  fetchFailureReason: string | null;
 }
 
 function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
@@ -545,6 +774,12 @@ function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
         fallbackMode: meta.fallbackMode === true,
         resultConfidence:
           typeof meta.resultConfidence === "string" ? meta.resultConfidence : null,
+        code: typeof meta.code === "string" ? meta.code : null,
+        message: typeof meta.message === "string" ? meta.message : null,
+        fetchFailureReason:
+          typeof meta.fetchFailureReason === "string"
+            ? meta.fetchFailureReason
+            : null,
       };
     }
   }
@@ -557,7 +792,40 @@ function readScanProfile(pages: { rawMetadataJson: unknown }[]): ScanProfile {
     states: null,
     fallbackMode: false,
     resultConfidence: null,
+    code: null,
+    message: null,
+    fetchFailureReason: null,
   };
+}
+
+function fallbackDetail(profile: ScanProfile): string | null {
+  const fetchFailure = profile.fetchFailureReason;
+  if (fetchFailure === "bot_challenge_detected") {
+    return "The site presented an anti-bot or human-verification challenge, so it was not bypassed.";
+  }
+  if (fetchFailure?.startsWith("http_")) {
+    return `The site returned HTTP ${fetchFailure.slice(5)} to the static scanner.`;
+  }
+  if (fetchFailure === "request_timeout") {
+    return "The static request also timed out.";
+  }
+  if (fetchFailure) {
+    return `Static retrieval could not complete: ${fetchFailure}.`;
+  }
+  switch (profile.code) {
+    case "browser_launch_failed":
+      return "Chromium was unavailable, so only the delivered HTML was checked.";
+    case "navigation_failed":
+      return "Browser navigation failed, so only the delivered HTML was checked.";
+    case "axe_failed":
+      return "The browser accessibility engine could not finish, so the delivered HTML was checked instead.";
+    case "deadline_exceeded":
+    case "page_deadline_exceeded":
+    case "scan_timeout":
+      return "The browser scan exceeded its time budget, so the delivered HTML was checked instead.";
+    default:
+      return null;
+  }
 }
 
 function formatScanEngine(profile: ScanProfile): string {
@@ -573,17 +841,6 @@ function ProfileRow({ label, value }: { label: string; value: string }) {
     </div>
   );
 }
-
-type IssueContext = {
-  viewport: "desktop" | "tablet" | "mobile";
-  state:
-    | "initial"
-    | "menu-open"
-    | "dialog-open"
-    | "accordion-open"
-    | "tab-open"
-    | "form-focus";
-};
 
 function legacyScore(counts: {
   critical: number;
@@ -606,46 +863,7 @@ function legacyScore(counts: {
   );
 }
 
-function summarizeContexts(
-  issues: Array<{ contextsJson: IssueContext[] | null }>
-): {
-  desktop: number;
-  tablet: number;
-  mobile: number;
-  both: number;
-  states: Record<IssueContext["state"], number>;
-} {
-  const summary = {
-    desktop: 0,
-    tablet: 0,
-    mobile: 0,
-    both: 0,
-    states: {
-      initial: 0,
-      "menu-open": 0,
-      "dialog-open": 0,
-      "accordion-open": 0,
-      "tab-open": 0,
-      "form-focus": 0,
-    },
-  };
-  for (const issue of issues) {
-    const contexts = issue.contextsJson ?? [];
-    const viewports = new Set(contexts.map((ctx) => ctx.viewport));
-    if (viewports.has("desktop")) summary.desktop++;
-    if (viewports.has("tablet")) summary.tablet++;
-    if (viewports.has("mobile")) summary.mobile++;
-    if (viewports.size > 1) summary.both++;
-    for (const state of new Set(contexts.map((ctx) => ctx.state))) {
-      if (state in summary.states) {
-        summary.states[state as IssueContext["state"]]++;
-      }
-    }
-  }
-  return summary;
-}
-
-function ContextLine({ contexts }: { contexts: IssueContext[] }) {
+function ContextLine({ contexts }: { contexts: FindingContext[] }) {
   if (!contexts.length) return null;
   const viewports = Array.from(new Set(contexts.map((ctx) => ctx.viewport))).join(", ");
   const states = Array.from(new Set(contexts.map((ctx) => ctx.state))).join(", ");

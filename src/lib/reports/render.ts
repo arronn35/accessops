@@ -55,6 +55,9 @@ export interface ReportInput {
   scanId: string;
   baseUrl: string;
   pagesScanned: number;
+  /** Pages that produced no accessibility analysis and were excluded from scoring. */
+  pagesFailedToScan?: number;
+  failedPageUrls?: string[];
   scanDate: Date;
   issues: ReportInputIssue[];
   counts: { critical: number; moderate: number; minor: number; passed: number; review: number };
@@ -106,6 +109,8 @@ const DISCLAIMER = COMPLIANCE_COPY.REPORT_NOT_LEGAL;
 
 export function renderHtml(input: ReportInput): string {
   const sevCount = input.counts;
+  const pagesFailedToScan = input.pagesFailedToScan ?? 0;
+  const failedPageUrls = input.failedPageUrls ?? [];
   const evidenceCount = input.issues.filter((i) => i.evidence).length;
   const issuesBySeverity = ["critical", "moderate", "minor", "review"].map((sev) => ({
     sev,
@@ -161,6 +166,7 @@ export function renderHtml(input: ReportInput): string {
   .evidence img { max-width: 100%; border: 1px solid #E4E8F0; border-radius: 6px; display: block; }
   .evidence-meta { font-size: 11px; color: #4B5570; margin-top: 4px; }
   .redacted { display: inline-block; background: #F8E5E9; color: #8A2F40; border-radius: 4px; padding: 0 6px; font-size: 10px; font-weight: 600; }
+  .warning { margin: 14px 0; padding: 12px; border: 1px solid #E6C66A; border-radius: 6px; background: #FFF9E8; color: #664D03; }
   .disclaimer { margin-top: 48px; padding: 18px; border-top: 1px solid #E4E8F0; color: #4B5570; font-size: 12px; }
   @media print {
     body { background: #fff; }
@@ -175,7 +181,7 @@ export function renderHtml(input: ReportInput): string {
   </p>
   <h1>${escapeHtml(input.title)}</h1>
   <p class="meta">
-    ${escapeHtml(input.workspaceName)} · ${escapeHtml(input.baseUrl)} · ${input.pagesScanned} pages ·
+    ${escapeHtml(input.workspaceName)} · ${escapeHtml(input.baseUrl)} · ${input.pagesScanned} scored pages ·
     scanned ${input.scanDate.toLocaleDateString()}
   </p>
 
@@ -188,6 +194,12 @@ export function renderHtml(input: ReportInput): string {
     moderate. ${sevCount.review} finding(s) require human review because automated checks could
     not fully decide.
   </p>
+  ${
+    pagesFailedToScan > 0
+      ? `<div class="warning"><strong>${pagesFailedToScan} page${pagesFailedToScan === 1 ? "" : "s"} could not be scanned.</strong>
+      The score and findings are based only on the ${input.pagesScanned} page${input.pagesScanned === 1 ? "" : "s"} that completed analysis.</div>`
+      : ""
+  }
   <div class="stats">
     <div class="stat crit"><div class="n">${sevCount.critical}</div><div class="l">Critical</div></div>
     <div class="stat mod"><div class="n">${sevCount.moderate}</div><div class="l">Moderate</div></div>
@@ -197,12 +209,20 @@ export function renderHtml(input: ReportInput): string {
 
   <h2>${num()}. Scan scope &amp; limitations</h2>
   <ul>
-    <li>Pages scanned: ${input.pagesScanned}</li>
+    <li>Pages successfully analyzed and included in scoring: ${input.pagesScanned}</li>
+    ${pagesFailedToScan > 0 ? `<li>Pages that could not be analyzed: ${pagesFailedToScan}</li>` : ""}
     <li>Standard: WCAG 2.2 AA-oriented (axe-core ruleset)</li>
     <li>Automated tools detect ~30–50% of accessibility issues; human review remains required.</li>
     <li>Authenticated pages and visual issues that require manual inspection were not covered.</li>
     ${evidenceCount > 0 ? `<li>${evidenceCount} finding(s) include diagnostic visual evidence (screenshots); sensitive regions are redacted where detected.</li>` : ""}
   </ul>
+  ${
+    failedPageUrls.length > 0
+      ? `<h3>Pages excluded from scoring</h3><ul>${failedPageUrls
+          .map((url) => `<li><code>${escapeHtml(url)}</code></li>`)
+          .join("")}</ul>`
+      : ""
+  }
 
   ${
     hasTech && useGroups && topFixes.length > 0
@@ -369,6 +389,8 @@ export function renderCsv(input: ReportInput): string {
  * exports carry the embedded images.
  */
 export function renderJson(input: ReportInput): string {
+  const pagesFailedToScan = input.pagesFailedToScan ?? 0;
+  const failedPageUrls = input.failedPageUrls ?? [];
   const instanceIdsByGroup = new Map<string, string[]>();
   for (const i of input.issues) {
     if (!i.groupId) continue;
@@ -388,6 +410,8 @@ export function renderJson(input: ReportInput): string {
       id: input.scanId,
       baseUrl: input.baseUrl,
       pagesScanned: input.pagesScanned,
+      pagesFailedToScan,
+      failedPageUrls,
       scanDate: input.scanDate.toISOString(),
     },
     summary: {

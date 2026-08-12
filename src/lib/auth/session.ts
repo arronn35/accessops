@@ -5,6 +5,20 @@ import { firebaseAdminAuth } from "@/lib/firebase/admin";
 export const SESSION_COOKIE_NAME =
   process.env.FIREBASE_SESSION_COOKIE_NAME || "percevia_session";
 
+const REJECTED_SESSION_COOKIE_CODES = new Set([
+  "auth/session-cookie-expired",
+  "auth/session-cookie-revoked",
+]);
+
+function isRejectedSessionCookieError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return false;
+  }
+  return REJECTED_SESSION_COOKIE_CODES.has(
+    String((error as { code?: unknown }).code)
+  );
+}
+
 export function sessionDurationMs(): number {
   const days = Number(process.env.FIREBASE_SESSION_DAYS ?? 7);
   return Math.max(1, Math.min(days, 14)) * 24 * 60 * 60 * 1000;
@@ -42,5 +56,10 @@ export async function verifySessionCookie(): Promise<DecodedIdToken | null> {
   const jar = await cookies();
   const value = jar.get(SESSION_COOKIE_NAME)?.value;
   if (!value) return null;
-  return firebaseAdminAuth().verifySessionCookie(value, true);
+  try {
+    return await firebaseAdminAuth().verifySessionCookie(value, true);
+  } catch (error) {
+    if (isRejectedSessionCookieError(error)) return null;
+    throw error;
+  }
 }

@@ -34,9 +34,9 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
 
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
-      <header className="bg-paper border-b border-line">
+      <header className="bg-paper border-b border-rule">
         <div className="max-w-3xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/"><Logo variant="wordmark" /></Link>
+          <Link href="/"><Logo variant="site" /></Link>
           <p className="text-xs text-ink-500">Step 1 of 3</p>
         </div>
       </header>
@@ -102,7 +102,7 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
           </AlertCallout>
         </div>
 
-        <div className="mt-6 rounded-lg bg-paper ring-1 ring-line p-4">
+        <div className="mt-6 rounded-lg bg-paper border border-rule p-4">
           <Checkbox
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}

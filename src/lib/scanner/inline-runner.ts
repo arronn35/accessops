@@ -1,7 +1,12 @@
+import { randomUUID } from "node:crypto";
 import { captureException } from "@/lib/observability";
 import { completeScanJob, markScanFailed, persistScanOutcome } from "./persistence";
 import { runStaticScanJob } from "./static-runner";
-import { findScanJob, updateScanJob } from "@/lib/data/firestore";
+import {
+  claimScanJob,
+  findScanJob,
+  updateScanJob,
+} from "@/lib/data/firestore";
 import type { ProgressUpdate, ScanInput, ScanOutcome } from "./types";
 
 const INLINE_SCAN_TIMEOUT_MS = Math.max(
@@ -57,18 +62,21 @@ export async function processScanInline(
   ) {
     return;
   }
+  const workerId = `inline-${randomUUID().slice(0, 8)}`;
+  const claimed = await claimScanJob(row.workspaceId, scanJobId, workerId);
+  if (!claimed) return;
+
   if (!row.permissionConfirmed) {
-    await markScanFailed(row.workspaceId, scanJobId, "permission_not_confirmed");
+    await markScanFailed(
+      row.workspaceId,
+      scanJobId,
+      "permission_not_confirmed",
+      workerId
+    );
     return;
   }
 
   await updateScanJob(row.workspaceId, scanJobId, {
-    status: "running",
-    progressStep: row.storeScreenshots ? "starting_browser" : "crawling",
-    startedAt: new Date(),
-    processorStartedAt: new Date(),
-    processorHeartbeatAt: new Date(),
-    processorError: null,
     errorMessage:
       row.includeScreenshots && !row.storeScreenshots
         ? "Screenshot capture was requested, but workspace screenshot storage consent is disabled."
@@ -129,10 +137,12 @@ export async function processScanInline(
 
     await updateScanJob(row.workspaceId, scanJobId, { progressStep: "saving" });
 
-    await persistScanOutcome(scanJobId, outcome.pages, {
+    const persisted = await persistScanOutcome(scanJobId, outcome.pages, {
       workspaceId: row.workspaceId,
+      workerId,
       storeScreenshots: false,
     });
+    if (!persisted) return;
     await updateScanJob(row.workspaceId, scanJobId, {
       processorHeartbeatAt: new Date(),
       processorError: null,
@@ -140,6 +150,7 @@ export async function processScanInline(
     await completeScanJob(scanJobId, outcome, {
       userId: row.requestedBy,
       workspaceId: row.workspaceId,
+      workerId,
     });
   } catch (err) {
     const msg = (err as Error).message || "inline_scan_failed";
@@ -150,11 +161,7 @@ export async function processScanInline(
         workspaceId: row.workspaceId,
       });
     }
-    await markScanFailed(row.workspaceId, scanJobId, msg);
-    await updateScanJob(row.workspaceId, scanJobId, {
-      processorHeartbeatAt: new Date(),
-      processorError: msg,
-    });
+    await markScanFailed(row.workspaceId, scanJobId, msg, workerId);
     throw err;
   }
 }

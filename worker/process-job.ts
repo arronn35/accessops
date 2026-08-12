@@ -20,6 +20,11 @@ import {
 import { createPageJobs, updateScanJob } from "@/lib/data/firestore";
 import { captureException } from "@/lib/observability";
 import { logScanEvent, type WorkerLogLevel } from "./log";
+import {
+  annotateStaticFallbackOutcome,
+  staticFallbackReason,
+  staticFallbackReasonFromOutcome,
+} from "./static-fallback";
 import type { ProgressUpdate, ScanInput, ScanOutcome } from "@/lib/scanner/types";
 import type { ScanJob, ScanTimings } from "@/lib/data/types";
 
@@ -123,6 +128,11 @@ export const WORKER_SCAN_HARD_TIMEOUT_MS = Math.max(
   )
 );
 
+const STATIC_FALLBACK_TIMEOUT_MS = Math.max(
+  10_000,
+  Number(process.env.STATIC_FALLBACK_TIMEOUT_MS ?? 60_000)
+);
+
 /**
  * Race a scan-producing promise against a hard wall-clock deadline. On timeout
  * it rejects with `scan_timeout` (handled by processScanJob's failure path).
@@ -179,12 +189,23 @@ export async function processScanJob(
   const deps = { ...defaultDeps(), ...overrides };
   const { workspaceId } = job;
   const scanJobId = job.id;
+  const workerId = job.claimedBy;
   const log = (level: WorkerLogLevel, event: string, details: Record<string, unknown> = {}) =>
     logScanEvent(level, event, { scanId: scanJobId, workspaceId, ...details });
 
+  if (!workerId) {
+    log("warn", "ownership-lost", { reason: "missing_claim_owner" });
+    return;
+  }
+
   if (!job.permissionConfirmed) {
     log("warn", "fail", { error: "permission_not_confirmed" });
-    await deps.markScanFailed(workspaceId, scanJobId, "permission_not_confirmed");
+    await deps.markScanFailed(
+      workspaceId,
+      scanJobId,
+      "permission_not_confirmed",
+      workerId
+    );
     return;
   }
 
@@ -213,14 +234,7 @@ export async function processScanJob(
     } catch (err) {
       const msg = (err as Error).message || "crawl_resolution_failed";
       log("error", "fail", { error: msg });
-      await deps.markScanFailed(workspaceId, scanJobId, msg);
-      await deps.updateScanJob(workspaceId, scanJobId, {
-        phase: "failed",
-        currentStep: "failed",
-        processorError: msg,
-        claimedBy: null,
-        processorHeartbeatAt: new Date(),
-      });
+      await deps.markScanFailed(workspaceId, scanJobId, msg, workerId);
     } finally {
       if (timer) clearTimeout(timer);
     }
@@ -284,38 +298,45 @@ export async function processScanJob(
   };
 
   try {
-    // The whole outcome-producing step (real engine, or static fallback on a
-    // browser-launch failure) runs under one hard wall-clock ceiling so a hung
-    // Playwright/axe call can never freeze the slot indefinitely.
-    const outcome: ScanOutcome = await withHardScanDeadline(
-      (async () => {
-        try {
-          return await deps.runScanJob(input, onProgress);
-        } catch (err) {
-          if (!isBrowserLaunchFailure(err)) throw err;
-          // Chromium could not start in this environment. Degrade to the static
-          // HTML scan rather than failing the job outright.
-          log("warn", "static-fallback", { error: (err as Error).message });
-          await deps.updateScanJob(workspaceId, scanJobId, {
-            progressStep: "static_fallback",
-            processorError: "browser_launch_failed",
-            errorMessage:
-              "Browser worker could not launch Chromium. Completed a static HTML scan instead.",
-          });
-          return deps.runStaticScanJob(
-            {
-              ...input,
-              includeScreenshots: false,
-              storeScreenshots: false,
-              visualEvidenceEnabled: false,
-              visualEvidenceMaxScreenshots: 0,
-            },
-            onProgress
-          );
-        }
-      })(),
-      WORKER_SCAN_HARD_TIMEOUT_MS
-    );
+    let outcome: ScanOutcome;
+    let fallbackReason: ReturnType<typeof staticFallbackReason> = null;
+    try {
+      outcome = await withHardScanDeadline(
+        deps.runScanJob(input, onProgress),
+        WORKER_SCAN_HARD_TIMEOUT_MS
+      );
+      fallbackReason = staticFallbackReasonFromOutcome(outcome);
+    } catch (err) {
+      fallbackReason = staticFallbackReason(err);
+      if (!fallbackReason) throw err;
+      outcome = { pages: [], pagesDiscovered: 0, pagesScanned: 0, durationMs: 0 };
+    }
+    if (fallbackReason) {
+      log("warn", "static-fallback", {
+        errorCode: fallbackReason.code,
+        error: fallbackReason.message,
+      });
+      await deps.updateScanJob(workspaceId, scanJobId, {
+        progressStep: "static_fallback",
+        processorError: fallbackReason.code,
+        errorMessage:
+          `Browser accessibility analysis could not complete (${fallbackReason.code}). ` +
+          "Completed a limited static HTML scan instead.",
+      });
+      const fallbackInput: ScanInput = {
+        ...input,
+        includeScreenshots: false,
+        storeScreenshots: false,
+        visualEvidenceEnabled: false,
+        visualEvidenceMaxScreenshots: 0,
+        timeoutMs: Math.min(input.timeoutMs, STATIC_FALLBACK_TIMEOUT_MS),
+      };
+      const fallback = await withHardScanDeadline(
+        deps.runStaticScanJob(fallbackInput, onProgress),
+        STATIC_FALLBACK_TIMEOUT_MS + 5_000
+      );
+      outcome = annotateStaticFallbackOutcome(fallback, fallbackReason);
+    }
 
     if (outcome.pagesScanned > lastPagesScanned) {
       log("info", "page-end", {
@@ -339,22 +360,34 @@ export async function processScanJob(
       processorHeartbeatAt: savingAt,
       timings: { lastProgressAt: savingAt },
     });
-    await deps.persistScanOutcome(scanJobId, outcome.pages, {
+    const persisted = await deps.persistScanOutcome(scanJobId, outcome.pages, {
       workspaceId,
+      workerId,
       storeScreenshots: job.storeScreenshots,
     });
-    await deps.completeScanJob(scanJobId, outcome, {
+    if (!persisted) {
+      log("warn", "ownership-lost", { stage: "persist-results" });
+      return;
+    }
+    const completed = await deps.completeScanJob(scanJobId, outcome, {
       userId: job.requestedBy,
       workspaceId,
+      workerId,
     });
-    const finishedAt = new Date();
-    await deps.updateScanJob(workspaceId, scanJobId, {
-      currentStep: "completed",
-      currentUrl: null,
-      currentState: null,
-      lastProgressAt: finishedAt,
-      timings: { finishedAt },
-    });
+    if (!completed) {
+      log("warn", "ownership-lost", { stage: "complete" });
+      return;
+    }
+    if (
+      outcome.pages.length === 0 ||
+      outcome.pages.every((page) => page.scanFailed)
+    ) {
+      log("error", "fail", {
+        error: "all_pages_failed",
+        pagesFailed: Math.max(outcome.pages.length, outcome.pagesDiscovered),
+      });
+      return;
+    }
     log("info", "complete", {
       pagesScanned: outcome.pagesScanned,
       pagesDiscovered: outcome.pagesDiscovered,
@@ -371,16 +404,12 @@ export async function processScanJob(
         workspaceId,
       });
     }
-    await deps.markScanFailed(workspaceId, scanJobId, msg);
-    const failedAt = new Date();
-    await deps.updateScanJob(workspaceId, scanJobId, {
-      processorHeartbeatAt: failedAt,
-      processorError: msg,
-      currentStep: "failed",
-      currentUrl: null,
-      currentState: null,
-      lastProgressAt: failedAt,
-      timings: { finishedAt: failedAt },
-    });
+    const failed = await deps.markScanFailed(
+      workspaceId,
+      scanJobId,
+      msg,
+      workerId
+    );
+    if (!failed) log("warn", "ownership-lost", { stage: "fail" });
   }
 }

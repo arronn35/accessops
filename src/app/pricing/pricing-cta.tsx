@@ -6,10 +6,8 @@ import { cn } from "@/lib/utils";
 /**
  * Pricing-page CTA.
  *
- * Payment processing has been removed; selecting a plan grants the
- * workspace access to that tier immediately. If the visitor isn't
- * signed in we send them to sign-in with a callback URL that resumes
- * the plan selection after they authenticate.
+ * Paid plans start a Polar checkout when billing is configured. Local/demo
+ * environments without Polar still fall back to direct plan selection.
  */
 export function PricingCta({
   planId,
@@ -46,6 +44,38 @@ export function PricingCta({
     setBusy(true);
     setError(null);
     try {
+      const checkoutRes = await fetch("/api/billing/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ plan: planId }),
+      });
+      if (checkoutRes.status === 401) {
+        const cb = encodeURIComponent(`/app/settings/billing?plan=${planId}`);
+        window.location.assign(`/auth/sign-in?callbackUrl=${cb}`);
+        return;
+      }
+      const checkoutData = await checkoutRes.json().catch(() => ({}));
+      if (checkoutRes.status === 403 && checkoutData.error === "no_workspace") {
+        window.location.assign("/onboarding");
+        return;
+      }
+      if (checkoutRes.ok && checkoutData.url) {
+        window.location.assign(checkoutData.url as string);
+        return;
+      }
+      if (
+        checkoutRes.status !== 503 ||
+        checkoutData.error !== "billing_unavailable"
+      ) {
+        setError(
+          checkoutData.message ||
+            checkoutData.error ||
+            "Could not start checkout."
+        );
+        setBusy(false);
+        return;
+      }
+
       const res = await fetch("/api/plan/select", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -93,10 +123,11 @@ export function PricingCta({
 
 function ctaClasses(highlighted: boolean | undefined): string {
   return cn(
-    "mt-5 inline-flex items-center justify-center h-10 px-4 rounded-md text-sm font-medium w-full",
+    "mt-6 inline-flex w-full items-center justify-center px-4 py-3.5 text-[13px] font-bold",
+    // On the dark "most popular" card the CTA inverts to paper.
     highlighted
-      ? "bg-navy-900 text-paper hover:bg-navy-800"
-      : "ring-1 ring-line bg-paper text-ink-900 hover:bg-canvas-2",
+      ? "bg-paper text-navy-900 hover:bg-canvas-2"
+      : "border border-rule bg-transparent text-navy-900 hover:bg-canvas-2",
     "disabled:opacity-50 disabled:cursor-not-allowed"
   );
 }

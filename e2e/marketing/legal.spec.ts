@@ -33,8 +33,10 @@ test.describe("legal pages", () => {
   test("subprocessor list matches the current architecture", async ({ page }) => {
     await page.goto("/legal/subprocessors");
     await expect(page.getByRole("cell", { name: /Google Firebase/ })).toBeVisible();
-    // The scan worker host replaced the retired Cloudflare queue.
-    await expect(page.getByRole("cell", { name: /Railway/ })).toBeVisible();
+    // The scan worker runs on Cloud Run (replaced Railway, which replaced the
+    // retired Cloudflare queue).
+    await expect(page.getByRole("cell", { name: /Google Cloud Run/ })).toBeVisible();
     await expect(page.getByText(/Cloudflare/)).toHaveCount(0);
+    await expect(page.getByText(/Railway/)).toHaveCount(0);
   });
 });

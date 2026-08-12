@@ -6,7 +6,7 @@ import type {
   ScanScoreSummary,
 } from "./types";
 
-export const SCORING_VERSION = "percevia-score-v1";
+export const SCORING_VERSION = "percevia-score-v2";
 
 const IMPACT_WEIGHTS: Record<Impact | "review", number> = {
   critical: 10,
@@ -30,8 +30,14 @@ const CATEGORY_KEYS = [
 
 type CategoryKey = (typeof CATEGORY_KEYS)[number];
 
-export function calculateScanScore(pages: NormalizedPage[]): ScanScoreSummary {
-  const pageCount = Math.max(1, pages.length);
+export function calculateScanScore(
+  allPages: NormalizedPage[]
+): ScanScoreSummary | null {
+  const pages = allPages.filter((page) => !page.scanFailed);
+  const failedPages = allPages.filter((page) => page.scanFailed);
+  if (pages.length === 0) return null;
+
+  const pageCount = pages.length;
   const allIssues = pages.flatMap((page) =>
     page.issues.map((issue) => ({ page, issue }))
   );
@@ -84,6 +90,8 @@ export function calculateScanScore(pages: NormalizedPage[]): ScanScoreSummary {
     manualReviewCount: uniqueIssues.filter(({ issue }) => isReviewIssue(issue)).length,
     categoryScores,
     pageScores,
+    pagesFailedToScan: failedPages.length,
+    failedPageUrls: Array.from(new Set(failedPages.map((page) => page.url))),
     scoringVersion: SCORING_VERSION,
   };
 }

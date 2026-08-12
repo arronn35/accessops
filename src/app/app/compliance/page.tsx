@@ -9,6 +9,7 @@ import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { PrivacyToggle } from "./privacy-toggle";
 import { DeleteAllScansButton, ExportWorkspaceButton } from "./delete-actions";
+import { RegionHostingCard } from "./region-hosting-card";
 import { listAuditLogs } from "@/lib/data/firestore";
 import { formatRelative } from "@/lib/utils";
 
@@ -48,7 +49,7 @@ const LEGAL_PAGES = [
 const SUBPROCESSORS = [
   { name: "Vercel", purpose: "Application hosting and API", region: "US/global" },
   { name: "Firebase", purpose: "Authentication and Firestore workspace storage", region: "Configured project region" },
-  { name: "Railway", purpose: "Browser scan worker (Playwright + axe-core); page content processed transiently", region: "US" },
+  { name: "Google Cloud Run", purpose: "Browser scan worker (Playwright + axe-core); page content processed transiently", region: "EU (europe-west1)" },
   { name: "OpenAI API", purpose: "GPT explanations and remediation suggestions when enabled", region: "US" },
 ];
 
@@ -181,45 +182,31 @@ export default async function CompliancePage() {
         </div>
       </section>
 
+      {/* Accessibility Statement */}
+      <section className="space-y-3">
+        <SectionTitle icon={<ShieldCheck className="size-4 text-ink-700" aria-hidden />} title="Accessibility Statement" />
+        <Card>
+          <CardContent className="pt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="text-sm font-semibold text-ink-900">Accessibility Statement & verified badge</h3>
+              <p className="text-xs text-ink-600 mt-1 leading-relaxed max-w-[550px]">
+                Generate a legally compliant (WCAG 2.2 AA) Accessibility Statement based on your latest scan and manual review results, and obtain a verified badge to display in your website footer.
+              </p>
+            </div>
+            <Link
+              href="/app/compliance/statement"
+              className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 shrink-0 self-start sm:self-center"
+            >
+              <ShieldCheck className="size-4" aria-hidden /> Manage statement
+            </Link>
+          </CardContent>
+        </Card>
+      </section>
+
       {/* Region / hosting */}
       <section className="space-y-3">
         <SectionTitle icon={<Server className="size-4 text-ink-700" aria-hidden />} title="Region & data hosting" />
-        <Card>
-          <CardContent className="pt-5">
-            <div className="grid sm:grid-cols-3 gap-4">
-              {[
-                { id: "eu", label: "EU (Frankfurt)", current: true, description: "GDPR-friendly default." },
-                { id: "us", label: "US (Virginia)", description: "Required for some clients." },
-                { id: "other", label: "Other (on-request)", description: "Enterprise plan: AU, UK, CA." },
-              ].map((r) => (
-                <button
-                  key={r.id}
-                  type="button"
-                  aria-pressed={!!r.current}
-                  className={`text-left rounded-md p-4 ring-1 transition-colors min-h-[88px] ${
-                    r.current
-                      ? "ring-blue-500 bg-blue-50/50"
-                      : "ring-line bg-paper hover:bg-canvas-2"
-                  }`}
-                >
-                  <p className="text-sm font-semibold text-ink-900">{r.label}</p>
-                  <p className="text-xs text-ink-600 mt-1 leading-relaxed">{r.description}</p>
-                  {r.current && (
-                    <p className="text-[10px] uppercase tracking-wider text-blue-700 font-semibold mt-2">
-                      Current
-                    </p>
-                  )}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-ink-500 mt-4 leading-relaxed">
-              The region selector records your residency preference. Actual data
-              location follows the configured Firebase project region and worker
-              deployment; switching providers or regions is an infrastructure
-              change handled with support.
-            </p>
-          </CardContent>
-        </Card>
+        <RegionHostingCard workspaceRegion={ctx.workspace.region} />
       </section>
 
       {/* Team access */}

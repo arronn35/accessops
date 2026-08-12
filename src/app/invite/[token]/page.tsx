@@ -11,7 +11,7 @@ export default async function InvitePage({ params }: { params: Promise<{ token: 
   const signedIn = Boolean(await verifySessionCookie().catch(() => null));
   return (
     <div className="min-h-screen grid place-items-center bg-canvas-2 px-4">
-      <div className="max-w-md rounded-md bg-paper ring-1 ring-line p-6">
+      <div className="max-w-md rounded-md bg-paper border border-rule p-6">
         <h1 className="text-xl font-semibold text-ink-900">Workspace invitation</h1>
         <p className="text-sm text-ink-600 mt-2">
           {invite

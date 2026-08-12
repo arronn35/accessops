@@ -26,10 +26,10 @@ const ROWS: Row[] = [
     region: "Configured Firebase project region",
   },
   {
-    vendor: "Railway Corp. (US)",
+    vendor: "Google Cloud Run (Google LLC)",
     purpose: "Hosts the browser scan worker (Playwright + axe-core)",
     data: "Scanned page content processed transiently in memory; results written to Firestore. No page HTML retained on the worker.",
-    region: "US",
+    region: "EU (europe-west1)",
   },
   {
     vendor: "OpenAI, L.L.C. (US)",

@@ -85,7 +85,7 @@ export function TopNav({
   }
 
   return (
-    <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-line">
+    <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-rule">
       <div className="flex items-center justify-between gap-4 px-4 lg:px-8 h-16">
         <div className="flex items-center gap-3 lg:hidden">
           <PrefetchLink href="/app" aria-label="percevia home">
@@ -95,7 +95,7 @@ export function TopNav({
 
         <div className="flex items-center gap-3 min-w-0 flex-1 lg:flex-none">
           {editingWorkspace ? (
-            <div className="hidden lg:inline-flex items-center gap-1.5 px-2 py-1 rounded-md ring-1 ring-line bg-canvas">
+            <div className="hidden lg:inline-flex items-center gap-1.5 px-2 py-1 border border-rule bg-canvas">
               <span className="size-5 rounded bg-navy-900 text-paper inline-flex items-center justify-center text-[10px] font-bold">
                 {workspaceInitial}
               </span>
@@ -114,7 +114,7 @@ export function TopNav({
                 }}
                 disabled={savingWorkspace}
                 aria-label="Workspace name"
-                className="text-sm bg-paper rounded px-1.5 h-7 ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[160px]"
+                className="text-sm bg-paper rounded px-1.5 h-7 border border-rule min-w-[160px]"
               />
               <button
                 type="button"
@@ -147,7 +147,7 @@ export function TopNav({
             <button
               type="button"
               onClick={() => setEditingWorkspace(true)}
-              className="hidden lg:inline-flex items-center gap-2 px-3 py-1.5 rounded-md ring-1 ring-line bg-canvas text-sm text-ink-700 hover:bg-canvas-2 min-h-[36px] group"
+              className="hidden lg:inline-flex items-center gap-2 px-3 py-1.5 border border-rule bg-canvas text-sm text-ink-700 hover:bg-canvas-2 min-h-[36px] group"
               aria-label={`Workspace: ${workspaceName}. Click to rename.`}
             >
               <span className="size-5 rounded bg-navy-900 text-paper inline-flex items-center justify-center text-[10px] font-bold">
@@ -169,7 +169,7 @@ export function TopNav({
             <input
               type="search"
               placeholder="Search scans, issues, pages…"
-              className="w-full h-10 pl-9 pr-3 rounded-md bg-canvas ring-1 ring-line text-sm placeholder:text-ink-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full h-10 pl-9 pr-3 border border-rule bg-canvas text-sm placeholder:text-ink-500"
             />
           </label>
         </div>
@@ -195,7 +195,7 @@ export function TopNav({
             </button>
 
             {open && (
-              <div className="absolute right-0 mt-2 w-72 rounded-md bg-paper ring-1 ring-line shadow-[var(--shadow-card)] p-2">
+              <div className="absolute right-0 mt-2 w-72 bg-paper border border-rule shadow-[6px_6px_0_rgba(11,18,32,0.20)] p-2">
                 <div className="px-3 py-2 border-b border-line/70 mb-1">
                   <p className="text-sm font-semibold text-ink-900 truncate">{displayName}</p>
                   {userEmail && <p className="text-xs text-ink-500 truncate">{userEmail}</p>}

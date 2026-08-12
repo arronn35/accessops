@@ -11,6 +11,7 @@ import type { PageJob, ScanJob } from "@/lib/data/types";
 vi.mock("@/lib/data/firestore", () => ({
   completePageJob: vi.fn(),
   failPageJob: vi.fn(),
+  renewOwnedScanClaim: vi.fn(),
   touchPageJob: vi.fn(),
   updateScanJob: vi.fn(),
 }));
@@ -112,6 +113,10 @@ describe.skipIf(!runBrowserTests)("playwright axe runner integration", () => {
     });
 
     expect(outcome.pagesScanned).toBe(1);
+    expect(outcome.pages[0]).toMatchObject({
+      scanFailed: true,
+      failureCode: expect.any(String),
+    });
     expect(outcome.pages[0].rawMetadata?.code).toBeTruthy();
     expect(outcome.pages[0].issues).toEqual([]);
   });
@@ -133,7 +138,10 @@ describe.skipIf(!runBrowserTests)("playwright axe runner integration", () => {
     expect(outcome.pages[0].rawMetadata).toMatchObject({
       code: "deadline_exceeded",
       truncatedByDeadline: true,
+      scanFailed: true,
+      failureCode: "deadline_exceeded",
     });
+    expect(outcome.pages[0].scanFailed).toBe(true);
   }, 15_000);
 
   it("aborts a page job whose main document never finishes loading", async () => {

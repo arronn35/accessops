@@ -2,22 +2,23 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { type HTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
+/** Badges are mono tags, not pills — same voice as the section markers. */
 const badgeVariants = cva(
-  "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ring-1",
+  "inline-flex items-center gap-1 border px-2 py-0.5 font-mono text-[11px] font-medium uppercase tracking-[0.06em]",
   {
     variants: {
       tone: {
-        neutral: "bg-canvas-2 text-ink-700 ring-line",
-        info: "bg-blue-50 text-blue-700 ring-blue-100",
-        success: "bg-green-50 text-green-700 ring-green-50",
-        warning: "bg-amber-50 text-amber-700 ring-amber-50",
-        danger: "bg-rose-50 text-rose-700 ring-rose-50",
-        ai: "bg-purple-50 text-purple-600 ring-purple-100",
-        navy: "bg-navy-900 text-paper ring-navy-900",
+        neutral: "bg-canvas-2 text-ink-700 border-line",
+        info: "bg-blue-50 text-blue-700 border-blue-100",
+        success: "bg-green-50 text-green-700 border-green-500/40",
+        warning: "bg-amber-50 text-amber-700 border-amber-500/40",
+        danger: "bg-rose-50 text-rose-700 border-rose-500/40",
+        ai: "bg-purple-50 text-purple-600 border-purple-100",
+        navy: "bg-navy-900 text-paper border-navy-900",
       },
       size: {
-        sm: "text-[10px] px-2 py-0.5",
-        md: "text-xs px-2.5 py-0.5",
+        sm: "text-[10px] px-1.5 py-0.5",
+        md: "text-[11px] px-2 py-0.5",
       },
     },
     defaultVariants: { tone: "neutral", size: "md" },

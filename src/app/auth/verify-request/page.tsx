@@ -7,9 +7,9 @@ export const metadata = { title: "Check your email — Percevia AI" };
 export default function VerifyRequestPage() {
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
-      <header className="bg-paper border-b border-line">
+      <header className="bg-paper border-b border-rule">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center">
-          <Link href="/"><Logo variant="wordmark" /></Link>
+          <Link href="/"><Logo variant="site" /></Link>
         </div>
       </header>
       <main

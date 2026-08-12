@@ -31,15 +31,15 @@ export const Switch = forwardRef<HTMLInputElement, SwitchProps>(
           <span
             aria-hidden
             className={cn(
-              "block h-6 w-11 rounded-full bg-ink-300 transition-colors",
-              "peer-checked:bg-blue-500",
-              "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2",
+              "block h-6 w-11 border border-rule bg-canvas-2 transition-colors",
+              "peer-checked:bg-blue-600",
+              "peer-focus-visible:outline peer-focus-visible:outline-[3px] peer-focus-visible:outline-offset-[3px] peer-focus-visible:outline-blue-600",
               "peer-disabled:opacity-50"
             )}
           />
           <span
             aria-hidden
-            className="absolute top-0.5 left-0.5 size-5 rounded-full bg-paper shadow-[var(--shadow-soft)] transition-transform peer-checked:translate-x-5"
+            className="absolute top-[3px] left-[3px] size-[18px] bg-navy-900 transition-transform peer-checked:translate-x-5 peer-checked:bg-paper"
           />
         </span>
       </label>

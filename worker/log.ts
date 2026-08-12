@@ -3,8 +3,8 @@
  *
  * Every line carries the scan document id as the correlation id (`scanId`),
  * so a single scan's full trail — claim, browser-start, page-start, page-end,
- * save, complete, fail, reclaim — can be grepped out of the Railway log drain
- * with one filter.
+ * save, complete, fail, reclaim — can be grepped out of the platform log
+ * stream (e.g. Cloud Run / Cloud Logging) with one filter.
  */
 
 export type WorkerLogLevel = "info" | "warn" | "error";

@@ -622,7 +622,7 @@ npm run test:e2e
 
 - **Web:** Vercel
 - **Kimlik ve veritabanı:** Firebase Authentication + Firestore
-- **Tarama worker'ı:** Railway, Fly.io, Render veya Cloud Run üzerinde container
+- **Tarama worker'ı:** Google Cloud Run üzerinde container (scale-to-zero, Cloud Tasks ile tetiklenir)
 - **AI:** OpenAI Responses API
 - **Tarayıcı:** Worker container içindeki Playwright Chromium
 

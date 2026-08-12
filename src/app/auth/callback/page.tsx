@@ -33,7 +33,7 @@ function CallbackFallback() {
     <div className="min-h-screen bg-canvas-2 flex flex-col">
       <header className="bg-paper border-b border-line">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center">
-          <Logo variant="wordmark" />
+          <Logo variant="site" />
         </div>
       </header>
       <main className="flex-1 max-w-md w-full mx-auto px-4 lg:px-8 py-16 text-center">

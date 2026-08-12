@@ -1,8 +1,11 @@
 # Percevia browser scan worker.
 #
-# Long-running container that polls Firestore for queued scans and runs the
-# real Playwright + axe-core engine. Deploy to any container host (Railway,
-# Fly.io, Render, Cloud Run). The Vercel web app does NOT use this image.
+# Container that runs the real Playwright + axe-core engine. The Vercel web app
+# does NOT use this image. Default target is Google Cloud Run in HTTP "serve"
+# mode (scale-to-zero, woken by Cloud Tasks): see docs/worker-deploy.md.
+#
+# To run the legacy always-on poller instead (any container host), override the
+# command: `tsx worker/index.ts`.
 #
 # The base image ships Chromium + all system libraries, matched to the
 # playwright version in package.json (1.60.0) — do NOT bump one without the
@@ -33,4 +36,4 @@ RUN chmod -R a+rX /app
 # Run as the non-root user provided by the Playwright base image.
 USER pwuser
 
-CMD ["npx", "tsx", "worker/index.ts"]
+CMD ["npx", "tsx", "worker/serve.ts"]

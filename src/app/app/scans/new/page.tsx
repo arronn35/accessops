@@ -375,10 +375,17 @@ function errorMessage(code?: string) {
       return "You're starting scans too quickly. Try again in a minute.";
     case "daily_scan_limit":
       return "You've reached your daily scan limit on the free plan.";
+    case "daily_free_capacity_reached":
+      return "Daily free scan capacity has been reached. Please try again tomorrow.";
     case "scan_concurrency_limit":
       return "A scan is already running. Wait for it to finish.";
     case "queue_unavailable":
+    case "scan_dispatch_not_configured":
       return "The scan service is temporarily unavailable. Try again shortly.";
+    case "firestore_index_unavailable":
+      return "Scan data is temporarily unavailable while the database prepares an index. Try again shortly.";
+    case "firestore_quota_exceeded":
+      return "Scan data is temporarily unavailable because the database capacity limit was reached.";
     case "manual_urls_required":
       return "Add at least one manual URL.";
     case "manual_url_origin_mismatch":
@@ -387,6 +394,11 @@ function errorMessage(code?: string) {
       return "The sitemap URL must stay on the same domain as the website URL.";
     case "unauthorized":
       return "Please sign in to start a scan.";
+    case "forbidden":
+      return "Your workspace role doesn't allow starting scans.";
+    case "workspace_not_found":
+    case "no_workspace":
+      return "Set up a workspace before starting a scan.";
     default:
       return null;
   }

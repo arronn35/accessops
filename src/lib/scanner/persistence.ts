@@ -4,14 +4,15 @@ import {
   clearScanPageResult,
   clearScanGroups,
   clearScanResultCollections,
-  getScanJob,
+  finalizeOwnedScanJob,
   incrementPagesUsage,
   listIssues,
+  listPageJobs,
   listScanPages,
   maxPersistedIssuesPerScan,
+  renewOwnedScanClaim,
   syncRemediationTasksForScan,
   updateIssueGroupId,
-  updateScanJob,
   writeIssue,
   writeIssueGroup,
   writeScanPage,
@@ -25,6 +26,7 @@ import type {
   NormalizedIssue,
   NormalizedPage,
   ScanOutcome,
+  ScannerErrorCode,
   ScannerPageMetadata,
   Severity,
 } from "./types";
@@ -68,6 +70,8 @@ async function persistPageRows(
     rawMetadataJson: {
       ...(typeof page.rawMetadata === "object" && page.rawMetadata ? page.rawMetadata : {}),
       engineLabel: engineLabelFor(pageEngine(page)),
+      scanFailed: page.scanFailed === true,
+      failureCode: page.failureCode ?? null,
     },
   }, pageJobId);
 
@@ -106,15 +110,38 @@ async function persistPageRows(
 export async function persistScanOutcome(
   scanJobId: string,
   pages: NormalizedPage[],
-  options: { workspaceId: string; storeScreenshots?: boolean; retentionDays?: number }
-): Promise<void> {
+  options: {
+    workspaceId: string;
+    workerId: string;
+    storeScreenshots?: boolean;
+    retentionDays?: number;
+  }
+): Promise<boolean> {
   const grouping: GroupableIssue[] = [];
   let persistedIssues = 0;
   const cap = maxPersistedIssuesPerScan();
 
+  if (
+    !(await renewOwnedScanClaim(
+      options.workspaceId,
+      scanJobId,
+      options.workerId
+    ))
+  ) {
+    return false;
+  }
   await clearScanResultCollections(options.workspaceId, scanJobId);
 
   for (const p of pages) {
+    if (
+      !(await renewOwnedScanClaim(
+        options.workspaceId,
+        scanJobId,
+        options.workerId
+      ))
+    ) {
+      return false;
+    }
     const { groupables, persisted } = await persistPageRows(
       scanJobId,
       p,
@@ -125,7 +152,17 @@ export async function persistScanOutcome(
     grouping.push(...groupables);
   }
 
+  if (
+    !(await renewOwnedScanClaim(
+      options.workspaceId,
+      scanJobId,
+      options.workerId
+    ))
+  ) {
+    return false;
+  }
   await persistIssueGroups(options.workspaceId, scanJobId, grouping);
+  return true;
 }
 
 /**
@@ -196,14 +233,27 @@ function storedPagesToNormalized(
     if (list) list.push(i);
     else byPage.set(key, [i]);
   }
-  return pages.map((p) => ({
-    url: p.url,
-    title: p.title,
-    statusCode: p.statusCode,
-    scannedAt: p.scannedAt ?? new Date(0),
-    rawMetadata: (p.rawMetadataJson as ScannerPageMetadata | undefined) ?? undefined,
-    issues: (byPage.get(p.id) ?? []).map(storedIssueToNormalized),
-  }));
+  return pages.map((p) => {
+    const rawMetadata =
+      p.rawMetadataJson && typeof p.rawMetadataJson === "object"
+        ? (p.rawMetadataJson as ScannerPageMetadata)
+        : undefined;
+    const scanFailed = rawMetadata?.scanFailed === true;
+    const failureCode =
+      scanFailed && typeof rawMetadata?.failureCode === "string"
+        ? (rawMetadata.failureCode as ScannerErrorCode)
+        : undefined;
+    return {
+      url: p.url,
+      title: p.title,
+      statusCode: p.statusCode,
+      scannedAt: p.scannedAt ?? new Date(0),
+      scanFailed,
+      failureCode,
+      rawMetadata,
+      issues: (byPage.get(p.id) ?? []).map(storedIssueToNormalized),
+    };
+  });
 }
 
 /**
@@ -213,15 +263,94 @@ function storedPagesToNormalized(
  */
 export async function aggregateScan(
   scanJobId: string,
-  meta: { workspaceId: string; userId: string }
-): Promise<{ phase: ScanPhase; pagesDone: number; pagesFailed: number }> {
+  meta: { workspaceId: string; userId: string; workerId: string }
+): Promise<{
+  phase: ScanPhase;
+  pagesDone: number;
+  pagesFailed: number;
+} | null> {
   const { workspaceId } = meta;
-  const scan = await getScanJob(workspaceId, scanJobId);
-  const pages = await listScanPages(workspaceId, scanJobId);
-  const issues = await listIssues(workspaceId, scanJobId);
+  const scan = await renewOwnedScanClaim(
+    workspaceId,
+    scanJobId,
+    meta.workerId
+  );
+  if (!scan) return null;
+  const [pages, issues, pageJobs] = await Promise.all([
+    listScanPages(workspaceId, scanJobId),
+    listIssues(workspaceId, scanJobId),
+    scan.usePageJobs
+      ? listPageJobs(workspaceId, scanJobId)
+      : Promise.resolve([]),
+  ]);
   const normalized = storedPagesToNormalized(pages, issues);
 
+  const counterPagesFailed = scan.pagesFailed ?? 0;
+  const pagesDone = scan.pagesDone ?? pages.length;
+  const failedPageJobs = pageJobs.filter((job) => job.status === "failed");
+  const pagesFailed = Math.max(
+    counterPagesFailed,
+    failedPageJobs.length,
+    normalized.filter((page) => page.scanFailed).length
+  );
+  const plannedPhase: ScanPhase = terminalScanPhase(pagesDone, pagesFailed);
   const summary = calculateScanScore(normalized);
+  const allFailed = plannedPhase === "failed" || summary === null;
+  const phase: ScanPhase = allFailed ? "failed" : plannedPhase;
+  const at = new Date();
+
+  if (allFailed) {
+    const finalized = await finalizeOwnedScanJob(
+      workspaceId,
+      scanJobId,
+      meta.workerId,
+      {
+        status: "failed",
+        phase: "failed",
+        progressStep: "failed",
+        currentStep: "failed",
+        currentUrl: null,
+        currentState: null,
+        pagesScanned: 0,
+        pagesDone: 0,
+        pagesFailed,
+        processorStartedAt: null,
+        processorHeartbeatAt: at,
+        completedAt: at,
+        lastProgressAt: at,
+        errorMessage: "All pages failed to scan.",
+        errorCode: "all_pages_failed",
+        timings: { finishedAt: at },
+      }
+    );
+    if (!finalized) return null;
+    await audit({
+      userId: meta.userId,
+      workspaceId,
+      action: "scan.failed",
+      resourceType: "scan_job",
+      resourceId: scanJobId,
+      metadata: {
+        pagesScanned: 0,
+        pagesFailed,
+        phase: "failed",
+        remediationTasksCreated: 0,
+      },
+    });
+    return { phase: "failed", pagesDone: 0, pagesFailed };
+  }
+
+  const failedPageUrls = Array.from(
+    new Set([
+      ...summary.failedPageUrls,
+      ...failedPageJobs.map((job) => job.url),
+    ])
+  );
+  if (
+    !(await renewOwnedScanClaim(workspaceId, scanJobId, meta.workerId))
+  ) {
+    return null;
+  }
   await writeScanSummary(workspaceId, scanJobId, {
     overallScore: summary.overallScore,
     grade: summary.grade,
@@ -232,6 +361,8 @@ export async function aggregateScan(
     wcagIssueCount: summary.wcagIssueCount,
     bestPracticeIssueCount: summary.bestPracticeIssueCount,
     manualReviewCount: summary.manualReviewCount,
+    pagesFailedToScan: Math.max(summary.pagesFailedToScan, pagesFailed),
+    failedPageUrls,
     scoringVersion: summary.scoringVersion,
   });
 
@@ -243,45 +374,43 @@ export async function aggregateScan(
     issues.map((i) => toGroupable(i.id, storedIssueToNormalized(i)))
   );
 
-  const pagesFailed = scan?.pagesFailed ?? 0;
-  const pagesDone = scan?.pagesDone ?? pages.length;
-  const phase: ScanPhase = terminalScanPhase(pagesDone, pagesFailed);
-  const allFailed = phase === "failed";
-  const at = new Date();
+  const finalized = await finalizeOwnedScanJob(
+    workspaceId,
+    scanJobId,
+    meta.workerId,
+    {
+      status: "completed",
+      phase,
+      progressStep: "completed",
+      currentStep: phase,
+      currentUrl: null,
+      currentState: null,
+      pagesScanned: pagesDone,
+      pagesDone,
+      pagesFailed,
+      processorStartedAt: null,
+      processorHeartbeatAt: at,
+      completedAt: at,
+      lastProgressAt: at,
+      errorMessage:
+        pagesFailed > 0
+          ? `${pagesFailed} page${pagesFailed === 1 ? "" : "s"} could not be scanned.`
+          : null,
+      errorCode: null,
+      timings: { finishedAt: at },
+    }
+  );
+  if (!finalized) return null;
 
-  await updateScanJob(workspaceId, scanJobId, {
-    status: allFailed ? "failed" : "completed",
-    phase,
-    progressStep: allFailed ? "failed" : "completed",
-    currentStep: phase,
-    currentUrl: null,
-    currentState: null,
-    pagesScanned: pagesDone,
-    claimedBy: null,
-    processorStartedAt: null,
-    processorHeartbeatAt: at,
-    completedAt: at,
-    lastProgressAt: at,
-    errorMessage: allFailed
-      ? "All pages failed to scan."
-      : pagesFailed > 0
-      ? `${pagesFailed} page${pagesFailed === 1 ? "" : "s"} could not be scanned.`
-      : null,
-    errorCode: allFailed ? "all_pages_failed" : null,
-    timings: { finishedAt: at },
-  });
-
-  if (!allFailed) {
-    await syncRemediationTasksForScan(workspaceId, scanJobId);
-    await incrementPagesUsage(workspaceId, pagesDone);
-  }
+  await syncRemediationTasksForScan(workspaceId, scanJobId);
+  await incrementPagesUsage(workspaceId, pagesDone);
 
   const engine =
     normalized.map(pageEngine).find((value) => value) ?? "playwright-axe";
   await audit({
     userId: meta.userId,
     workspaceId,
-    action: allFailed ? "scan.failed" : "scan.completed",
+    action: "scan.completed",
     resourceType: "scan_job",
     resourceId: scanJobId,
     metadata: {
@@ -289,7 +418,7 @@ export async function aggregateScan(
       pagesFailed,
       engine,
       phase,
-      remediationTasksCreated: allFailed ? 0 : undefined,
+      remediationTasksCreated: undefined,
     },
   });
 
@@ -383,13 +512,23 @@ export async function persistIssueGroups(
 export async function markScanFailed(
   workspaceId: string,
   scanJobId: string,
-  errorMessage: string
-) {
-  await updateScanJob(workspaceId, scanJobId, {
+  errorMessage: string,
+  workerId: string
+): Promise<boolean> {
+  const at = new Date();
+  return finalizeOwnedScanJob(workspaceId, scanJobId, workerId, {
     status: "failed",
+    phase: "failed",
     progressStep: "failed",
+    currentStep: "failed",
+    currentUrl: null,
+    currentState: null,
+    processorError: errorMessage,
+    processorHeartbeatAt: at,
     errorMessage,
-    completedAt: new Date(),
+    completedAt: at,
+    lastProgressAt: at,
+    timings: { finishedAt: at },
   });
 }
 
@@ -399,11 +538,75 @@ export async function completeScanJob(
   metadata: {
     userId: string;
     workspaceId: string;
+    workerId: string;
   }
-) {
+): Promise<boolean> {
+  if (
+    !(await renewOwnedScanClaim(
+      metadata.workspaceId,
+      scanJobId,
+      metadata.workerId
+    ))
+  ) {
+    return false;
+  }
   const engine =
     outcome.pages.map(pageEngine).find((value) => value) ?? "playwright-axe";
   const summary = calculateScanScore(outcome.pages);
+  const failedPages = outcome.pages.filter((page) => page.scanFailed);
+  const pagesFailedToScan = failedPages.length;
+  const successfulPages = outcome.pages.length - pagesFailedToScan;
+  const at = new Date();
+
+  if (!summary) {
+    const finalized = await finalizeOwnedScanJob(
+      metadata.workspaceId,
+      scanJobId,
+      metadata.workerId,
+      {
+        status: "failed",
+        phase: "failed",
+        progressStep: "failed",
+        currentStep: "failed",
+        currentUrl: null,
+        currentState: null,
+        pagesScanned: 0,
+        pagesDone: 0,
+        pagesFailed: Math.max(
+          pagesFailedToScan,
+          outcome.pagesScanned,
+          outcome.pagesDiscovered
+        ),
+        pagesTotal: Math.max(outcome.pagesDiscovered, outcome.pagesScanned),
+        processorHeartbeatAt: at,
+        completedAt: at,
+        lastProgressAt: at,
+        errorMessage: "All pages failed to scan.",
+        errorCode: "all_pages_failed",
+        timings: { finishedAt: at },
+      }
+    );
+    if (!finalized) return false;
+    await audit({
+      userId: metadata.userId,
+      workspaceId: metadata.workspaceId,
+      action: "scan.failed",
+      resourceType: "scan_job",
+      resourceId: scanJobId,
+      metadata: {
+        pagesScanned: 0,
+        pagesFailed: Math.max(
+          pagesFailedToScan,
+          outcome.pagesScanned,
+          outcome.pagesDiscovered
+        ),
+        durationMs: outcome.durationMs,
+        engine,
+      },
+    });
+    return true;
+  }
+
   await writeScanSummary(metadata.workspaceId, scanJobId, {
     overallScore: summary.overallScore,
     grade: summary.grade,
@@ -414,21 +617,47 @@ export async function completeScanJob(
     wcagIssueCount: summary.wcagIssueCount,
     bestPracticeIssueCount: summary.bestPracticeIssueCount,
     manualReviewCount: summary.manualReviewCount,
+    pagesFailedToScan: summary.pagesFailedToScan,
+    failedPageUrls: summary.failedPageUrls,
     scoringVersion: summary.scoringVersion,
   });
 
-  await updateScanJob(metadata.workspaceId, scanJobId, {
-    status: "completed",
-    progressStep: "completed",
-    pagesScanned: outcome.pagesScanned,
-    pagesDiscovered: outcome.pagesDiscovered,
-    completedAt: new Date(),
-  });
+  const phase: ScanPhase =
+    pagesFailedToScan > 0 ? "completed_with_errors" : "completed";
+  const finalized = await finalizeOwnedScanJob(
+    metadata.workspaceId,
+    scanJobId,
+    metadata.workerId,
+    {
+      status: "completed",
+      phase,
+      progressStep: "completed",
+      currentStep: phase,
+      currentUrl: null,
+      currentState: null,
+      pagesScanned: successfulPages,
+      pagesDone: successfulPages,
+      pagesFailed: pagesFailedToScan,
+      pagesTotal: Math.max(outcome.pagesDiscovered, outcome.pages.length),
+      pagesDiscovered: outcome.pagesDiscovered,
+      processorHeartbeatAt: at,
+      completedAt: at,
+      lastProgressAt: at,
+      errorMessage:
+        pagesFailedToScan > 0
+          ? `${pagesFailedToScan} page${pagesFailedToScan === 1 ? "" : "s"} could not be scanned.`
+          : null,
+      errorCode: null,
+      timings: { finishedAt: at },
+    }
+  );
+  if (!finalized) return false;
+
   const remediationTasksCreated = await syncRemediationTasksForScan(
     metadata.workspaceId,
     scanJobId
   );
-  await incrementPagesUsage(metadata.workspaceId, outcome.pagesScanned);
+  await incrementPagesUsage(metadata.workspaceId, successfulPages);
   await audit({
     userId: metadata.userId,
     workspaceId: metadata.workspaceId,
@@ -436,10 +665,12 @@ export async function completeScanJob(
     resourceType: "scan_job",
     resourceId: scanJobId,
     metadata: {
-      pagesScanned: outcome.pagesScanned,
+      pagesScanned: successfulPages,
+      pagesFailed: pagesFailedToScan,
       durationMs: outcome.durationMs,
       engine,
       remediationTasksCreated,
     },
   });
+  return true;
 }

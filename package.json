@@ -16,16 +16,17 @@
     "test:e2e": "playwright test",
     "test:e2e:ui": "playwright test --ui",
     "worker": "tsx worker/index.ts",
+    "worker:serve": "tsx worker/serve.ts",
     "worker:typecheck": "tsc --noEmit -p worker/tsconfig.json",
     "secrets:encrypt": "node scripts/secrets-encrypt.mjs",
     "secrets:decrypt": "node scripts/secrets-decrypt.mjs",
     "secrets:check": "node scripts/secrets-check.mjs",
     "scan:test": "tsx scripts/scan-test.ts",
-    "report:test": "tsx scripts/report-test.ts",
     "worker:acceptance": "tsx scripts/browser-lifecycle-acceptance.ts"
   },
   "dependencies": {
     "@axe-core/playwright": "^4.11.3",
+    "@polar-sh/sdk": "^0.48.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "firebase": "^12.14.0",

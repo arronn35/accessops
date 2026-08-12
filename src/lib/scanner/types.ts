@@ -20,6 +20,8 @@ export type ScannerErrorCode =
   | "navigation_failed"
   | "axe_failed"
   | "deadline_exceeded"
+  | "page_deadline_exceeded"
+  | "scan_timeout"
   | "state_unavailable"
   | "page_unavailable";
 
@@ -120,6 +122,10 @@ export interface NormalizedPage {
   title: string | null;
   statusCode: number | null;
   scannedAt: Date;
+  /** The page never reached an accessibility analysis result. */
+  scanFailed?: boolean;
+  /** Machine-readable reason for an unscored page. */
+  failureCode?: ScannerErrorCode;
   screenshotPath?: string;
   rawMetadata?: ScannerPageMetadata;
   issues: NormalizedIssue[];
@@ -133,6 +139,8 @@ export interface ScannerPageMetadata {
   resultConfidence?: ResultConfidence;
   code?: ScannerErrorCode;
   message?: string;
+  scanFailed?: boolean;
+  failureCode?: ScannerErrorCode;
   truncatedByDeadline?: boolean;
   playwrightVersion?: string | null;
   axeVersion?: string | null;
@@ -172,6 +180,10 @@ export interface ScanScoreSummary {
     score: number;
     issueCounts: ScanScoreSummary["issueCounts"];
   }>;
+  /** Pages excluded because no accessibility analysis completed. */
+  pagesFailedToScan: number;
+  /** Failed URLs are reported separately and never receive a page score. */
+  failedPageUrls: string[];
   scoringVersion: string;
 }
 

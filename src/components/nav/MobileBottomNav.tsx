@@ -19,7 +19,7 @@ export function MobileBottomNav() {
   return (
     <nav
       aria-label="Primary"
-      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-paper/95 backdrop-blur border-t border-line"
+      className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-paper/95 backdrop-blur border-t border-rule"
     >
       <ul className="flex items-stretch">
         {items.map((item) => {

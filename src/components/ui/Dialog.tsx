@@ -52,7 +52,7 @@ export function Dialog({
       <div
         ref={ref}
         className={cn(
-          "bg-paper rounded-t-xl sm:rounded-lg shadow-[var(--shadow-pop)] w-full max-h-[90vh] overflow-hidden flex flex-col",
+          "bg-paper border border-rule shadow-[8px_8px_0_rgba(11,18,32,0.35)] w-full max-h-[90vh] overflow-hidden flex flex-col",
           size === "sm" && "sm:max-w-md",
           size === "md" && "sm:max-w-lg",
           size === "lg" && "sm:max-w-2xl"

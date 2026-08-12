@@ -53,10 +53,11 @@ Commit `secrets/percevia.env.enc` when the encrypted payload changes. Do not com
 Production secrets stay in the platform secret stores:
 
 - Vercel production environment variables for the web app.
-- Railway production variables for the scanner worker.
-- Firebase service-account keys only in the worker host secret store.
+- Cloud Run runtime identity + Secret Manager for the worker shared secret.
+- The Cloud Run worker uses Application Default Credentials and does not store a
+  Firebase private key.
 
-The encrypted repo file is for local/admin-controlled recovery and development. It does not replace Vercel or Railway runtime secrets.
+The encrypted repo file is for local/admin-controlled recovery and development. It does not replace Vercel or Cloud Run runtime secrets.
 
 ## Rotation
 
@@ -67,4 +68,4 @@ To rotate local encryption access:
 3. Run `npm run secrets:encrypt`.
 4. Remove access to the old private key.
 
-Rotate provider API keys separately in the provider dashboard and then update Vercel/Railway plus the encrypted local file.
+Rotate provider API keys separately in the provider dashboard and then update Vercel/Cloud Run plus the encrypted local file.

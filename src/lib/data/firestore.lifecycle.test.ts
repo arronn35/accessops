@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isScanWorkerHeartbeatStale } from "./scan-lifecycle";
+import {
+  isScanOwnedByWorker,
+  isScanWorkerHeartbeatStale,
+} from "./scan-lifecycle";
 import type { ScanJob } from "./types";
 
 function scan(overrides: Partial<ScanJob> = {}): ScanJob {
@@ -36,6 +39,23 @@ function scan(overrides: Partial<ScanJob> = {}): ScanJob {
 }
 
 describe("scan worker lifecycle helpers", () => {
+  it("recognizes only a running scan claimed by the same worker as owned", () => {
+    expect(isScanOwnedByWorker(scan({ claimedBy: "worker-1" }), "worker-1")).toBe(
+      true
+    );
+    expect(isScanOwnedByWorker(scan({ claimedBy: "worker-2" }), "worker-1")).toBe(
+      false
+    );
+    for (const status of ["queued", "completed", "failed", "cancelled"] as const) {
+      expect(
+        isScanOwnedByWorker(
+          scan({ status, claimedBy: "worker-1" }),
+          "worker-1"
+        )
+      ).toBe(false);
+    }
+  });
+
   it("does not mark queued or fresh running scans as stale", () => {
     const at = new Date("2026-06-09T12:01:00.000Z").getTime();
 

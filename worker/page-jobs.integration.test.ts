@@ -18,6 +18,7 @@ vi.mock("@/lib/scanner/persistence", () => ({
 vi.mock("@/lib/data/firestore", () => ({
   completePageJob: vi.fn(),
   failPageJob: vi.fn(),
+  renewOwnedScanClaim: vi.fn(),
   touchPageJob: vi.fn(),
   updateScanJob: vi.fn(),
 }));
@@ -113,17 +114,18 @@ describe("per-page scan integration", () => {
     const deps: ProcessPageJobDeps = {
       runPageScan: vi.fn(async (job) => {
         if (job.id === "page-3") {
-          throw Object.assign(new Error("Page scan exceeded its deadline."), {
-            code: "page_deadline_exceeded",
+          throw Object.assign(new Error("Page scan failed unexpectedly."), {
+            code: "page_scan_failed",
           });
         }
         return normalized(job);
       }),
+      runStaticPageScan: vi.fn(async (job) => normalized(job)),
       persistPageResult: vi.fn(async (_scanId, page, options) => {
         storedPages.set(options.pageJobId, page);
       }),
       completePageJob: vi.fn(async () => ({ aggregationWon: finalize("done") })),
-      failPageJob: vi.fn(async (_workspaceId, _scanId, id, error, errorCode, _workerId) => {
+      failPageJob: vi.fn(async (_workspaceId, _scanId, id, error, errorCode) => {
         const current = id === "page-3" && failedJobs.has(id) ? 2 : 1;
         if (current < 2) {
           failedJobs.set(id, { ...pageJob(3, 2), status: "queued", error, errorCode });
@@ -132,11 +134,13 @@ describe("per-page scan integration", () => {
         failedJobs.set(id, { ...pageJob(3, 2), status: "failed", error, errorCode });
         return { requeued: false, aggregationWon: finalize("failed") };
       }),
+      renewOwnedScanClaim: vi.fn(async () => parent),
       touchPageJob: vi.fn(async () => true),
       updateScanJob: vi.fn(async () => undefined),
       aggregateScan: vi.fn(async () => {
         aggregateCalls += 1;
         const summary = calculateScanScore([...storedPages.values()]);
+        if (!summary) throw new Error("expected_scorable_summary");
         scorePageCount = summary.pageScores.length;
         phase = terminalScanPhase(pagesDone, pagesFailed);
         return { phase, pagesDone, pagesFailed };
@@ -160,7 +164,148 @@ describe("per-page scan integration", () => {
     expect(failedJobs.get("page-3")).toMatchObject({
       url: "https://example.com/page-3",
       status: "failed",
-      errorCode: "page_deadline_exceeded",
+      errorCode: "page_scan_failed",
     });
+  });
+
+  it.each([
+    ["navigation_failed", "Navigation failed: net::ERR_CONNECTION_RESET"],
+    ["axe_failed", "axe timeout"],
+    ["page_deadline_exceeded", "Page scan exceeded its 60s deadline."],
+  ])("completes a page with static fallback after %s", async (code, message) => {
+    const job = pageJob(1);
+    const browserError = Object.assign(new Error(message), { code });
+    const staticPage: NormalizedPage = {
+      ...normalized(job),
+      rawMetadata: {
+        engine: "static-html-fallback",
+        fallbackMode: true,
+        resultConfidence: "low" as const,
+      },
+    };
+    const deps: ProcessPageJobDeps = {
+      runPageScan: vi.fn(async () => {
+        throw browserError;
+      }),
+      runStaticPageScan: vi.fn(async () => staticPage),
+      persistPageResult: vi.fn(async () => undefined),
+      completePageJob: vi.fn(async () => ({ aggregationWon: false })),
+      failPageJob: vi.fn(async () => ({
+        requeued: false,
+        aggregationWon: false,
+      })),
+      renewOwnedScanClaim: vi.fn(async () => scan()),
+      touchPageJob: vi.fn(async () => true),
+      updateScanJob: vi.fn(async () => undefined),
+      aggregateScan: vi.fn(),
+    };
+
+    await processPageJob(job, scan(), deps);
+
+    expect(deps.runStaticPageScan).toHaveBeenCalledOnce();
+    expect(deps.failPageJob).not.toHaveBeenCalled();
+    expect(deps.persistPageResult).toHaveBeenCalledWith(
+      "scan-1",
+      expect.objectContaining({
+        rawMetadata: expect.objectContaining({
+          fallbackMode: true,
+          resultConfidence: "low",
+          code,
+          message,
+        }),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it("does not use page fallback for an SSRF-rejected redirect", async () => {
+    const job = pageJob(1);
+    const error = Object.assign(
+      new Error(
+        "Redirect rejected by SSRF guard: URL validation failed: private_ip"
+      ),
+      { code: "navigation_failed" }
+    );
+    const deps: ProcessPageJobDeps = {
+      runPageScan: vi.fn(async () => {
+        throw error;
+      }),
+      runStaticPageScan: vi.fn(async () => normalized(job)),
+      persistPageResult: vi.fn(async () => undefined),
+      completePageJob: vi.fn(async () => ({ aggregationWon: false })),
+      failPageJob: vi.fn(async () => ({
+        requeued: false,
+        aggregationWon: false,
+      })),
+      renewOwnedScanClaim: vi.fn(async () => scan()),
+      touchPageJob: vi.fn(async () => true),
+      updateScanJob: vi.fn(async () => undefined),
+      aggregateScan: vi.fn(),
+    };
+
+    await processPageJob(job, scan(), deps);
+
+    expect(deps.runStaticPageScan).not.toHaveBeenCalled();
+    expect(deps.failPageJob).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a failed static fallback diagnostic but fails the page job", async () => {
+    const job = pageJob(1);
+    const browserError = Object.assign(new Error("Navigation timed out"), {
+      code: "navigation_failed",
+    });
+    const failedStaticPage: NormalizedPage = {
+      ...normalized(job),
+      title: null,
+      statusCode: null,
+      scanFailed: true,
+      failureCode: "page_unavailable",
+      rawMetadata: {
+        engine: "static-html-fallback",
+        fallbackMode: true,
+        resultConfidence: "low",
+        scanFailed: true,
+        failureCode: "page_unavailable",
+        fetchFailureReason: "network_unreachable",
+        message: "network_unreachable",
+      },
+      issues: [],
+    };
+    const deps: ProcessPageJobDeps = {
+      runPageScan: vi.fn(async () => {
+        throw browserError;
+      }),
+      runStaticPageScan: vi.fn(async () => failedStaticPage),
+      persistPageResult: vi.fn(async () => undefined),
+      completePageJob: vi.fn(async () => ({ aggregationWon: false })),
+      failPageJob: vi.fn(async () => ({
+        requeued: false,
+        aggregationWon: false,
+      })),
+      renewOwnedScanClaim: vi.fn(async () => scan()),
+      touchPageJob: vi.fn(async () => true),
+      updateScanJob: vi.fn(async () => undefined),
+      aggregateScan: vi.fn(),
+    };
+
+    await processPageJob(job, scan(), deps);
+
+    expect(deps.persistPageResult).toHaveBeenCalledWith(
+      "scan-1",
+      expect.objectContaining({
+        scanFailed: true,
+        failureCode: "page_unavailable",
+      }),
+      expect.any(Object)
+    );
+    expect(deps.completePageJob).not.toHaveBeenCalled();
+    expect(deps.failPageJob).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      "page-1",
+      "network_unreachable",
+      "page_unavailable",
+      "worker-1"
+    );
   });
 });

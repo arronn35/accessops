@@ -10,6 +10,9 @@ const Patch = z.object({
   visualEvidenceRetentionDays: z.number().int().min(1).max(365).optional(),
   scanDataRetentionDays: z.number().int().min(7).max(3650).optional(),
   regionPreference: z.enum(["eu", "us", "uk", "ca", "other"]).optional(),
+  statementContactEmail: z.string().email().or(z.string().url()).or(z.literal("")).nullable().optional(),
+  statementLimitations: z.string().max(2048).nullable().optional(),
+  statementPublished: z.boolean().optional(),
 });
 
 export async function GET() {

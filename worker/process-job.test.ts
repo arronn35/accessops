@@ -54,6 +54,7 @@ function makeJob(overrides: Partial<ScanJob> = {}): ScanJob {
     aiRemediationEnabled: false,
     permissionConfirmed: true,
     progressStep: "crawling",
+    claimedBy: "worker-1",
     startedAt: nowDate,
     completedAt: null,
     errorMessage: null,
@@ -82,9 +83,9 @@ function deps(overrides: Partial<ProcessJobDeps> = {}): ProcessJobDeps {
   return {
     runScanJob: vi.fn(async () => outcome("playwright-axe")),
     runStaticScanJob: vi.fn(async () => outcome("static-html-fallback")),
-    persistScanOutcome: vi.fn(async () => undefined),
-    completeScanJob: vi.fn(async () => undefined),
-    markScanFailed: vi.fn(async () => undefined),
+    persistScanOutcome: vi.fn(async () => true),
+    completeScanJob: vi.fn(async () => true),
+    markScanFailed: vi.fn(async () => true),
     updateScanJob: vi.fn(async () => undefined),
     resolveScanTargets: vi.fn(async () => ["https://example.com/"]),
     createPageJobs: vi.fn(async () => 1),
@@ -155,19 +156,126 @@ describe("processScanJob", () => {
       "scan-1",
       expect.objectContaining({ processorError: "browser_launch_failed" })
     );
+    expect(d.persistScanOutcome).toHaveBeenCalledWith(
+      "scan-1",
+      [
+        expect.objectContaining({
+          rawMetadata: expect.objectContaining({
+            fallbackMode: true,
+            resultConfidence: "low",
+            code: "browser_launch_failed",
+          }),
+        }),
+      ],
+      expect.any(Object)
+    );
   });
 
-  it("fails the job (no fallback) on a non-launch scan error", async () => {
+  it.each([
+    ["navigation_failed", "Navigation failed: net::ERR_CONNECTION_RESET"],
+    ["axe_failed", "axe timeout"],
+    ["deadline_exceeded", "Scan deadline exceeded"],
+  ])("uses static fallback for %s", async (code, message) => {
+    const error = Object.assign(new Error(message), { code });
+    const d = deps({
+      runScanJob: vi.fn(async () => {
+        throw error;
+      }),
+    });
+
+    await processScanJob(makeJob(), d);
+
+    expect(d.runStaticScanJob).toHaveBeenCalledOnce();
+    expect(d.completeScanJob).toHaveBeenCalledOnce();
+    expect(d.markScanFailed).not.toHaveBeenCalled();
+  });
+
+  it("uses static fallback when the legacy crawler returns only failed page metadata", async () => {
+    const failedOutcome: ScanOutcome = {
+      pages: [
+        {
+          ...page("playwright-axe"),
+          statusCode: null,
+          rawMetadata: {
+            engine: "playwright-axe",
+            fallbackMode: false,
+            resultConfidence: "low",
+            code: "navigation_failed",
+            message: "Navigation failed: net::ERR_CONNECTION_REFUSED",
+          },
+        },
+      ],
+      pagesDiscovered: 1,
+      pagesScanned: 1,
+      durationMs: 500,
+    };
+    const d = deps({
+      runScanJob: vi.fn(async () => failedOutcome),
+    });
+
+    await processScanJob(makeJob(), d);
+
+    expect(d.runStaticScanJob).toHaveBeenCalledOnce();
+    expect(d.completeScanJob).toHaveBeenCalledOnce();
+  });
+
+  it("fails the job (no fallback) on an unclassified scan error", async () => {
     const d = deps({ runScanJob: vi.fn(async () => { throw new Error("kaboom"); }) });
 
     await processScanJob(makeJob(), d);
 
     expect(d.runStaticScanJob).not.toHaveBeenCalled();
     expect(d.completeScanJob).not.toHaveBeenCalled();
-    expect(d.markScanFailed).toHaveBeenCalledWith("ws-1", "scan-1", "kaboom");
+    expect(d.markScanFailed).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      "kaboom",
+      "worker-1"
+    );
   });
 
-  it("fails with scan_timeout when the engine hangs past the hard deadline", async () => {
+  it("never falls back when a redirect is rejected by the SSRF guard", async () => {
+    const error = Object.assign(
+      new Error(
+        "Redirect rejected by SSRF guard: URL validation failed: private_ip"
+      ),
+      { code: "navigation_failed" }
+    );
+    const d = deps({
+      runScanJob: vi.fn(async () => {
+        throw error;
+      }),
+    });
+
+    await processScanJob(makeJob(), d);
+
+    expect(d.runStaticScanJob).not.toHaveBeenCalled();
+    expect(d.markScanFailed).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      error.message,
+      "worker-1"
+    );
+  });
+
+  it("never falls back on URL validation failures", async () => {
+    const error = Object.assign(
+      new Error("URL validation failed: private_ip (127.0.0.1)"),
+      { code: "private_ip" }
+    );
+    const d = deps({
+      runScanJob: vi.fn(async () => {
+        throw error;
+      }),
+    });
+
+    await processScanJob(makeJob(), d);
+
+    expect(d.runStaticScanJob).not.toHaveBeenCalled();
+    expect(d.markScanFailed).toHaveBeenCalledOnce();
+  });
+
+  it("uses static fallback when the browser engine hangs past the hard deadline", async () => {
     vi.useFakeTimers();
     try {
       // A scan that never resolves (e.g. a hung Playwright call) must not pin
@@ -180,8 +288,9 @@ describe("processScanJob", () => {
       await vi.advanceTimersByTimeAsync(WORKER_SCAN_HARD_TIMEOUT_MS + 1_000);
       await finished;
 
-      expect(d.completeScanJob).not.toHaveBeenCalled();
-      expect(d.markScanFailed).toHaveBeenCalledWith("ws-1", "scan-1", "scan_timeout");
+      expect(d.runStaticScanJob).toHaveBeenCalledOnce();
+      expect(d.completeScanJob).toHaveBeenCalledOnce();
+      expect(d.markScanFailed).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
     }
@@ -192,6 +301,27 @@ describe("processScanJob", () => {
     await processScanJob(makeJob({ permissionConfirmed: false }), d);
 
     expect(d.runScanJob).not.toHaveBeenCalled();
-    expect(d.markScanFailed).toHaveBeenCalledWith("ws-1", "scan-1", "permission_not_confirmed");
+    expect(d.markScanFailed).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      "permission_not_confirmed",
+      "worker-1"
+    );
+  });
+
+  it("does not write post-terminal fields after losing the completion race", async () => {
+    const d = deps({
+      completeScanJob: vi.fn(async () => false),
+    });
+
+    await processScanJob(makeJob(), d);
+
+    expect(d.completeScanJob).toHaveBeenCalledOnce();
+    expect(d.updateScanJob).not.toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      expect.objectContaining({ currentStep: "completed" })
+    );
+    expect(d.markScanFailed).not.toHaveBeenCalled();
   });
 });

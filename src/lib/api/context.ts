@@ -10,7 +10,10 @@
  */
 import { verifySessionCookie } from "@/lib/auth/session";
 import { getWorkspaceContext } from "@/lib/data/firestore";
-import { isFirestoreQuotaError } from "@/lib/data/firestore-errors";
+import {
+  isFirestoreIndexError,
+  isFirestoreQuotaError,
+} from "@/lib/data/firestore-errors";
 import { captureException } from "@/lib/observability";
 import { roleHasPermission, type WorkspacePermission } from "@/lib/entitlements";
 
@@ -87,6 +90,17 @@ export function apiError(err: unknown): Response {
     return Response.json(
       { error: err.code, message: err.message },
       { status: err.status, headers: err.headers }
+    );
+  }
+  if (isFirestoreIndexError(err)) {
+    void captureException(err, { scope: "api.firestore-index" });
+    return Response.json(
+      {
+        error: "firestore_index_unavailable",
+        message:
+          "Scan data is temporarily unavailable while a database index is being prepared. Please try again shortly.",
+      },
+      { status: 503, headers: { "cache-control": "no-store" } }
     );
   }
   if (isFirestoreQuotaError(err)) {

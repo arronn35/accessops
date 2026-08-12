@@ -46,9 +46,9 @@ export function SideNav() {
   return (
     <aside
       aria-label="Primary navigation"
-      className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-paper border-r border-line"
+      className="hidden lg:flex flex-col w-64 shrink-0 h-screen sticky top-0 bg-paper border-r border-rule"
     >
-      <div className="p-5 border-b border-line">
+      <div className="p-5 border-b border-rule">
         <PrefetchLink href="/app" aria-label="percevia home">
           <Logo variant="wordmark" />
         </PrefetchLink>
@@ -60,7 +60,7 @@ export function SideNav() {
       <div className="p-3">
         <PrefetchLink
           href="/app/scans/new"
-          className="flex items-center justify-center gap-2 w-full h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 transition-colors"
+          className="flex items-center justify-center gap-2 w-full h-11 px-4 bg-navy-900 text-paper text-sm font-bold shadow-[4px_4px_0_var(--color-accent)] hover:bg-navy-800 transition-colors"
         >
           <Plus className="size-4" aria-hidden />
           New scan
@@ -89,7 +89,7 @@ export function SideNav() {
           );
         })}
 
-        <div className="pt-4 mt-4 border-t border-line space-y-1">
+        <div className="pt-4 mt-4 border-t border-rule space-y-1">
           {secondary.map((item) => {
             const Icon = item.icon;
             const active = isActive(item);
@@ -113,7 +113,7 @@ export function SideNav() {
         </div>
       </nav>
 
-      <div className="p-3 border-t border-line">
+      <div className="p-3 border-t border-rule">
         <PrefetchLink
           href="/pricing"
           className="flex items-center gap-2 px-3 py-2 rounded-md text-xs text-ink-600 hover:bg-canvas-2"

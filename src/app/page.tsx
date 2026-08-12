@@ -1,12 +1,9 @@
 import Link from "next/link";
-import {
-  ArrowRight, ShieldCheck, Sparkles, Eye, ScanLine, Lock, UserCheck, FileBarChart2, Workflow, Code2,
-  Globe, ChevronDown, CheckCircle2, LayoutDashboard,
-} from "lucide-react";
-import { Logo } from "@/components/brand/Logo";
-import { Badge } from "@/components/ui/Badge";
-import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
+import type { CSSProperties } from "react";
+import { MarketingShell } from "@/components/marketing/MarketingShell";
+import { SectionTag, Aside } from "@/components/marketing/SectionTag";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { PLANS, planFeatures } from "@/lib/marketing/plans";
 import { verifySessionCookie } from "@/lib/auth/session";
 
 export const metadata = {
@@ -14,12 +11,41 @@ export const metadata = {
 };
 export const dynamic = "force-dynamic";
 
+/* Shared scales. The display sizes are the system, not decoration. */
+const H2 =
+  "font-extrabold leading-[0.98] tracking-[-0.04em] text-[clamp(2.1rem,4.2vw,3.6rem)]";
+const HEAD_PAD = "px-6 sm:px-10 pt-12 pb-9";
+/** Cell grids draw their own hairlines: 1px of rule showing through the gap. */
+const GRID = "grid gap-px bg-rule";
+
 const TRUST = [
-  { icon: ScanLine, label: "WCAG-oriented checks" },
-  { icon: Sparkles, label: "AI remediation guidance" },
-  { icon: Lock, label: "Privacy-first scanning" },
-  { icon: UserCheck, label: "Human review friendly" },
-  { icon: ShieldCheck, label: "No overlay required" },
+  "WCAG-oriented checks",
+  "AI remediation guidance",
+  "Privacy-first scanning",
+  "Human review friendly",
+  "No overlay required",
+];
+
+const PROBLEMS = [
+  {
+    title: "Overlays make legal promises they can’t keep",
+    body: "Widgets that promise ‘one-click compliance’ haven’t reduced lawsuits. They’ve created new ones.",
+  },
+  {
+    title: "Raw scanner output is unreadable",
+    body: "Long lists of axe violations with no context, no fix, no owner. Reports go nowhere.",
+  },
+  {
+    title: "Manual audits are slow and expensive",
+    body: "Necessary, but they can’t happen every sprint. Teams need something in-between.",
+  },
+];
+
+const METHOD = [
+  { title: "Scan", body: "Crawl single pages, multi-page templates, or sitemaps. Screenshots opt-in." },
+  { title: "Understand", body: "AI explains each issue in plain language and shows who it affects." },
+  { title: "Remediate", body: "Code-aware suggestions, manual review checklist, assigned tasks on a board." },
+  { title: "Report", body: "Audit-ready PDF, HTML, and CSV exports with WCAG mapping. No legal promises." },
 ];
 
 const TARGET_USERS = [
@@ -28,7 +54,66 @@ const TARGET_USERS = [
   { title: "E-commerce owners", body: "Catch issues before they cost you customers — or compliance complaints." },
   { title: "Product teams", body: "Bake accessibility into the release cycle. Track regressions over time." },
   { title: "Startup founders", body: "Ship with a credible accessibility posture from day one." },
-  { title: "Developers", body: "Code-aware fix suggestions for React, Next.js, HTML, Shopify, WordPress, Webflow, Framer." },
+];
+
+const DEV_STACKS = ["React", "Next.js", "HTML / CSS", "Shopify", "WordPress", "Webflow", "Framer"];
+
+const REPORT_SECTIONS = [
+  "Executive summary",
+  "Top risks",
+  "Findings detail",
+  "Remediation roadmap",
+  "Reviewer checklist",
+];
+
+const PRIVACY_POINTS = [
+  "Screenshots are off by default. You opt in per scan.",
+  "EU-hosted by default. US and UK regions on higher plans.",
+  "AI suggestions are reviewable; nothing is auto-applied.",
+  "We do not sell scan data and do not train models on customer code.",
+  "Workspace data is exportable and deletable on demand.",
+  "Subprocessor list available in the Compliance Center.",
+];
+
+const COMPLIANCE_CARDS = [
+  {
+    title: "No compliance guarantee",
+    body: "Findings and reports are assessment output, never certification under any law or standard.",
+  },
+  {
+    title: "Human review required",
+    body: "Automated checks catch roughly 30–50% of issues. Keyboard, screen reader and zoom passes stay manual.",
+  },
+  {
+    title: "AI use disclosure",
+    body: "AI is optional, off by default, and every output carries a review notice before implementation.",
+  },
+  {
+    title: "Overlay stance",
+    body: "We do not ship an overlay and never recommend one as a substitute for real fixes.",
+  },
+];
+
+const RETENTION = [
+  { label: "Scan findings", value: "365 days (default)" },
+  { label: "Visual evidence", value: "30 days" },
+  { label: "Audit logs", value: "at least 12 months" },
+];
+
+const SUBPROCESSORS = [
+  { name: "Vercel", body: "Application hosting and API — US / global edge" },
+  { name: "Firebase", body: "Authentication and Firestore workspace storage — configured project region" },
+  { name: "Google Cloud Run", body: "Browser scan worker (Playwright + axe-core), content transient — EU (europe-west1)" },
+  { name: "OpenAI API", body: "Explanations and remediation when enabled — US" },
+];
+
+const LEGAL_DOCS = [
+  { href: "/legal/privacy", label: "Privacy Policy" },
+  { href: "/legal/terms", label: "Terms of Service" },
+  { href: "/legal/ai-use", label: "AI Use Disclosure" },
+  { href: "/legal/accessibility-methodology", label: "Accessibility Methodology" },
+  { href: "/legal/no-legal-advice", label: "No Legal Advice Disclaimer" },
+  { href: "/legal/dpa", label: "Data Processing Addendum" },
 ];
 
 const FAQ = [
@@ -52,417 +137,558 @@ const FAQ = [
 
 export default async function LandingPage() {
   const signedIn = Boolean(await verifySessionCookie().catch(() => null));
+
   return (
-    <div className="bg-paper text-ink-900">
-      {/* Top nav */}
-      <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-line">
-        <div className="max-w-6xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
-          <Link href="/" aria-label="percevia home">
-            <Logo variant="lockup" />
-          </Link>
-          <nav aria-label="Primary" className="hidden md:flex items-center gap-6 text-sm">
-            <Link href="#how" className="text-ink-700 hover:text-ink-900">How it works</Link>
-            <Link href="#audience" className="text-ink-700 hover:text-ink-900">Who it&apos;s for</Link>
-            <Link href="#privacy" className="text-ink-700 hover:text-ink-900">Privacy stance</Link>
-            <Link href="/pricing" className="text-ink-700 hover:text-ink-900">Pricing</Link>
-          </nav>
-          <div className="flex items-center gap-2">
-            {signedIn ? (
-              <Link
-                href="/app"
-                className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-              >
-                <LayoutDashboard className="size-4" aria-hidden /> Open dashboard
-              </Link>
-            ) : (
-              <>
-                <Link
-                  href="/auth/sign-in"
-                  className="inline-flex items-center gap-1.5 text-sm text-ink-700 hover:text-ink-900 h-10 px-2 sm:px-3 rounded-md"
-                >
-                  Sign in
-                </Link>
-                <Link
-                  href="/onboarding"
-                  className="inline-flex items-center gap-2 h-10 px-3 sm:px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-                >
-                  <span className="hidden min-[420px]:inline">Start free scan</span>
-                  <span className="min-[420px]:hidden">Start</span>
-                  <ArrowRight className="size-4" aria-hidden />
-                </Link>
-              </>
-            )}
-          </div>
-        </div>
-      </header>
-
+    <MarketingShell signedIn={signedIn}>
       <main id="main">
-        {/* Hero */}
-        <section className="relative overflow-hidden">
-        <div className="absolute inset-0 bg-aurora bg-grid" aria-hidden />
-        <div className="relative max-w-6xl mx-auto px-4 lg:px-8 pt-16 lg:pt-24 pb-12 lg:pb-20">
-          <Badge tone="ai" className="inline-flex">
-            <Sparkles className="size-3" aria-hidden /> Accessibility operations, not one-click compliance
-          </Badge>
-          <h1 className="mt-5 text-4xl lg:text-6xl font-semibold tracking-tight max-w-4xl leading-[1.05]">
-            Find accessibility issues before they become user and compliance problems.
-          </h1>
-          <p className="mt-5 text-lg lg:text-xl text-ink-600 max-w-2xl leading-relaxed">
-            AI-assisted accessibility scanning, remediation guidance, and audit-ready reporting for
-            websites, agencies, and product teams.
-          </p>
-          <div className="mt-7 flex flex-col sm:flex-row gap-3">
-            <Link
-              href="/onboarding"
-              className="inline-flex items-center justify-center gap-2 h-12 px-5 rounded-md bg-navy-900 text-paper text-base font-medium hover:bg-navy-800"
-            >
-              Start free scan <ArrowRight className="size-4" aria-hidden />
-            </Link>
-            <Link
-              href="#how"
-              className="inline-flex items-center justify-center gap-2 h-12 px-5 rounded-md ring-1 ring-line bg-paper text-base font-medium text-ink-900 hover:bg-canvas-2"
-            >
-              <FileBarChart2 className="size-4" aria-hidden /> See how it works
-            </Link>
-          </div>
-
-          {/* Trust strip */}
-          <ul className="mt-12 grid grid-cols-2 sm:grid-cols-5 gap-3">
-            {TRUST.map((t) => {
-              const Icon = t.icon;
-              return (
-                <li
-                  key={t.label}
-                  className="flex items-center gap-2 rounded-md bg-paper/80 backdrop-blur ring-1 ring-line p-3 text-xs font-medium text-ink-700"
-                >
-                  <Icon className="size-4 text-navy-700 shrink-0" aria-hidden /> {t.label}
-                </li>
-              );
-            })}
-          </ul>
-
-          {/* Hero preview */}
-          <div className="mt-12 relative rounded-xl overflow-hidden ring-1 ring-line shadow-[var(--shadow-pop)] bg-paper">
-            <div className="grid grid-cols-1 md:grid-cols-[1.4fr_1fr] gap-0 min-h-[280px]">
-              <div className="p-5 md:p-6 border-b md:border-b-0 md:border-r border-line">
-                <div className="flex items-center gap-2 mb-3">
-                  <Globe className="size-4 text-ink-500" aria-hidden />
-                  <span className="font-mono text-sm text-ink-700">northwind-shop.example</span>
-                  <Badge tone="success" size="sm" className="ml-2">Scan complete</Badge>
-                </div>
-                <div className="flex items-end gap-5">
-                  <div className="size-24 rounded-full ring-[10px] ring-canvas-2 relative inline-flex items-center justify-center bg-paper">
-                    <span className="text-3xl font-semibold tabular-nums">78</span>
-                  </div>
-                  <div className="text-xs space-y-1.5">
-                    <p className="text-ink-500">47 pages · 23 findings</p>
-                    <p className="text-rose-700 font-medium">5 critical</p>
-                    <p className="text-amber-700">11 moderate</p>
-                    <p className="text-blue-700">7 minor</p>
-                  </div>
-                </div>
-                <div className="mt-5 space-y-2">
-                  {[
-                    { sev: "critical", text: "“Add to cart” button has no accessible name" },
-                    { sev: "critical", text: "Product price has 3.8:1 contrast" },
-                    { sev: "moderate", text: "Headings skip h1 → h4 on home" },
-                  ].map((r, i) => (
-                    <div
-                      key={i}
-                      className="flex items-center gap-2 text-xs p-2 rounded ring-1 ring-line"
-                    >
-                      <span
-                        aria-hidden
-                        className="size-1.5 rounded-full"
-                        style={{
-                          background:
-                            r.sev === "critical"
-                              ? "var(--color-rose-500)"
-                              : r.sev === "moderate"
-                              ? "var(--color-amber-500)"
-                              : "var(--color-blue-500)",
-                        }}
-                      />
-                      <span className="text-ink-700 truncate">{r.text}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <div className="p-5 md:p-6 bg-canvas/50">
-                <div className="flex items-center gap-2 text-[11px] uppercase tracking-wider font-semibold text-purple-600 mb-2">
-                  <Sparkles className="size-3.5" aria-hidden /> AI explanation
-                </div>
-                <p className="text-sm text-ink-700 leading-relaxed">
-                  Three critical findings on the product detail and checkout templates explain most of
-                  the score gap. Fixing the icon-button names and raising price-text contrast would
-                  address the majority of blocking issues for screen reader and low-vision users.
-                </p>
-                <p className="text-[11px] text-purple-600 mt-3 font-medium">
-                  {COMPLIANCE_COPY.AI_REVIEW_REQUIRED}
-                </p>
-              </div>
+        {/* ---------- 01 Hero ---------- */}
+        <section className="grid border-b border-rule lg:grid-cols-[minmax(0,1.45fr)_minmax(320px,1fr)]">
+          <div className="border-rule px-6 sm:px-10 py-14 lg:border-r">
+            <div className="flex flex-wrap items-center gap-3">
+              <SectionTag index="01" label="Position" />
+              <span className="eyebrow text-ink-600">Accessibility operations</span>
             </div>
-          </div>
-        </div>
-      </section>
 
-      {/* Problem */}
-      <section className="max-w-6xl mx-auto px-4 lg:px-8 py-16 lg:py-24">
-        <div className="grid lg:grid-cols-2 gap-12 items-start">
-          <div>
-            <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-              The problem
-            </p>
-            <h2 className="text-3xl lg:text-4xl font-semibold tracking-tight leading-tight">
-              Accessibility tooling today picks the wrong side of a tradeoff.
-            </h2>
-          </div>
-          <ul className="space-y-4 text-base text-ink-700">
-            <ProblemItem
-              title="Overlays make legal promises they can’t keep"
-              body="Widgets that promise &lsquo;one-click compliance&rsquo; haven&apos;t reduced lawsuits. They&apos;ve created new ones."
-            />
-            <ProblemItem
-              title="Raw scanner output is unreadable"
-              body="Long lists of axe violations with no context, no fix, no owner. Reports go nowhere."
-            />
-            <ProblemItem
-              title="Manual audits are slow and expensive"
-              body="Necessary, but they can&apos;t happen every sprint. Teams need something in-between."
-            />
-          </ul>
-        </div>
-      </section>
+            <h1 className="mt-8 max-w-[16ch] font-extrabold leading-[0.92] tracking-[-0.045em] text-[clamp(2.9rem,7.4vw,6.75rem)]">
+              Find accessibility issues before they become{" "}
+              <span className="text-blue-600">user</span> and{" "}
+              <span className="text-purple-600">compliance</span> problems.
+            </h1>
 
-      {/* How it works */}
-      <section id="how" className="bg-canvas-2/60 border-y border-line py-16 lg:py-24">
-        <div className="max-w-6xl mx-auto px-4 lg:px-8">
-          <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-            How it works
-          </p>
-          <h2 className="text-3xl lg:text-4xl font-semibold tracking-tight leading-tight max-w-3xl">
-            Scan, understand, remediate, report — in that order.
-          </h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mt-10">
-            {[
-              { icon: ScanLine, title: "1. Scan", body: "Crawl single pages, multi-page templates, or sitemaps. Screenshots opt-in." },
-              { icon: Eye, title: "2. Understand", body: "AI explains each issue in plain language and shows who it affects." },
-              { icon: Workflow, title: "3. Remediate", body: "Code-aware suggestions, manual review checklist, assigned tasks on a board." },
-              { icon: FileBarChart2, title: "4. Report", body: "Audit-ready PDF, HTML, and CSV exports with WCAG mapping. No legal promises." },
-            ].map((s) => {
-              const Icon = s.icon;
-              return (
-                <div key={s.title} className="rounded-lg bg-paper ring-1 ring-line p-5">
-                  <span className="size-9 rounded-md bg-navy-900 text-paper inline-flex items-center justify-center mb-3">
-                    <Icon className="size-4" aria-hidden />
-                  </span>
-                  <h3 className="font-semibold text-ink-900">{s.title}</h3>
-                  <p className="text-sm text-ink-600 mt-1.5 leading-relaxed">{s.body}</p>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </section>
-
-      {/* Target users */}
-      <section id="audience" className="max-w-6xl mx-auto px-4 lg:px-8 py-16 lg:py-24">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-          Who Percevia AI is for
-        </p>
-        <h2 className="text-3xl lg:text-4xl font-semibold tracking-tight leading-tight">
-          Built for the people who actually have to fix things.
-        </h2>
-        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-10">
-          {TARGET_USERS.map((u) => (
-            <div key={u.title} className="rounded-lg ring-1 ring-line bg-paper p-5">
-              <h3 className="font-semibold text-ink-900">{u.title}</h3>
-              <p className="text-sm text-ink-600 mt-1.5 leading-relaxed">{u.body}</p>
+            <div className="mt-8 flex max-w-[60ch] items-stretch gap-3.5">
+              <span aria-hidden className="w-[3px] shrink-0 bg-navy-900" />
+              <p className="text-lg leading-relaxed text-ink-700">
+                AI-assisted accessibility scanning, remediation guidance, and
+                audit-ready reporting for websites, agencies, and product teams.
+              </p>
             </div>
-          ))}
-        </div>
-      </section>
 
-      {/* Example report */}
-      <section className="bg-navy-900 text-paper py-16 lg:py-24">
-        <div className="max-w-6xl mx-auto px-4 lg:px-8">
-          <div className="grid lg:grid-cols-2 gap-12 items-center">
-            <div>
-              <p className="text-[11px] uppercase tracking-wider text-paper/60 font-semibold mb-3">
-                Example report
-              </p>
-              <h2 className="text-3xl lg:text-4xl font-semibold tracking-tight leading-tight">
-                A client-ready PDF, not a wall of red flags.
-              </h2>
-              <p className="text-paper/70 mt-4 leading-relaxed max-w-md">
-                Executive summary in plain language. Findings mapped to WCAG criteria. A roadmap your
-                client&apos;s engineering team can actually pick up. And a calm, accurate disclaimer
-                about what automated scanning can and can&apos;t prove.
-              </p>
+            <Aside className="mt-5 text-[27px]">
+              not one-click compliance — actual, shippable fixes
+            </Aside>
+
+            <div className="mt-9 flex flex-wrap gap-3">
               <Link
                 href="/onboarding"
-                className="inline-flex items-center gap-2 mt-6 h-11 px-4 rounded-md bg-paper text-navy-900 text-sm font-medium hover:bg-canvas"
+                className="bg-navy-900 px-7 py-4 text-sm font-bold text-paper shadow-[var(--shadow-pop)] hover:bg-navy-800"
               >
-                Run your first scan <ArrowRight className="size-4" aria-hidden />
+                Start free scan
+              </Link>
+              <Link
+                href="#how"
+                className="border border-rule bg-canvas px-7 py-4 text-sm font-bold text-navy-900 hover:bg-canvas-2"
+              >
+                See how it works
               </Link>
             </div>
-            <div className="rounded-lg overflow-hidden ring-1 ring-paper/10 bg-paper text-ink-900 p-6 shadow-[var(--shadow-pop)]">
-              <p className="text-[11px] uppercase tracking-[0.18em] font-semibold text-ink-500">
-                Accessibility assessment
-              </p>
-              <h3 className="text-lg font-semibold mt-1">Northwind Shop — May 2026 scan</h3>
-              <div className="mt-4 grid grid-cols-3 gap-3 text-xs">
-                <Stat label="Pages" value="47" />
-                <Stat label="Findings" value="23" />
-                <Stat label="Score" value="78" />
+          </div>
+
+          {/* The product's own output, used as the hero image. */}
+          <div className="flex flex-col items-center justify-center bg-canvas-2 px-8 py-14">
+            <div aria-hidden className="relative size-[230px] max-w-full">
+              <span className="absolute inset-[34px_0_0_34px] bg-purple-600" />
+              <span className="absolute inset-[17px] bg-blue-600" />
+              <span className="absolute inset-[0_34px_34px_0] flex items-center justify-center bg-navy-900 text-[76px] font-extrabold tracking-[-0.05em] text-paper">
+                78
+              </span>
+            </div>
+
+            <div className="mt-8 w-full max-w-[290px] border border-rule bg-canvas">
+              <div className="border-b border-rule px-3.5 py-3 font-mono text-xs">
+                northwind-shop.example
               </div>
-              <ul className="mt-5 space-y-2 text-xs text-ink-700 border-t border-line pt-4">
-                <li>1. Executive summary</li>
-                <li>2. Top risks</li>
-                <li>3. Findings detail</li>
-                <li>4. Remediation roadmap</li>
-                <li>5. Reviewer checklist</li>
-              </ul>
-              <p className="text-[10px] text-ink-500 mt-4 leading-relaxed border-t border-line pt-3">
-                {COMPLIANCE_COPY.REPORT_NOT_LEGAL}
+              <div className="grid grid-cols-3">
+                <MiniStat label="Pages" value="47" />
+                <MiniStat label="Findings" value="23" />
+                <MiniStat label="Critical" value="5" tone="critical" last />
+              </div>
+              <p className="border-t border-rule px-3.5 py-3 text-xs leading-relaxed text-ink-600">
+                {COMPLIANCE_COPY.AI_REVIEW_REQUIRED}
               </p>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Privacy stance */}
-      <section id="privacy" className="max-w-6xl mx-auto px-4 lg:px-8 py-16 lg:py-24">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-          Privacy &amp; compliance stance
-        </p>
-        <h2 className="text-3xl lg:text-4xl font-semibold tracking-tight leading-tight max-w-3xl">
-          We&apos;d rather be useful than make legal promises.
-        </h2>
-        <div className="mt-8">
-          <NoGuaranteeBanner />
-        </div>
-        <ul className="grid sm:grid-cols-2 gap-4 mt-8 text-sm">
-          {[
-            "Screenshots are off by default. You opt in per scan.",
-            "EU-hosted by default. US and UK regions on higher plans.",
-            "AI suggestions are reviewable; nothing is auto-applied.",
-            "We do not sell scan data and do not train models on customer code.",
-            "Workspace data is exportable and deletable on demand.",
-            "Subprocessor list available in the Compliance Center.",
-          ].map((p, i) => (
-            <li key={i} className="flex items-start gap-2.5 text-ink-700 leading-relaxed">
-              <CheckCircle2 className="size-4 text-green-700 shrink-0 mt-0.5" aria-hidden />
-              {p}
+        {/* ---------- Claims strip ---------- */}
+        <ul className="flex flex-wrap border-b border-rule bg-navy-900">
+          {TRUST.map((t, i) => (
+            <li
+              key={t}
+              className={`eyebrow flex-1 basis-[200px] px-5 py-4 tracking-[0.12em] text-paper ${
+                i < TRUST.length - 1 ? "border-r border-paper/20" : ""
+              }`}
+            >
+              {t}
             </li>
           ))}
         </ul>
-      </section>
 
-      {/* Pricing preview */}
-      <section className="bg-canvas-2/60 border-y border-line py-16">
-        <div className="max-w-6xl mx-auto px-4 lg:px-8 text-center">
-          <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-            Pricing preview
-          </p>
-          <h2 className="text-2xl lg:text-3xl font-semibold tracking-tight">
-            From free to enterprise — five tiers, honest scope.
-          </h2>
-          <Link
-            href="/pricing"
-            className="inline-flex items-center gap-2 mt-5 h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
-          >
-            Compare plans <ArrowRight className="size-4" aria-hidden />
-          </Link>
-        </div>
-      </section>
+        {/* ---------- 02 Problem ---------- */}
+        <section id="problem" className="border-b border-rule">
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+            <div className="border-rule px-6 sm:px-10 py-12 lg:border-r">
+              <SectionTag index="02" label="Problem" />
+              <h2 className={`mt-7 max-w-[14ch] ${H2}`}>
+                Today’s tooling picks the wrong side of a tradeoff.
+              </h2>
+              <Aside className="mt-5 text-ink-600">
+                promises, noise, or a bill you can only pay once a year
+              </Aside>
+            </div>
+            <div className="border-t border-rule lg:border-t-0">
+              {PROBLEMS.map((p, i) => (
+                <article
+                  key={p.title}
+                  className={`grid grid-cols-[64px_1fr] sm:grid-cols-[88px_1fr] ${
+                    i < PROBLEMS.length - 1 ? "border-b border-rule" : ""
+                  }`}
+                >
+                  <div
+                    aria-hidden
+                    className="flex justify-center border-r border-rule bg-canvas-2 py-8 font-mono text-[15px] font-semibold"
+                  >
+                    {String(i + 1).padStart(2, "0")}
+                  </div>
+                  <div className="px-6 py-8 sm:pr-10">
+                    <h3 className="text-[23px] font-bold tracking-[-0.02em]">{p.title}</h3>
+                    <p className="mt-3 max-w-[56ch] text-[15px] leading-relaxed text-ink-600">
+                      {p.body}
+                    </p>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </div>
+        </section>
 
-      {/* FAQ */}
-      <section className="max-w-3xl mx-auto px-4 lg:px-8 py-16 lg:py-24">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-3">
-          FAQ
-        </p>
-        <h2 className="text-2xl lg:text-3xl font-semibold tracking-tight mb-8">
-          Direct answers to the questions every buyer asks.
-        </h2>
-        <ul className="space-y-3">
-          {FAQ.map((f) => (
-            <li key={f.q} className="rounded-md ring-1 ring-line bg-paper">
-              <details className="group">
-                <summary className="cursor-pointer list-none flex items-center justify-between gap-3 p-5 text-sm font-medium text-ink-900 min-h-[56px]">
-                  <span>{f.q}</span>
-                  <ChevronDown className="size-4 text-ink-500 group-open:rotate-180 transition-transform" aria-hidden />
-                </summary>
-                <p className="px-5 pb-5 text-sm text-ink-700 leading-relaxed">{f.a}</p>
-              </details>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      {/* Final CTA */}
-      <section className="max-w-6xl mx-auto px-4 lg:px-8 pb-20">
-        <div className="rounded-xl bg-navy-900 text-paper p-8 lg:p-12 flex flex-col lg:flex-row items-start lg:items-center justify-between gap-6 shadow-[var(--shadow-pop)]">
-          <div>
-            <h2 className="text-2xl lg:text-3xl font-semibold tracking-tight">
-              Run your first scan in under a minute.
+        {/* ---------- 03 Method ---------- */}
+        <section id="how" className="border-b border-rule">
+          <div className={HEAD_PAD}>
+            <SectionTag index="03" label="Method" />
+            <h2 className={`mt-7 max-w-[20ch] ${H2}`}>
+              Scan, understand, remediate, report — in that order.
             </h2>
-            <p className="text-paper/70 mt-2 max-w-md">
-              No credit card. No overlay. No legal promises we can&apos;t keep.
+          </div>
+          <div className={`${GRID} border-t border-rule sm:grid-cols-2 lg:grid-cols-4`}>
+            {METHOD.map((s, i) => (
+              <article key={s.title} className="bg-canvas px-7 pt-9 pb-10">
+                <div
+                  aria-hidden
+                  className="numeral text-[64px] font-extrabold leading-[0.8] tracking-[-0.06em]"
+                  style={
+                    {
+                      "--marker":
+                        i % 2 === 0 ? "var(--color-accent)" : "var(--color-purple-600)",
+                    } as CSSProperties
+                  }
+                >
+                  {i + 1}
+                </div>
+                <h3 className="mt-9 text-[22px] font-bold tracking-[-0.02em]">{s.title}</h3>
+                <p className="mt-2.5 text-[15px] leading-relaxed text-ink-600">{s.body}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {/* ---------- 04 Audience ---------- */}
+        <section id="who" className="border-b border-rule">
+          <div className="flex flex-wrap items-end justify-between gap-5 px-6 sm:px-10 pt-12 pb-9">
+            <div>
+              <SectionTag index="04" label="Audience" />
+              <h2 className={`mt-7 max-w-[18ch] ${H2}`}>
+                Built for the people who actually have to fix things.
+              </h2>
+            </div>
+            <Aside>six roles, one backlog</Aside>
+          </div>
+          <div className={`${GRID} border-t border-rule sm:grid-cols-2 lg:grid-cols-3`}>
+            {TARGET_USERS.map((u) => (
+              <article key={u.title} className="bg-canvas px-7 py-8">
+                <h3 className="text-2xl font-extrabold tracking-[-0.03em]">{u.title}</h3>
+                <p className="mt-3 text-[15px] leading-relaxed text-ink-600">{u.body}</p>
+              </article>
+            ))}
+            <article className="bg-navy-900 px-7 py-8 text-paper">
+              <h3 className="text-2xl font-extrabold tracking-[-0.03em]">Developers</h3>
+              <p className="mt-3 text-[15px] leading-relaxed text-paper/75">
+                Code-aware fix suggestions for the stack you already ship on.
+              </p>
+              <ul className="mt-4 flex flex-wrap gap-1.5">
+                {DEV_STACKS.map((s) => (
+                  <li key={s} className="border border-paper/40 px-2.5 py-1 font-mono text-[11px]">
+                    {s}
+                  </li>
+                ))}
+              </ul>
+            </article>
+          </div>
+        </section>
+
+        {/* ---------- 05 Output ---------- */}
+        <section id="report" className="border-b border-rule bg-navy-900 text-paper">
+          <div className="grid lg:grid-cols-2">
+            <div className="px-6 sm:px-10 py-14 lg:border-r lg:border-paper/20">
+              <SectionTag index="05" label="Output" tone="light" />
+              <h2 className={`mt-7 max-w-[16ch] ${H2}`}>
+                A client-ready PDF, not a wall of red flags.
+              </h2>
+              <p className="mt-6 max-w-[52ch] text-base leading-relaxed text-paper/75">
+                Executive summary, WCAG mapping, and a phased remediation roadmap — with
+                an explicit scope notice stating what automated testing does and does not
+                cover.
+              </p>
+              <Aside className="mt-5 text-[26px] text-blue-200">
+                the part your client actually reads
+              </Aside>
+              <Link
+                href="/onboarding"
+                className="mt-8 inline-block bg-paper px-7 py-4 text-sm font-bold text-navy-900 shadow-[7px_7px_0_var(--color-purple-600)]"
+              >
+                Run your first scan
+              </Link>
+            </div>
+
+            <div className="px-6 sm:px-10 py-14">
+              <div className="border border-paper/35">
+                <div className="border-b border-paper/35 px-5 py-5">
+                  <div className="eyebrow tracking-[0.14em] text-paper/60">
+                    Accessibility assessment
+                  </div>
+                  <div className="mt-2 text-xl font-bold tracking-[-0.02em]">
+                    Northwind Shop — May 2026 scan
+                  </div>
+                </div>
+                <ol className="list-none">
+                  {REPORT_SECTIONS.map((s, i) => (
+                    <li
+                      key={s}
+                      className="flex gap-3.5 border-b border-paper/20 px-5 py-3.5 text-[15px] text-paper/85"
+                    >
+                      <span className="font-mono text-paper/50">
+                        {String(i + 1).padStart(2, "0")}
+                      </span>
+                      {s}
+                    </li>
+                  ))}
+                </ol>
+                <p className="px-5 py-4 text-xs leading-relaxed text-paper/60">
+                  {COMPLIANCE_COPY.REPORT_NOT_LEGAL}
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 06 Stance ---------- */}
+        <section id="privacy" className="border-b border-rule">
+          <div className="grid lg:grid-cols-2">
+            <div className="border-rule px-6 sm:px-10 py-12 lg:border-r">
+              <SectionTag index="06" label="Stance" />
+              <h2 className={`mt-7 max-w-[14ch] ${H2}`}>
+                We’d rather be useful than make legal promises.
+              </h2>
+              <div className="mt-8 border border-rule border-l-[10px] border-l-rose-600 bg-canvas-2 px-6 py-6">
+                <div className="eyebrow text-rose-600">No compliance guarantee</div>
+                <p className="mt-3.5 text-[15px] leading-relaxed text-ink-700">
+                  Automated scanning detects roughly 30–50% of accessibility issues.{" "}
+                  {COMPLIANCE_COPY.NO_GUARANTEE_FULL}
+                </p>
+              </div>
+            </div>
+            <ul className="border-t border-rule lg:border-t-0">
+              {PRIVACY_POINTS.map((p, i) => (
+                <li
+                  key={p}
+                  className={`flex gap-4 px-6 sm:px-10 py-6 text-[15px] leading-relaxed text-ink-700 ${
+                    i < PRIVACY_POINTS.length - 1 ? "border-b border-rule" : ""
+                  }`}
+                >
+                  <span aria-hidden className="font-mono font-semibold text-blue-600">
+                    →
+                  </span>
+                  {p}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </section>
+
+        {/* ---------- 07 Pricing ---------- */}
+        <section id="pricing" className="border-b border-rule">
+          <div className="flex flex-wrap items-end justify-between gap-5 px-6 sm:px-10 pt-12 pb-9">
+            <div>
+              <SectionTag index="07" label="Pricing" />
+              <h2 className={`mt-7 max-w-[16ch] ${H2}`}>Pricing that scales with your team</h2>
+            </div>
+            <p className="max-w-[46ch] text-[15px] leading-relaxed text-ink-600">
+              Honest tiers. No hidden ‘compliance’ upsells. Percevia AI is positioned
+              against one-click compliance — every plan reflects that.
             </p>
           </div>
-          <Link
-            href="/onboarding"
-            className="inline-flex items-center gap-2 h-12 px-5 rounded-md bg-paper text-navy-900 text-base font-medium hover:bg-canvas shrink-0"
-          >
-            Start free scan <ArrowRight className="size-4" aria-hidden />
-          </Link>
-        </div>
-      </section>
+
+          <div className={`${GRID} border-t border-rule sm:grid-cols-2 lg:grid-cols-5`}>
+            {PLANS.map((p) => {
+              const dark = Boolean(p.highlighted);
+              const quiet = p.id === "enterprise";
+              return (
+                <article
+                  key={p.id}
+                  className={`flex flex-col px-6 py-8 sm:last:col-span-2 lg:last:col-span-1 ${
+                    dark ? "bg-navy-900 text-paper" : quiet ? "bg-canvas-2" : "bg-canvas"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2.5">
+                    <span
+                      className={`eyebrow ${
+                        dark ? "text-paper/70" : quiet ? "text-purple-700" : "text-ink-600"
+                      }`}
+                    >
+                      {p.name}
+                    </span>
+                    {dark && (
+                      <span className="eyebrow bg-paper px-2 py-1 text-[10px] text-navy-900">
+                        Popular
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-3.5 text-[44px] font-extrabold leading-none tracking-[-0.045em]">
+                    {p.price}
+                  </div>
+                  <div className={`mt-1.5 font-mono text-xs ${dark ? "text-paper/70" : "text-ink-600"}`}>
+                    {p.cadence}
+                  </div>
+                  <ul
+                    className={`mt-6 grid flex-1 gap-2.5 text-sm leading-snug ${
+                      dark ? "text-paper/85" : "text-ink-700"
+                    }`}
+                  >
+                    {planFeatures(p).map((f) => (
+                      <li key={f}>{f}</li>
+                    ))}
+                  </ul>
+                  <Link
+                    href={p.id === "free" ? "/onboarding" : "/pricing"}
+                    className={`mt-6 px-4 py-3.5 text-center text-[13px] font-bold ${
+                      dark
+                        ? "bg-paper text-navy-900"
+                        : quiet
+                        ? "bg-purple-700 text-paper"
+                        : "border border-rule text-navy-900 hover:bg-canvas-2"
+                    }`}
+                  >
+                    {p.cta}
+                  </Link>
+                </article>
+              );
+            })}
+          </div>
+
+          <div className="border-t border-rule border-l-[10px] border-l-rose-600 px-7 py-6">
+            <div className="eyebrow text-rose-600">No compliance guarantee</div>
+            <p className="mt-3 max-w-[100ch] text-sm leading-relaxed text-ink-700">
+              No plan includes or implies certification under ADA, EAA, WCAG, Section 508
+              or EN 301 549. Percevia AI is an accessibility assessment aid. Formal
+              compliance work requires a qualified accessibility professional and, where
+              legal obligations are involved, legal counsel.
+            </p>
+          </div>
+        </section>
+
+        {/* ---------- 08 Compliance Center ---------- */}
+        <section id="compliance" className="border-b border-rule">
+          <div className={HEAD_PAD}>
+            <SectionTag index="08" label="Compliance Center" />
+            <h2 className={`mt-7 max-w-[20ch] ${H2}`}>
+              Privacy, AI use, and the limits of automated scanning
+            </h2>
+            <p className="mt-6 max-w-[66ch] text-base leading-relaxed text-ink-600">
+              Control how Percevia AI handles your scan data, who can access it, and what
+              AI processing is permitted. Everything lives in one place.
+            </p>
+          </div>
+
+          <div className={`${GRID} border-y border-rule sm:grid-cols-2 lg:grid-cols-4`}>
+            {COMPLIANCE_CARDS.map((c) => (
+              <article key={c.title} className="bg-canvas px-7 py-7">
+                <h3 className="text-[17px] font-bold tracking-[-0.02em]">{c.title}</h3>
+                <p className="mt-2.5 text-sm leading-relaxed text-ink-600">{c.body}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className={`${GRID} border-b border-rule lg:grid-cols-2`}>
+            <div className="bg-canvas px-7 py-8">
+              <h3 className="text-[26px] font-extrabold tracking-[-0.03em]">
+                What the AI receives
+              </h3>
+              <p className="mt-3.5 text-[15px] leading-relaxed text-ink-700">
+                Rule ID, description, WCAG tags, selector and a truncated HTML snippet.
+                Never passwords, cookies, payment data, form values, screenshots or
+                unrelated records. Outputs are stored against the issue and pass a
+                forbidden-claims filter.
+              </p>
+            </div>
+            <div className="bg-canvas px-7 py-8">
+              <h3 className="text-[26px] font-extrabold tracking-[-0.03em]">Visual evidence</h3>
+              <p className="mt-3.5 text-[15px] leading-relaxed text-ink-700">
+                {COMPLIANCE_COPY.VISUAL_EVIDENCE_WARNING} Screenshots stay off until a
+                workspace admin turns them on, and they are opt-in per scan.
+              </p>
+            </div>
+          </div>
+
+          <div className="px-6 sm:px-10 pt-9 pb-3">
+            <h3 className="text-[26px] font-extrabold tracking-[-0.03em]">
+              Region &amp; data hosting
+            </h3>
+          </div>
+          <div className="grid gap-3.5 px-6 sm:px-10 pb-5 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="border border-rule px-5 py-5 shadow-[6px_6px_0_var(--color-accent)]">
+              <div className="flex items-center justify-between gap-2.5">
+                <span className="text-base font-bold">EU (Frankfurt)</span>
+                <span className="eyebrow bg-blue-700 px-2 py-1 text-[10px] text-paper">
+                  Current
+                </span>
+              </div>
+              <p className="mt-2.5 text-[13px] text-ink-600">GDPR-friendly default</p>
+            </div>
+            <div className="border border-rule px-5 py-5">
+              <span className="text-base font-bold">US (Virginia)</span>
+              <p className="mt-2.5 text-[13px] text-ink-600">Required for some clients</p>
+            </div>
+            <div className="border border-rule px-5 py-5">
+              <span className="text-base font-bold">Other (on-request)</span>
+              <p className="mt-2.5 text-[13px] text-ink-600">Enterprise plan: AU, UK, CA</p>
+            </div>
+          </div>
+          <p className="max-w-[110ch] px-6 sm:px-10 pb-9 text-[13px] leading-relaxed text-ink-600">
+            The selector stores a residency preference. Actual location depends on the
+            Firebase project region and worker deployment; changing provider or region is
+            an infrastructure change handled with support.
+          </p>
+
+          <div className={`${GRID} border-t border-rule lg:grid-cols-2`}>
+            <div className="bg-canvas">
+              <h3 className="border-b border-rule px-7 py-7 text-[26px] font-extrabold tracking-[-0.03em]">
+                Retention
+              </h3>
+              {RETENTION.map((r) => (
+                <div
+                  key={r.label}
+                  className="flex justify-between gap-4 border-b border-line-soft px-7 py-4 text-sm"
+                >
+                  <span className="text-ink-700">{r.label}</span>
+                  <span className="font-mono">{r.value}</span>
+                </div>
+              ))}
+              <p className="px-7 pt-4 pb-7 text-[13px] leading-relaxed text-ink-600">
+                A daily purge job enforces the workspace retention setting. Workspace data
+                is exportable as a JSON archive and deletable on demand.
+              </p>
+            </div>
+            <div className="bg-canvas">
+              <h3 className="border-b border-rule px-7 py-7 text-[26px] font-extrabold tracking-[-0.03em]">
+                Subprocessors
+              </h3>
+              {SUBPROCESSORS.map((s) => (
+                <div key={s.name} className="border-b border-line-soft px-7 py-4">
+                  <div className="text-[15px] font-bold">{s.name}</div>
+                  <div className="mt-1 text-[13px] text-ink-600">{s.body}</div>
+                </div>
+              ))}
+              <p className="px-7 pt-4 pb-7 text-[13px] leading-relaxed text-ink-600">
+                Additions or replacements are announced by email 14 days in advance.
+              </p>
+            </div>
+          </div>
+
+          <div className="border-t border-rule px-6 sm:px-10 py-8">
+            <h3 className="mb-5 text-[26px] font-extrabold tracking-[-0.03em]">
+              Legal documents
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {LEGAL_DOCS.map((d) => (
+                <Link
+                  key={d.href}
+                  href={d.href}
+                  className="border border-rule px-5 py-4 text-sm font-semibold text-navy-900 hover:bg-canvas-2"
+                >
+                  {d.label}
+                </Link>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {/* ---------- 09 Questions ---------- */}
+        <section id="faq" className="border-b border-rule">
+          <div className={HEAD_PAD}>
+            <SectionTag index="09" label="Questions" />
+            <h2 className={`mt-7 max-w-[20ch] ${H2}`}>
+              Direct answers to the questions every buyer asks.
+            </h2>
+          </div>
+          <div className={`${GRID} border-t border-rule lg:grid-cols-2`}>
+            {FAQ.map((f) => (
+              <article key={f.q} className="bg-canvas px-7 py-8">
+                <h3 className="text-xl font-bold tracking-[-0.02em]">{f.q}</h3>
+                <p className="mt-3 text-[15px] leading-relaxed text-ink-600">{f.a}</p>
+              </article>
+            ))}
+          </div>
+        </section>
+
+        {/* ---------- Final CTA ---------- */}
+        <section id="cta" className="bg-navy-900 text-paper">
+          <div className="grid items-center lg:grid-cols-2">
+            <div className="px-6 sm:px-10 py-16 lg:border-r lg:border-paper/20">
+              <h2 className="max-w-[14ch] font-extrabold leading-[0.94] tracking-[-0.045em] text-[clamp(2.4rem,5vw,4.5rem)]">
+                Run your first scan in under a minute.
+              </h2>
+              <p className="mt-6 text-[17px] leading-relaxed text-paper/75">
+                No credit card. No overlay. No legal promises we can’t keep.
+              </p>
+            </div>
+            <div className="px-6 sm:px-10 pb-16 lg:py-16">
+              <Link
+                href={signedIn ? "/app" : "/onboarding"}
+                className="inline-block bg-paper px-8 py-4 text-[15px] font-bold text-navy-900 shadow-[8px_8px_0_var(--color-accent)]"
+              >
+                {signedIn ? "Open dashboard" : "Start free scan"}
+              </Link>
+              <Aside className="mt-6 text-[27px] text-blue-200">
+                three scans a day, free, forever
+              </Aside>
+            </div>
+          </div>
+        </section>
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-line py-10">
-        <div className="max-w-6xl mx-auto px-4 lg:px-8 flex flex-col sm:flex-row sm:items-start justify-between gap-6 text-xs text-ink-500">
-          <div className="flex items-center gap-3">
-            <Logo variant="wordmark" />
-            <span className="text-ink-300">·</span>
-            <span>© 2026 maitrico</span>
-          </div>
-          <div className="flex flex-wrap gap-x-5 gap-y-1.5">
-            <Link href="/pricing" className="hover:text-ink-700">Pricing</Link>
-            <Link href="/legal/terms" className="hover:text-ink-700">Terms</Link>
-            <Link href="/legal/privacy" className="hover:text-ink-700">Privacy</Link>
-            <Link href="/legal/dpa" className="hover:text-ink-700">DPA</Link>
-            <Link href="/legal/subprocessors" className="hover:text-ink-700">Subprocessors</Link>
-            <Link href="/legal/contact" className="hover:text-ink-700">Contact</Link>
-            <Link href="/app/compliance" className="hover:text-ink-700">Compliance Center</Link>
-          </div>
-        </div>
-      </footer>
-    </div>
+    </MarketingShell>
   );
 }
 
-function ProblemItem({ title, body }: { title: string; body: string }) {
+function MiniStat({
+  label,
+  value,
+  tone,
+  last,
+}: {
+  label: string;
+  value: string;
+  tone?: "critical";
+  last?: boolean;
+}) {
   return (
-    <li className="flex items-start gap-3">
-      <span className="size-7 rounded-md bg-navy-900/10 text-navy-900 inline-flex items-center justify-center shrink-0 mt-0.5">
-        <Code2 className="size-3.5" aria-hidden />
-      </span>
-      <div>
-        <p className="font-semibold text-ink-900">{title}</p>
-        <p className="text-ink-600 mt-1 text-base leading-relaxed">{body}</p>
+    <div className={`px-2.5 py-3 ${last ? "" : "border-r border-rule"}`}>
+      <div className="eyebrow text-[10px] tracking-[0.1em] text-ink-600">{label}</div>
+      <div
+        className={`text-2xl font-extrabold tracking-[-0.03em] ${
+          tone === "critical" ? "text-rose-600" : ""
+        }`}
+      >
+        {value}
       </div>
-    </li>
-  );
-}
-
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-md bg-canvas-2/60 ring-1 ring-line p-2.5">
-      <p className="text-[10px] uppercase tracking-wider text-ink-500 font-semibold">{label}</p>
-      <p className="text-lg font-semibold tabular-nums text-ink-900 mt-0.5">{value}</p>
     </div>
   );
 }

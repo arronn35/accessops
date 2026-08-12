@@ -12,23 +12,30 @@
 
   --color-paper: #FFFFFF;
   --color-canvas: #F7F8FB;
-  --color-canvas-2: #EFF2F8;
+  --color-canvas-2: #EDEFF5;
 
-  --color-ink-900: #0E1422;
+  --color-ink-900: #0B1220;
   --color-ink-700: #2A3247;
   --color-ink-600: #4B5570;
   --color-ink-500: #626C87;
   --color-ink-400: #8892A6;
   --color-ink-300: #B0B8CC;
 
-  --color-line: #E4E8F0;
-  --color-line-strong: #CDD3E0;
+  /* Structural rules are the backbone of the editorial layout: `rule` draws
+     the hard ink frame, `line` the visible hairline, `line-soft` the quiet
+     divider used inside a framed panel. */
+  --color-rule: #0B1220;
+  --color-line: #C4CBDA;
+  --color-line-strong: #0B1220;
+  --color-line-soft: #E4E8F0;
 
   --color-blue-50: #EEF3FF;
   --color-blue-100: #DCE6FF;
+  /* Reads as light periwinkle on the ink sections. */
+  --color-blue-200: #9DB4FF;
   --color-blue-500: #4A7BFF;
   --color-blue-600: #3563E6;
-  --color-blue-700: #2A50BF;
+  --color-blue-700: #2A4BC4;
 
   --color-green-50: #E8F5EE;
   --color-green-500: #3FA67A;
@@ -38,6 +45,7 @@
   --color-purple-100: #DDD8FC;
   --color-purple-500: #7A6CF0;
   --color-purple-600: #5E4FD9;
+  --color-purple-700: #4A3FB8;
 
   --color-amber-50: #FBF1DE;
   --color-amber-500: #C28A2E;
@@ -45,23 +53,32 @@
 
   --color-rose-50: #F8E5E9;
   --color-rose-500: #B7475A;
-  --color-rose-700: #8A2F40;
+  --color-rose-600: #B3123C;
+  --color-rose-700: #96102F;
 
-  /* ----- Radii ----- */
-  --radius-sm: 6px;
-  --radius: 10px;
-  --radius-md: 12px;
-  --radius-lg: 16px;
-  --radius-xl: 22px;
+  /* ----- Radii -----
+     The system is square: corners are a deliberate zero, not an oversight.
+     The tokens stay so `rounded-*` utilities keep resolving. */
+  --radius-sm: 0px;
+  --radius: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+
+  /* ----- Depth -----
+     Elevation is an offset block of accent colour, never a blur. */
+  --depth: 7px;
+  --color-accent: #3563E6;
 
   /* ----- Shadows ----- */
-  --shadow-soft: 0 1px 2px rgba(11, 18, 32, 0.04), 0 4px 12px rgba(11, 18, 32, 0.04);
-  --shadow-card: 0 1px 2px rgba(11, 18, 32, 0.05), 0 6px 18px rgba(11, 18, 32, 0.05);
-  --shadow-pop: 0 4px 12px rgba(11, 18, 32, 0.07), 0 14px 32px rgba(11, 18, 32, 0.08);
+  --shadow-soft: 0 0 0 0 rgba(0, 0, 0, 0);
+  --shadow-card: 3px 3px 0 rgba(11, 18, 32, 0.10);
+  --shadow-pop: var(--depth) var(--depth) 0 var(--color-accent);
 
   /* ----- Fonts ----- */
-  --font-sans: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: var(--font-archivo), Archivo, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: var(--font-plex-mono), "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-script: var(--font-caveat), Caveat, ui-rounded, cursive;
 }
 
 html {
@@ -76,10 +93,18 @@ body {
   background: var(--color-canvas);
   color: var(--color-ink-900);
   font-family: var(--font-sans);
-  font-feature-settings: "ss01", "cv11";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.55;
+  text-wrap: pretty;
+}
+
+/* Display type is tight and heavy; the grotesk carries the layout.
+   Layered so `tracking-*` utilities can still override per element. */
+@layer base {
+  h1, h2, h3 {
+    letter-spacing: -0.03em;
+  }
 }
 
 html[data-contrast="high"] {
@@ -90,11 +115,15 @@ html[data-contrast="high"] {
   --color-ink-600: #1A2542;
   --color-ink-500: #2C3A60;
   --color-ink-400: #2C3A60;
-  --color-line: #6B7590;
-  --color-line-strong: #2C3A60;
+  --color-line: #2C3A60;
+  --color-line-soft: #6B7590;
+  --color-line-strong: #000000;
+  --color-rule: #000000;
+  --color-accent: #001F8C;
   --color-blue-500: #0033CC;
   --color-blue-600: #001F8C;
   --color-rose-500: #8A1322;
+  --color-rose-600: #8A1322;
   --color-amber-500: #6F4500;
   --color-green-500: #14543A;
   --color-purple-500: #3F2DB7;
@@ -122,14 +151,13 @@ html[data-motion="reduced"] *::after {
 
 *:focus { outline: none; }
 *:focus-visible {
-  outline: 2px solid var(--color-blue-500);
-  outline-offset: 2px;
-  border-radius: var(--radius-sm);
+  outline: 3px solid var(--color-accent);
+  outline-offset: 3px;
 }
 
 ::selection {
-  background: var(--color-blue-100);
-  color: var(--color-navy-900);
+  background: var(--color-navy-900);
+  color: var(--color-canvas);
 }
 
 .skip-to-content {
@@ -139,7 +167,10 @@ html[data-motion="reduced"] *::after {
   background: var(--color-navy-900);
   color: var(--color-paper);
   padding: 12px 18px;
-  border-radius: 0 0 var(--radius) 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
   font-weight: 600;
   z-index: 100;
   transform: translateY(-150%);
@@ -175,16 +206,36 @@ html[data-motion="reduced"] *::after {
 
 .bg-grid {
   background-image:
-    linear-gradient(to right, rgba(11, 18, 32, 0.04) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(11, 18, 32, 0.04) 1px, transparent 1px);
+    linear-gradient(to right, rgba(11, 18, 32, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(11, 18, 32, 0.05) 1px, transparent 1px);
   background-size: 48px 48px;
 }
 
-.bg-aurora {
-  background:
-    radial-gradient(60% 50% at 80% 10%, rgba(122, 108, 240, 0.18), transparent 60%),
-    radial-gradient(50% 40% at 10% 20%, rgba(74, 123, 255, 0.15), transparent 65%),
-    radial-gradient(40% 30% at 60% 90%, rgba(63, 166, 122, 0.10), transparent 60%);
+/* ----- Editorial system helpers -----
+   Mono micro-labels, the handwritten aside, and the stacked numeral used as
+   a section marker. In the components layer so utilities (`text-[10px]`,
+   `tracking-*`, colours) still win when a usage needs to deviate. */
+@layer components {
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+  }
+
+  .script {
+    font-family: var(--font-script);
+    line-height: 1.2;
+  }
+
+  .numeral {
+    color: var(--color-canvas);
+    text-shadow:
+      2px 2px 0 var(--color-navy-900),
+      4px 4px 0 var(--color-navy-900),
+      6px 6px 0 var(--marker, var(--color-accent));
+  }
 }
 
 @keyframes pulseDot {

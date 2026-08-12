@@ -2,12 +2,15 @@ import { randomBytes } from "node:crypto";
 import { z } from "zod";
 import { apiError, ApiError, requireSession } from "@/lib/api/context";
 import { audit, getReport, setReportShare } from "@/lib/data/firestore";
+import { roleHasPermission } from "@/lib/entitlements";
 
 const BodySchema = z.object({ public: z.boolean() });
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const ctx = await requireSession();
+    if (!roleHasPermission(ctx.role, "export_reports")) throw new ApiError(403, "forbidden");
+
     const { id } = await params;
     const parsed = BodySchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) throw new ApiError(400, "invalid_body");

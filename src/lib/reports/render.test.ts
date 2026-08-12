@@ -57,6 +57,24 @@ describe("renderHtml", () => {
     expect(html).not.toMatch(/100% compliant/i);
     expect(html).not.toMatch(/legally compliant/i);
   });
+
+  it("separates failed URLs from the pages included in scoring", () => {
+    const html = renderHtml(
+      fakeInput({
+        pagesScanned: 1,
+        pagesFailedToScan: 2,
+        failedPageUrls: [
+          "https://example.org/blocked",
+          "https://example.org/timeout",
+        ],
+      })
+    );
+
+    expect(html).toContain("2 pages could not be scanned");
+    expect(html).toContain("based only on the 1 page");
+    expect(html).toContain("https://example.org/blocked");
+    expect(html).toContain("https://example.org/timeout");
+  });
 });
 
 describe("renderCsv", () => {
@@ -134,6 +152,24 @@ describe("renderJson", () => {
     expect(json.groups[0].instanceIds).toEqual(["i1"]);
     expect(json.issues[0].screenshot.captured).toBe(false);
     expect(json.disclaimer).toMatch(/not a legal certification/i);
+  });
+
+  it("includes failed-page coverage in machine-readable output", () => {
+    const json = JSON.parse(
+      renderJson(
+        fakeInput({
+          pagesScanned: 1,
+          pagesFailedToScan: 1,
+          failedPageUrls: ["https://example.org/blocked"],
+        })
+      )
+    );
+
+    expect(json.scan).toMatchObject({
+      pagesScanned: 1,
+      pagesFailedToScan: 1,
+      failedPageUrls: ["https://example.org/blocked"],
+    });
   });
 });
 

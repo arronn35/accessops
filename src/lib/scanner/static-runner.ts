@@ -9,6 +9,7 @@ import type {
   ProgressCallback,
   ScanInput,
   ScanOutcome,
+  ScannerErrorCode,
   Severity,
   Impact,
   IssueContext,
@@ -87,11 +88,16 @@ export async function runStaticScanJob(
           links: [],
         };
 
+    const failureCode = fetched.errorMessage
+      ? staticPageFailureCode(fetched.errorMessage)
+      : undefined;
     pages.push({
       url: fetched.url,
       title: analysis.title,
       statusCode: fetched.statusCode,
       scannedAt: new Date(),
+      scanFailed: Boolean(fetched.errorMessage),
+      failureCode,
       rawMetadata: {
         engine: "static-html-fallback",
         scanner: "static-html",
@@ -102,6 +108,8 @@ export async function runStaticScanJob(
         states: ["initial"],
         contentType: fetched.contentType,
         fetchFailureReason: fetched.errorMessage ?? null,
+        scanFailed: Boolean(fetched.errorMessage),
+        ...(failureCode ? { failureCode } : {}),
         pageCap: maxPages,
         discoverySource: plan.discoverySource,
         sitemapUrl: plan.sitemapUrl ?? null,
@@ -329,6 +337,24 @@ async function fetchHtmlSafely(
 
       const contentType = res.headers.get("content-type");
       const html = contentType?.includes("html") ? await res.text() : "";
+      if (res.status >= 400) {
+        return {
+          url: res.url || current,
+          statusCode: res.status,
+          contentType,
+          html: "",
+          errorMessage: `http_${res.status}`,
+        };
+      }
+      if (html && looksLikeBotChallenge(html)) {
+        return {
+          url: res.url || current,
+          statusCode: res.status,
+          contentType,
+          html: "",
+          errorMessage: "bot_challenge_detected",
+        };
+      }
       return {
         url: res.url || current,
         statusCode: res.status,
@@ -340,6 +366,20 @@ async function fetchHtmlSafely(
     }
   }
   throw new Error("too_many_redirects");
+}
+
+function looksLikeBotChallenge(html: string): boolean {
+  const sample = html.slice(0, 250_000).toLowerCase();
+  return (
+    sample.includes("cf-chl-") ||
+    sample.includes("g-recaptcha") ||
+    sample.includes("hcaptcha") ||
+    sample.includes("verify you are human") ||
+    (sample.includes("<title>just a moment") &&
+      sample.includes("cloudflare")) ||
+    (sample.includes("attention required") &&
+      sample.includes("cloudflare"))
+  );
 }
 
 function unavailableFetchResult(url: string, err: unknown): FetchResult {
@@ -367,6 +407,12 @@ function unavailablePageIssue(errorMessage: string): NormalizedIssue {
     humanReviewRequired: true,
     contexts: [{ viewport: "desktop", state: "initial" }],
   });
+}
+
+function staticPageFailureCode(errorMessage: string): ScannerErrorCode {
+  return /timeout|deadline/i.test(errorMessage)
+    ? "deadline_exceeded"
+    : "page_unavailable";
 }
 
 function scanErrorMessage(err: unknown): string {

@@ -5,10 +5,7 @@ export const Card = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
     <div
       ref={ref}
-      className={cn(
-        "rounded-lg bg-paper ring-1 ring-line shadow-[var(--shadow-soft)]",
-        className
-      )}
+      className={cn("bg-paper border border-rule", className)}
       {...props}
     />
   )
@@ -45,7 +42,7 @@ CardContent.displayName = "CardContent";
 
 export const CardFooter = forwardRef<HTMLDivElement, HTMLAttributes<HTMLDivElement>>(
   ({ className, ...props }, ref) => (
-    <div ref={ref} className={cn("px-5 py-4 border-t border-line bg-canvas/50 rounded-b-lg", className)} {...props} />
+    <div ref={ref} className={cn("px-5 py-4 border-t border-rule bg-canvas-2", className)} {...props} />
   )
 );
 CardFooter.displayName = "CardFooter";

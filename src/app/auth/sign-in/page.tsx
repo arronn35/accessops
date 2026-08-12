@@ -27,15 +27,15 @@ export default async function SignInPage({
 function SignInFallback() {
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
-      <header className="bg-paper border-b border-line">
+      <header className="bg-paper border-b border-rule">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center">
-          <Logo variant="wordmark" />
+          <Logo variant="site" />
         </div>
       </header>
       <main className="flex-1 max-w-md w-full mx-auto px-4 lg:px-8 py-12">
         <div className="h-7 w-48 rounded bg-canvas animate-pulse" />
         <div className="mt-4 h-4 w-72 rounded bg-canvas animate-pulse" />
-        <div className="mt-8 rounded-lg bg-paper ring-1 ring-line p-6 space-y-4">
+        <div className="mt-8 rounded-lg bg-paper border border-rule p-6 space-y-4">
           <div className="h-4 w-28 rounded bg-canvas animate-pulse" />
           <div className="h-11 rounded-md bg-canvas animate-pulse" />
           <div className="h-11 rounded-md bg-canvas animate-pulse" />

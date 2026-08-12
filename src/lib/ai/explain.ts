@@ -7,12 +7,12 @@
  *   3. No cookies, form values, or screenshots are sent.
  *   4. System prompt forbids legal-compliance claims and overlay endorsement.
  *   5. Output is post-processed against a forbidden-claims list.
- *   6. If OPENAI_API_KEY is missing, behavior depends on AI_MOCK_ENABLED.
+ *   6. Mock output is allowed only outside production and when AI_MOCK_ENABLED.
  */
-import { aiMockEnabled } from "@/lib/config";
+import { aiMockEnabled, isProduction } from "@/lib/config";
 
 export class AiUnavailableError extends Error {
-  constructor(message = "GPT integration is not configured.") {
+  constructor(message = "AI integration is unavailable.") {
     super(message);
     this.name = "AiUnavailableError";
   }
@@ -20,6 +20,35 @@ export class AiUnavailableError extends Error {
 
 const OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses";
 export const DEFAULT_AI_MODEL = "gpt-5.3-codex";
+const MAX_PROVIDER_ATTEMPTS = 2;
+const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
+const MIN_REQUEST_TIMEOUT_MS = 1_000;
+const MAX_REQUEST_TIMEOUT_MS = 120_000;
+const DEFAULT_RETRY_BACKOFF_MS = 250;
+const MIN_RETRY_BACKOFF_MS = 25;
+const MAX_RETRY_BACKOFF_MS = 1_000;
+const USER_SAFE_FAILURE_MESSAGE = "AI request failed. Please try again later.";
+
+type ProviderFailureKind =
+  | "http"
+  | "network"
+  | "timeout"
+  | "invalid_response"
+  | "incomplete"
+  | "refusal"
+  | "empty_output";
+
+class ProviderFailure extends Error {
+  constructor(
+    public readonly kind: ProviderFailureKind,
+    public readonly retryable: boolean,
+    public readonly status?: number,
+    public readonly retryAfterMs?: number
+  ) {
+    super("AI provider request failed");
+    this.name = "ProviderFailure";
+  }
+}
 
 const SYSTEM_PROMPT = `You are an accessibility engineer assistant for maitrico Percevia AI.
 
@@ -49,7 +78,7 @@ export interface ExplainInput {
   ruleId: string;
   description: string;
   help: string;
-  wcagTags: string[];
+  wcagTags: readonly string[];
   htmlSnippet?: string;
   framework?: string;
   mode?: "issue" | "react" | "client" | "test" | "html" | "shopify" | "wordpress";
@@ -239,11 +268,182 @@ function mockExplanation(input: ExplainInput): ExplainOutput {
   };
 }
 
+function boundedEnvMs(
+  name: string,
+  fallback: number,
+  minimum: number,
+  maximum: number
+): number {
+  const parsed = Number(process.env[name]);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(maximum, Math.max(minimum, Math.trunc(parsed)));
+}
+
+function requestTimeoutMs(): number {
+  return boundedEnvMs(
+    "OPENAI_REQUEST_TIMEOUT_MS",
+    DEFAULT_REQUEST_TIMEOUT_MS,
+    MIN_REQUEST_TIMEOUT_MS,
+    MAX_REQUEST_TIMEOUT_MS
+  );
+}
+
+function retryBackoffMs(): number {
+  return boundedEnvMs(
+    "OPENAI_RETRY_BACKOFF_MS",
+    DEFAULT_RETRY_BACKOFF_MS,
+    MIN_RETRY_BACKOFF_MS,
+    MAX_RETRY_BACKOFF_MS
+  );
+}
+
+function retryAfterMs(headers: Headers): number | undefined {
+  const seconds = Number(headers.get("retry-after"));
+  if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
+  return Math.min(
+    MAX_RETRY_BACKOFF_MS,
+    Math.max(MIN_RETRY_BACKOFF_MS, Math.round(seconds * 1_000))
+  );
+}
+
+function isRetryableStatus(status: number): boolean {
+  return status === 408 || status === 429 || (status >= 500 && status <= 599);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mocksAllowed(): boolean {
+  return aiMockEnabled() && !isProduction();
+}
+
+function normalizeProviderFailure(err: unknown, timedOut: boolean): ProviderFailure {
+  if (err instanceof ProviderFailure) return err;
+  return new ProviderFailure(timedOut ? "timeout" : "network", true);
+}
+
+async function requestOpenAi(
+  key: string,
+  model: string,
+  prompt: string
+): Promise<unknown> {
+  const requestBody = JSON.stringify({
+    model,
+    input: [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: prompt },
+    ],
+    text: { format: responseSchema() },
+    max_output_tokens: 900,
+  });
+
+  for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
+    const controller = new AbortController();
+    let timedOut = false;
+    const timeout = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, requestTimeoutMs());
+    let failure: ProviderFailure | null = null;
+
+    try {
+      const response = await fetch(OPENAI_RESPONSES_URL, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${key}`,
+        },
+        body: requestBody,
+        signal: controller.signal,
+      });
+      const body = await response.json().catch(() => null);
+      if (!response.ok) {
+        failure = new ProviderFailure(
+          "http",
+          isRetryableStatus(response.status),
+          response.status,
+          retryAfterMs(response.headers)
+        );
+      } else {
+        return body;
+      }
+    } catch (err) {
+      failure = normalizeProviderFailure(err, timedOut);
+    } finally {
+      clearTimeout(timeout);
+    }
+
+    if (!failure) {
+      throw new ProviderFailure("invalid_response", false);
+    }
+    if (!failure.retryable || attempt === MAX_PROVIDER_ATTEMPTS) {
+      throw failure;
+    }
+
+    const delayMs = failure.retryAfterMs ?? retryBackoffMs();
+    console.warn("[ai] retrying provider request", {
+      attempt,
+      delayMs,
+      kind: failure.kind,
+      status: failure.status ?? null,
+    });
+    await sleep(delayMs);
+  }
+
+  throw new ProviderFailure("invalid_response", false);
+}
+
+function objectRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function containsRefusal(body: Record<string, unknown>): boolean {
+  if (typeof body.refusal === "string") return true;
+  if (!Array.isArray(body.output)) return false;
+  for (const item of body.output) {
+    const outputItem = objectRecord(item);
+    if (!outputItem || !Array.isArray(outputItem.content)) continue;
+    for (const part of outputItem.content) {
+      const contentPart = objectRecord(part);
+      if (contentPart?.type === "refusal") return true;
+    }
+  }
+  return false;
+}
+
+function validateProviderOutput(
+  bodyValue: unknown
+): Omit<ExplainOutput, "modelProvider" | "model"> {
+  const body = objectRecord(bodyValue);
+  if (!body || body.error != null) {
+    throw new ProviderFailure("invalid_response", false);
+  }
+  if (body.status !== "completed" || body.incomplete_details != null) {
+    throw new ProviderFailure("incomplete", false);
+  }
+  if (containsRefusal(body)) {
+    throw new ProviderFailure("refusal", false);
+  }
+
+  const raw = extractOutputText(body);
+  if (!raw.trim()) {
+    throw new ProviderFailure("empty_output", false);
+  }
+  const parsed = parseStructured(raw);
+  if (!parsed.explanationPlain.trim()) {
+    throw new ProviderFailure("empty_output", false);
+  }
+  return parsed;
+}
+
 export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> {
   const key = process.env.OPENAI_API_KEY;
   const model = process.env.OPENAI_MODEL || DEFAULT_AI_MODEL;
   if (!key) {
-    if (aiMockEnabled()) return mockExplanation(input);
+    if (mocksAllowed()) return mockExplanation(input);
     throw new AiUnavailableError();
   }
 
@@ -271,39 +471,27 @@ export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> 
     .join("\n");
 
   try {
-    const response = await fetch(OPENAI_RESPONSES_URL, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        authorization: `Bearer ${key}`,
-      },
-      body: JSON.stringify({
-        model,
-        input: [
-          { role: "system", content: SYSTEM_PROMPT },
-          { role: "user", content: prompt },
-        ],
-        text: { format: responseSchema() },
-        max_output_tokens: 900,
-      }),
-    });
-    const body = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(body?.error?.message || `OpenAI request failed (${response.status})`);
-    }
-    const raw = extractOutputText(body);
+    const body = await requestOpenAi(key, model, prompt);
     return {
-      ...parseStructured(raw),
+      ...validateProviderOutput(body),
       modelProvider: "openai",
       model,
     };
   } catch (err) {
-    if (aiMockEnabled()) {
-      console.error("[ai] explainIssue failed, falling back to mock", err);
+    const failure =
+      err instanceof ProviderFailure
+        ? {
+            kind: err.kind,
+            retryable: err.retryable,
+            status: err.status ?? null,
+          }
+        : { kind: "unknown", retryable: false, status: null };
+    if (mocksAllowed()) {
+      console.error("[ai] explainIssue failed, falling back to mock", failure);
       return mockExplanation(input);
     }
-    console.error("[ai] explainIssue failed", err);
-    throw new AiUnavailableError("GPT request failed. Please try again later.");
+    console.error("[ai] explainIssue failed", failure);
+    throw new AiUnavailableError(USER_SAFE_FAILURE_MESSAGE);
   }
 }
 
@@ -320,6 +508,7 @@ function extractOutputText(body: unknown): string {
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
+      if ((part as { type?: unknown }).type !== "output_text") continue;
       const text = (part as { text?: unknown }).text;
       if (typeof text === "string") chunks.push(text);
     }

@@ -12,7 +12,7 @@ import { AiExplanationPanel } from "./ai-panel";
 import { IssueActions } from "./issue-actions";
 import { IssueEvidenceImage } from "./issue-evidence-image";
 
-export const metadata = { title: "Issue — AccessOps AI" };
+export const metadata = { title: "Issue — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function IssueDetailPage({
@@ -103,7 +103,15 @@ export default async function IssueDetailPage({
                 </p>
             </section>
           )}
-          <AiExplanationPanel issueId={issueId} initial={null} aiEnabled={!!ctx.privacy.aiProcessingEnabled} />
+          <AiExplanationPanel
+            scanId={id}
+            issueId={issueId}
+            initial={null}
+            aiEnabled={Boolean(
+              ctx.privacy.aiProcessingEnabled && scan.aiExplanationsEnabled
+            )}
+            htmlSnippet={issue.htmlSnippet}
+          />
           {issue.humanReviewRequired && <HumanReviewBanner />}
         </div>
         <aside className="min-w-0">

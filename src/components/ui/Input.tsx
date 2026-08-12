@@ -2,7 +2,8 @@ import { forwardRef, type InputHTMLAttributes, type TextareaHTMLAttributes, type
 import { cn } from "@/lib/utils";
 
 const baseField =
-  "w-full rounded-md bg-paper px-3.5 py-2.5 text-sm text-ink-900 ring-1 ring-line shadow-[var(--shadow-soft)] placeholder:text-ink-500 disabled:opacity-60 disabled:bg-canvas-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition";
+  // Focus styling comes from the global `:focus-visible` rule (3px accent).
+  "w-full bg-paper px-3.5 py-2.5 text-sm text-ink-900 border border-rule placeholder:text-ink-500 disabled:opacity-60 disabled:bg-canvas-2 transition";
 
 export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(
   ({ className, type = "text", ...props }, ref) => (
@@ -51,7 +52,7 @@ export function Label({
   return (
     <label
       htmlFor={htmlFor}
-      className={cn("block text-sm font-medium text-ink-700 mb-1.5", className)}
+      className={cn("block text-sm font-semibold text-ink-900 mb-1.5", className)}
     >
       {children}
       {required && (

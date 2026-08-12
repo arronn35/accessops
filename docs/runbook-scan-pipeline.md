@@ -256,7 +256,10 @@ top-down; each step narrows the cause.
    show `[worker] starting`. A persistently unclaimed queue with a live worker
    usually means a **missing Firestore composite index** on
    `scans (status, createdAt)` — the first worker run logs a console link to
-   build it; or deploy `firestore.indexes.json`.
+   build it; or deploy `firestore.indexes.json`. Scan creation also requires
+   the `scans.status` single-field ASC index in normal `COLLECTION` scope;
+   defining only the `COLLECTION_GROUP` override disables that default index
+   and makes `POST /api/scans` return `firestore_index_unavailable`.
 
 3. **Is the worker's browser healthy?** Worker `/healthz` → `browserHealthy`
    and `browser` stats. Grep worker logs for `browser.disconnected`,
@@ -290,17 +293,13 @@ The worker handles both legacy and page-jobs scans, so deploy it first and flip
 the flag second; nothing in the web app depends on the new worker behavior until
 `PAGE_JOBS_ENABLED` is on.
 
-1. **Deploy the worker first.** Ship the new `Dockerfile.worker` to the worker
-   host (Railway/Fly/Render). It must be running and healthy
-   (`/healthz` 200, `/api/healthz?deep=1` shows a fresh worker) **before** any
-   flag change. With the flag still off it processes legacy scans exactly as
-   before — this is a safe, reversible step.
+1. **Deploy the worker first.** Run `scripts/deploy-cloud-run.sh`; it builds
+   `Dockerfile.worker`, configures private OIDC invocation and creates the queue
+   and Scheduler recovery jobs.
 2. **Deploy the web app.** Push the Vercel app. With `PAGE_JOBS_ENABLED` unset,
    `usePageJobs` stays false and every new scan still takes the legacy path. No
    behavior change for users yet.
-3. **Enable for one internal workspace.** Turn `PAGE_JOBS_ENABLED` on for a
-   single internal/dogfood workspace only (or flip it on globally during a quiet
-   window and only create scans from the internal workspace). Run real scans:
+3. **Enable during a quiet window.** Turn `PAGE_JOBS_ENABLED` on and run real scans:
    single, multi-page, and a deliberately broken page. Confirm:
    - scans reach `completed` / `completed_with_errors`, never wedge;
    - failed pages show in `FailedPagesNotice` without sinking the scan;
@@ -325,11 +324,8 @@ Scoped out of this phase — listed so they aren't silently dropped:
   worker dies). A dedicated `aggregationJob` (claimable, retryable, with its own
   heartbeat) would be cleaner and remove the "stuck in `aggregating`" failure mode
   that the sweeper papers over.
-- **Worker autoscaling.** Concurrency is fixed per instance and scaling is manual
-  (run more instances). No queue-depth-based autoscaling or scale-to-zero.
-- **Real queue infrastructure.** Dispatch is still Firestore polling. A real
-  queue (Pub/Sub, SQS, Cloud Tasks) would cut claim latency and remove the
-  composite-index dependency, but polling is adequate at current volume.
+- **Queue-depth tuning.** Cloud Tasks and Cloud Run autoscaling are active;
+  tune dispatch rate and max instances from production measurements.
 - **Per-workspace flag storage.** `PAGE_JOBS_ENABLED` is a single process-wide
   env flag. Targeting one workspace during rollout is operational, not a true
   per-workspace toggle in the data model.

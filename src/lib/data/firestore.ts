@@ -17,6 +17,7 @@ import {
 } from "@/lib/entitlements";
 import { projectFolderForScan } from "@/lib/remediation/project-folder";
 import {
+  isScanOwnedByWorker,
   isScanWorkerHeartbeatStale,
 } from "./scan-lifecycle";
 import {
@@ -27,8 +28,9 @@ import {
 import {
   PAGE_JOB_DEADLINE_MS,
   PAGE_JOB_MAX_ATTEMPTS,
-  isPageJobHeartbeatStale,
   PAGE_JOB_STALE_MS,
+  pageJobAttemptsExhausted,
+  pageJobParentClaimDecision,
   planPageFinalize,
   sweepPageJobs,
   type PageJobSweepAction,
@@ -144,6 +146,9 @@ export function defaultPrivacySettings(workspaceId: string): PrivacySettings {
     visualEvidenceRetentionDays: 30,
     aiProcessingEnabled: false,
     regionPreference: "eu",
+    statementContactEmail: null,
+    statementLimitations: null,
+    statementPublished: false,
     updatedAt: now(),
   };
 }
@@ -283,6 +288,10 @@ export async function getWorkspaceContext(userId: string): Promise<WorkspaceCont
   return { userId, user, workspace, member, privacy, limits };
 }
 
+export async function getUser(userId: string): Promise<User | null> {
+  return getDoc<User>(db().collection("users").doc(userId));
+}
+
 export async function setCurrentWorkspace(userId: string, workspaceId: string) {
   await db().collection("users").doc(userId).set(
     {
@@ -305,6 +314,47 @@ export async function updateWorkspace(
     .collection("workspaces")
     .doc(workspaceId)
     .set(stripUndefined({ ...patch, updatedAt: now() }), { merge: true });
+}
+
+/**
+ * Update billing-related workspace fields. Separate from updateWorkspace (which
+ * is for user-editable profile fields) because this is written by the Polar
+ * webhook, not the user — the client cannot reach it.
+ */
+export async function updateWorkspaceBilling(
+  workspaceId: string,
+  patch: Partial<
+    Pick<
+      Workspace,
+      | "plan"
+      | "polarCustomerId"
+      | "polarSubscriptionId"
+      | "subscriptionStatus"
+      | "currentPeriodEnd"
+    >
+  >
+): Promise<void> {
+  await db()
+    .collection("workspaces")
+    .doc(workspaceId)
+    .set(
+      stripUndefined({ ...patch, updatedAt: now() } as Record<string, unknown>),
+      { merge: true }
+    );
+}
+
+/** Fallback workspace lookup for webhooks that only carry a Polar customer id. */
+export async function findWorkspaceByPolarCustomerId(
+  customerId: string
+): Promise<Workspace | null> {
+  const snap = await db()
+    .collection("workspaces")
+    .where("polarCustomerId", "==", customerId)
+    .limit(1)
+    .get();
+  return snap.docs[0]
+    ? readDoc<Workspace>(snap.docs[0].id, snap.docs[0].data())
+    : null;
 }
 
 export async function getPrivacySettings(workspaceId: string): Promise<PrivacySettings> {
@@ -528,7 +578,10 @@ export async function listScans(workspaceId: string, limit = 20): Promise<ScanJo
   return snap.docs.map((d) => readDoc<ScanJob>(d.id, d.data())!);
 }
 
-export async function countInflightScans(workspaceId: string): Promise<number> {
+export async function countInflightScans(
+  workspaceId: string,
+  excludeScanId?: string
+): Promise<number> {
   const snap = await db()
     .collection("workspaces")
     .doc(workspaceId)
@@ -536,6 +589,7 @@ export async function countInflightScans(workspaceId: string): Promise<number> {
     .where("status", "in", ["queued", "running"])
     .get();
   return snap.docs
+    .filter((doc) => doc.id !== excludeScanId)
     .map((d) => readDoc<ScanJob>(d.id, d.data()))
     .filter((job): job is ScanJob => {
       if (!job) return false;
@@ -654,6 +708,71 @@ export async function claimScanJob(
       timings: { ...(job.timings ?? {}), claimedAt: startedAt },
       wasReclaimed: false,
     };
+  });
+}
+
+/**
+ * Re-check a scan claim against the live document and refresh its heartbeat in
+ * the same transaction. The write conflicts with a concurrent sweeper/claim,
+ * so a stale worker cannot pass this gate using an old in-memory ScanJob.
+ */
+export async function renewOwnedScanClaim(
+  workspaceId: string,
+  scanId: string,
+  workerId: string
+): Promise<ScanJob | null> {
+  const ref = scanRef(workspaceId, scanId);
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const job = readDoc<ScanJob>(snap.id, snap.data());
+    if (!isScanOwnedByWorker(job, workerId)) return null;
+
+    const at = now();
+    tx.set(
+      ref,
+      {
+        processorHeartbeatAt: at,
+        lastProgressAt: at,
+        updatedAt: at,
+      },
+      { merge: true }
+    );
+    return {
+      ...job,
+      processorHeartbeatAt: at,
+      lastProgressAt: at,
+      updatedAt: at,
+    };
+  });
+}
+
+/**
+ * Terminalize a scan only while the caller still owns its live running claim.
+ * All terminal fields are committed together so a sweeper cancellation/failure
+ * or a newer worker claim turns a stale completion into a no-op.
+ */
+export async function finalizeOwnedScanJob(
+  workspaceId: string,
+  scanId: string,
+  workerId: string,
+  patch: Partial<ScanJob> & { status: "completed" | "failed" }
+): Promise<boolean> {
+  const ref = scanRef(workspaceId, scanId);
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const job = readDoc<ScanJob>(snap.id, snap.data());
+    if (!isScanOwnedByWorker(job, workerId)) return false;
+
+    tx.set(
+      ref,
+      stripUndefined({
+        ...patch,
+        claimedBy: null,
+        updatedAt: patch.updatedAt ?? now(),
+      } as Record<string, unknown>),
+      { merge: true }
+    );
+    return true;
   });
 }
 
@@ -943,6 +1062,10 @@ export interface ClaimablePageJobRef {
   pageJobId: string;
 }
 
+export type PageJobClaimResult =
+  | { disposition: "claimed"; job: PageJob }
+  | { disposition: "discarded" | "unavailable"; job: null };
+
 /**
  * Cross-scan poll for queued pageJobs to process (FIFO). Stale running jobs
  * must first pass through the sweeper so retry accounting and audit events are
@@ -977,26 +1100,57 @@ export async function claimPageJob(
   scanId: string,
   pageJobId: string,
   workerId: string
-): Promise<PageJob | null> {
+): Promise<PageJobClaimResult> {
   const ref = pageJobRef(workspaceId, scanId, pageJobId);
   const sRef = scanRef(workspaceId, scanId);
   return db().runTransaction(async (tx) => {
     const [snap, sSnap] = await Promise.all([tx.get(ref), tx.get(sRef)]);
     const job = readDoc<PageJob>(snap.id, snap.data());
     const scan = readDoc<ScanJob>(sSnap.id, sSnap.data());
-    if (!job || !scan) return null;
-    if (
-      job.status !== "queued" ||
-      scan.status !== "running" ||
-      !scan.usePageJobs ||
-      scan.phase !== "scanning"
-    ) {
-      return null;
+    if (!job || job.status !== "queued") {
+      return { disposition: "unavailable", job: null };
+    }
+
+    const parentDecision = pageJobParentClaimDecision(scan);
+    if (parentDecision === "discard") {
+      const at = now();
+      tx.set(
+        ref,
+        {
+          status: "failed",
+          claimedBy: null,
+          heartbeatAt: at,
+          finishedAt: at,
+          error: scan
+            ? `Parent scan is already ${scan.status}.`
+            : "Parent scan no longer exists.",
+          errorCode: scan ? "parent_scan_terminal" : "parent_scan_missing",
+        },
+        { merge: true }
+      );
+      return { disposition: "discarded", job: null };
+    }
+    if (parentDecision === "wait") {
+      return { disposition: "unavailable", job: null };
     }
 
     const at = now();
+    if (pageJobAttemptsExhausted(job.attempts, job.maxAttempts)) {
+      tx.set(
+        ref,
+        {
+          status: "failed",
+          claimedBy: null,
+          heartbeatAt: at,
+          finishedAt: at,
+          error: "Page job retry attempts are exhausted.",
+          errorCode: "attempts_exhausted",
+        },
+        { merge: true }
+      );
+      return { disposition: "discarded", job: null };
+    }
     const attempts = (job.attempts ?? 0) + 1;
-    if (attempts > (job.maxAttempts ?? PAGE_JOB_MAX_ATTEMPTS)) return null;
     tx.set(
       ref,
       stripUndefined({
@@ -1021,12 +1175,15 @@ export async function claimPageJob(
       { merge: true }
     );
     return {
-      ...job,
-      status: "running",
-      attempts,
-      claimedBy: workerId,
-      startedAt: job.startedAt ?? at,
-      heartbeatAt: at,
+      disposition: "claimed",
+      job: {
+        ...job,
+        status: "running",
+        attempts,
+        claimedBy: workerId,
+        startedAt: job.startedAt ?? at,
+        heartbeatAt: at,
+      },
     };
   });
 }
@@ -1063,7 +1220,15 @@ function pageFinalizePatch(
   scan: ScanJob | null,
   kind: "done" | "failed",
   workerId: string | null
-): { patch: Record<string, unknown>; won: boolean } {
+): { patch: Record<string, unknown> | null; won: boolean } {
+  if (
+    !scan ||
+    scan.status !== "running" ||
+    !scan.usePageJobs ||
+    scan.phase !== "scanning"
+  ) {
+    return { patch: null, won: false };
+  }
   const ts = now();
   const patch: Record<string, unknown> = {
     updatedAt: ts,
@@ -1071,7 +1236,6 @@ function pageFinalizePatch(
     pagesDone: FieldValue.increment(kind === "done" ? 1 : 0),
     pagesFailed: FieldValue.increment(kind === "failed" ? 1 : 0),
   };
-  if (!scan) return { patch, won: false };
   const plan = planPageFinalize(
     {
       pagesTotal: scan.pagesTotal ?? 0,
@@ -1110,7 +1274,7 @@ export async function completePageJob(
     const sSnap = await tx.get(sRef);
     const scan = readDoc<ScanJob>(sSnap.id, sSnap.data());
     const fin = pageFinalizePatch(scan, "done", workerId);
-    tx.set(sRef, fin.patch, { merge: true });
+    if (fin.patch) tx.set(sRef, fin.patch, { merge: true });
     tx.set(
       ref,
       {
@@ -1171,7 +1335,7 @@ export async function failPageJob(
     const sSnap = await tx.get(sRef);
     const scan = readDoc<ScanJob>(sSnap.id, sSnap.data());
     const fin = pageFinalizePatch(scan, "failed", workerId);
-    tx.set(sRef, fin.patch, { merge: true });
+    if (fin.patch) tx.set(sRef, fin.patch, { merge: true });
     tx.set(
       ref,
       {
@@ -1258,7 +1422,7 @@ export async function applyPageJobSweepAction(
       const sSnap = await tx.get(sRef);
       const scan = readDoc<ScanJob>(sSnap.id, sSnap.data());
       const fin = pageFinalizePatch(scan, "failed", null);
-      tx.set(sRef, fin.patch, { merge: true });
+      if (fin.patch) tx.set(sRef, fin.patch, { merge: true });
       tx.set(
         ref,
         {
@@ -1313,7 +1477,9 @@ export async function claimAggregation(
       scan.processorHeartbeatAt?.getTime() ?? scan.lastProgressAt?.getTime() ?? 0;
     const crashedAggregator =
       scan.phase === "aggregating" && at.getTime() - heartbeatMs > PAGE_JOB_STALE_MS;
-    if (scan.phase === "scanning" || crashedAggregator) {
+    const unownedAggregator =
+      scan.phase === "aggregating" && !scan.claimedBy;
+    if (scan.phase === "scanning" || unownedAggregator || crashedAggregator) {
       tx.set(
         sRef,
         {
@@ -2115,6 +2281,40 @@ export async function listDueMonitors(
     .limit(limit)
     .get();
   return snap.docs.map((d) => readDoc<Monitor>(d.id, d.data())!);
+}
+
+/**
+ * Atomically lease one due monitor so duplicate Cloud Scheduler deliveries
+ * cannot create duplicate scans. A short lease is written into nextRunAt; the
+ * scheduler replaces it with the real cadence after creating the scan.
+ */
+export async function claimDueMonitor(
+  workspaceId: string,
+  monitorId: string,
+  at: Date = now(),
+  leaseMs = 10 * 60_000
+): Promise<Monitor | null> {
+  const ref = monitorDoc(workspaceId, monitorId);
+  return db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    const monitor = readDoc<Monitor>(snap.id, snap.data());
+    if (
+      !monitor ||
+      monitor.status !== "active" ||
+      monitor.nextRunAt.getTime() > at.getTime()
+    ) {
+      return null;
+    }
+    tx.set(
+      ref,
+      {
+        nextRunAt: new Date(at.getTime() + leaseMs),
+        updatedAt: at,
+      },
+      { merge: true }
+    );
+    return monitor;
+  });
 }
 
 export async function syncRemediationTasksForScan(

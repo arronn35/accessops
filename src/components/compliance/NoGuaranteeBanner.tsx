@@ -14,7 +14,7 @@ export function NoGuaranteeBanner({
     return (
       <div
         className={cn(
-          "flex items-start gap-2.5 rounded-md bg-canvas-2 ring-1 ring-line p-3 text-xs text-ink-700 leading-relaxed",
+          "flex items-start gap-2.5 border border-rule border-l-[6px] border-l-rose-600 bg-canvas-2 p-3 text-xs text-ink-700 leading-relaxed",
           className
         )}
       >
@@ -32,11 +32,11 @@ export function NoGuaranteeBanner({
   return (
     <div
       className={cn(
-        "rounded-lg ring-1 ring-line bg-canvas-2 p-4 flex gap-3 items-start",
+        "border border-rule border-l-[10px] border-l-rose-600 bg-canvas-2 p-4 flex gap-3 items-start",
         className
       )}
     >
-      <span className="size-9 rounded-md bg-navy-900 text-paper inline-flex items-center justify-center shrink-0">
+      <span className="size-9 bg-navy-900 text-paper inline-flex items-center justify-center shrink-0">
         <ShieldCheck className="size-4" aria-hidden />
       </span>
       <div className="flex-1 min-w-0">

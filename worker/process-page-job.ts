@@ -17,12 +17,18 @@ import { aggregateScan, persistPageResult } from "@/lib/scanner/persistence";
 import {
   completePageJob,
   failPageJob,
+  renewOwnedScanClaim,
   touchPageJob,
   updateScanJob,
 } from "@/lib/data/firestore";
 import { PAGE_JOB_DEADLINE_MS } from "@/lib/data/page-jobs";
 import { captureException } from "@/lib/observability";
 import { logScanEvent, type WorkerLogLevel } from "./log";
+import {
+  annotateStaticFallbackPage,
+  staticFallbackReason,
+  staticFallbackReasonFromPage,
+} from "./static-fallback";
 import type { NormalizedPage } from "@/lib/scanner/types";
 import type { PageJob, ScanJob } from "@/lib/data/types";
 
@@ -45,9 +51,15 @@ export interface ProcessPageJobDeps {
     scan: ScanJob,
     signal: AbortSignal
   ) => Promise<NormalizedPage>;
+  runStaticPageScan: (
+    job: PageJob,
+    scan: ScanJob,
+    signal: AbortSignal
+  ) => Promise<NormalizedPage>;
   persistPageResult: typeof persistPageResult;
   completePageJob: typeof completePageJob;
   failPageJob: typeof failPageJob;
+  renewOwnedScanClaim: typeof renewOwnedScanClaim;
   touchPageJob: typeof touchPageJob;
   updateScanJob: typeof updateScanJob;
   aggregateScan: typeof aggregateScan;
@@ -56,51 +68,49 @@ export interface ProcessPageJobDeps {
 function defaultDeps(): ProcessPageJobDeps {
   return {
     runPageScan: defaultRunPageScan,
+    runStaticPageScan: defaultRunStaticPageScan,
     persistPageResult,
     completePageJob,
     failPageJob,
+    renewOwnedScanClaim,
     touchPageJob,
     updateScanJob,
     aggregateScan,
   };
 }
 
-function isBrowserLaunchFailure(err: unknown): boolean {
-  const code = (err as { code?: string } | null)?.code;
-  if (code === "browser_launch_failed") return true;
-  const message = err instanceof Error ? err.message : String(err);
-  return /browser launch failed/i.test(message);
-}
-
 /**
- * Scan one URL. Tries the real browser engine first; if Chromium cannot launch
- * in this environment, degrades to a static HTML scan for that page (mirrors
- * the legacy path's graceful degradation) rather than failing the page.
+ * Scan one URL with the browser engine. Fallback is coordinated by
+ * processPageJob so outer page-deadline failures can degrade too.
  */
 export async function defaultRunPageScan(
   job: PageJob,
   scan: ScanJob,
   signal: AbortSignal
 ): Promise<NormalizedPage> {
-  try {
-    return await browserScanOnePage(job, scan, signal);
-  } catch (err) {
-    if (!isBrowserLaunchFailure(err)) throw err;
-    const outcome = await runStaticScanJob({
-      jobId: job.scanJobId,
-      url: job.url,
-      maxPages: 1,
-      scanType: "single",
-      includeScreenshots: false,
-      storeScreenshots: false,
-      visualEvidenceEnabled: false,
-      visualEvidenceMaxScreenshots: 0,
-      timeoutMs: job.deadlineMs ?? PAGE_JOB_DEADLINE_MS,
-    });
-    const page = outcome.pages[0];
-    if (!page) throw err;
-    return page;
-  }
+  return browserScanOnePage(job, scan, signal);
+}
+
+async function defaultRunStaticPageScan(
+  job: PageJob,
+  _scan: ScanJob,
+  signal: AbortSignal
+): Promise<NormalizedPage> {
+  if (signal.aborted) throw new PageDeadlineError(job.deadlineMs);
+  const outcome = await runStaticScanJob({
+    jobId: job.scanJobId,
+    url: job.url,
+    maxPages: 1,
+    scanType: "single",
+    includeScreenshots: false,
+    storeScreenshots: false,
+    visualEvidenceEnabled: false,
+    visualEvidenceMaxScreenshots: 0,
+    timeoutMs: job.deadlineMs ?? PAGE_JOB_DEADLINE_MS,
+  });
+  const page = outcome.pages[0];
+  if (!page) throw new Error("static_fallback_returned_no_page");
+  return page;
 }
 
 /**
@@ -185,21 +195,22 @@ export async function processPageJob(
     log("error", "page-job-owner-missing");
     return;
   }
+  const ownedWorkerId: string = workerId;
 
   const heartbeat = setInterval(() => {
     void deps
-      .touchPageJob(job.workspaceId, job.scanJobId, job.id, workerId)
+      .touchPageJob(job.workspaceId, job.scanJobId, job.id, ownedWorkerId)
       .catch(() => undefined);
   }, PAGE_HEARTBEAT_MS);
 
   async function runAggregation(): Promise<void> {
     log("info", "aggregate-start");
     const beat = () =>
-      deps.updateScanJob(job.workspaceId, job.scanJobId, {
-        processorHeartbeatAt: new Date(),
-        claimedBy: workerId,
-      });
-    await beat();
+      deps.renewOwnedScanClaim(job.workspaceId, job.scanJobId, ownedWorkerId);
+    if (!(await beat())) {
+      log("warn", "aggregate-ownership-lost");
+      return;
+    }
     const aggregationHeartbeat = setInterval(() => {
       void beat().catch(() => undefined);
     }, PAGE_HEARTBEAT_MS);
@@ -207,7 +218,12 @@ export async function processPageJob(
       const res = await deps.aggregateScan(job.scanJobId, {
         workspaceId: job.workspaceId,
         userId: scan.requestedBy,
+        workerId: ownedWorkerId,
       });
+      if (!res) {
+        log("warn", "aggregate-ownership-lost");
+        return;
+      }
       log("info", "aggregate-complete", {
         phase: res.phase,
         pagesDone: res.pagesDone,
@@ -226,34 +242,91 @@ export async function processPageJob(
     }
   }
 
+  async function recordPageFailure(err: unknown): Promise<void> {
+    const code = (err as { code?: string })?.code ?? "page_scan_failed";
+    const msg = (err as Error).message || code;
+    const { requeued, aggregationWon } = await deps.failPageJob(
+      job.workspaceId,
+      job.scanJobId,
+      job.id,
+      msg,
+      code,
+      ownedWorkerId
+    );
+    log(requeued ? "warn" : "error", requeued ? "page-job-requeue" : "page-job-fail", {
+      errorCode: code,
+      requeued,
+    });
+    if (!requeued && code !== "page_deadline_exceeded" && !msg.startsWith("URL validation")) {
+      void captureException(err, {
+        scope: "page-job",
+        scanId: job.scanJobId,
+        workspaceId: job.workspaceId,
+      });
+    }
+    if (aggregationWon) await runAggregation();
+  }
+
   try {
     log("info", "page-job-start", { attempts: job.attempts });
     let page: NormalizedPage;
     try {
       page = await runWithPageDeadline(job, scan, deps.runPageScan);
-    } catch (err) {
-      const code = (err as { code?: string })?.code ?? "page_scan_failed";
-      const msg = (err as Error).message || code;
-      const { requeued, aggregationWon } = await deps.failPageJob(
-        job.workspaceId,
-        job.scanJobId,
-        job.id,
-        msg,
-        code,
-        workerId
-      );
-      log(requeued ? "warn" : "error", requeued ? "page-job-requeue" : "page-job-fail", {
-        errorCode: code,
-        requeued,
-      });
-      if (!requeued && code !== "page_deadline_exceeded" && !msg.startsWith("URL validation")) {
-        void captureException(err, {
-          scope: "page-job",
-          scanId: job.scanJobId,
-          workspaceId: job.workspaceId,
+      const returnedReason = staticFallbackReasonFromPage(page);
+      if (returnedReason) {
+        throw Object.assign(new Error(returnedReason.message), {
+          code: returnedReason.code,
         });
       }
-      if (aggregationWon) await runAggregation();
+    } catch (err) {
+      const reason = staticFallbackReason(err);
+      if (!reason) {
+        await recordPageFailure(err);
+        return;
+      }
+
+      log("warn", "page-job-static-fallback", {
+        errorCode: reason.code,
+        error: reason.message,
+      });
+      await deps.updateScanJob(job.workspaceId, job.scanJobId, {
+        progressStep: "static_fallback",
+        processorError: reason.code,
+        errorMessage:
+          `Browser accessibility analysis could not complete (${reason.code}). ` +
+          "Completed a limited static HTML scan instead.",
+      });
+      try {
+        const fallbackPage = await runWithPageDeadline(
+          job,
+          scan,
+          deps.runStaticPageScan
+        );
+        page = annotateStaticFallbackPage(fallbackPage, reason);
+      } catch (fallbackErr) {
+        await recordPageFailure(fallbackErr);
+        return;
+      }
+    }
+
+    if (page.scanFailed) {
+      // Keep the diagnostic row/issue for reports, but do not let a page with
+      // no accessibility analysis increment pagesDone or enter scoring.
+      await deps.persistPageResult(job.scanJobId, page, {
+        workspaceId: job.workspaceId,
+        storeScreenshots: false,
+        pageJobId: job.id,
+      });
+      const failureCode = page.failureCode ?? "page_unavailable";
+      const failureMessage =
+        typeof page.rawMetadata?.fetchFailureReason === "string"
+          ? page.rawMetadata.fetchFailureReason
+          : typeof page.rawMetadata?.message === "string"
+          ? page.rawMetadata.message
+          : `Page could not be analyzed (${failureCode}).`;
+      await recordPageFailure(
+        Object.assign(new Error(failureMessage), { code: failureCode })
+      );
       return;
     }
 
@@ -266,7 +339,7 @@ export async function processPageJob(
       job.workspaceId,
       job.scanJobId,
       job.id,
-      workerId
+      ownedWorkerId
     );
     log("info", "page-job-complete", { issues: page.issues.length });
     if (aggregationWon) await runAggregation();

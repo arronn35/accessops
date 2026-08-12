@@ -4,11 +4,11 @@ import Link from "next/link";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Input, Label, Select, FieldHint } from "@/components/ui/Input";
-import { Switch } from "@/components/ui/Switch";
 import { A11ySettingsPanel } from "@/components/accessibility/A11ySettingsPanel";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { Bell, Palette, User } from "lucide-react";
 import { updateWorkspaceAction } from "@/lib/server/workspace-actions";
+import { NotificationAvailability } from "./notification-availability";
 
 export interface SettingsWorkspace {
   name: string;
@@ -152,34 +152,7 @@ export function SettingsClient({
         </TabsContent>
 
         <TabsContent value="notifications">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notifications</CardTitle>
-              <CardDescription>Choose when Percevia AI emails you.</CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4 divide-y divide-line">
-              <div className="pt-4 first:pt-0">
-                <Switch
-                  defaultChecked
-                  label="Scan complete"
-                  description="Email me when a scan I started finishes."
-                />
-              </div>
-              <div className="pt-4">
-                <Switch
-                  defaultChecked
-                  label="New critical findings"
-                  description="Alert me if a scan introduces new critical issues."
-                />
-              </div>
-              <div className="pt-4">
-                <Switch
-                  label="Weekly summary"
-                  description="A Monday-morning roundup of workspace activity."
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <NotificationAvailability />
         </TabsContent>
 
         <TabsContent value="accessibility">

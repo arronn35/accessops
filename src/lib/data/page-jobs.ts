@@ -6,8 +6,7 @@
  * The decision logic here is pure (no Firestore) so it is unit-testable; the
  * worker applies the returned actions via state-re-checking transactions.
  */
-import type { PageJob } from "./types";
-import type { ScanPhase } from "./types";
+import type { PageJob, ScanJob, ScanPhase } from "./types";
 
 /** Retries per page (the initial attempt + one requeue). */
 export const PAGE_JOB_MAX_ATTEMPTS = Math.max(
@@ -44,6 +43,36 @@ export const SCAN_OVERALL_CAP_MS = Math.max(
 export function pageJobsEnabled(): boolean {
   const value = process.env.PAGE_JOBS_ENABLED?.trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
+}
+
+export type PageJobParentClaimDecision = "claim" | "wait" | "discard";
+
+/**
+ * Decide whether a queued pageJob may be claimed from the current parent scan.
+ * A queued/running parent can still be transitioning into `scanning`, so only a
+ * missing or terminal parent makes the child permanently orphaned.
+ */
+export function pageJobParentClaimDecision(
+  scan: Pick<ScanJob, "status" | "usePageJobs" | "phase"> | null
+): PageJobParentClaimDecision {
+  if (!scan || !["queued", "running"].includes(scan.status)) return "discard";
+  if (
+    scan.status === "running" &&
+    scan.usePageJobs &&
+    scan.phase === "scanning"
+  ) {
+    return "claim";
+  }
+  return "wait";
+}
+
+export function pageJobAttemptsExhausted(
+  attempts: number | null | undefined,
+  maxAttempts: number | null | undefined
+): boolean {
+  const completedAttempts = Math.max(0, attempts ?? 0);
+  const limit = Math.max(1, maxAttempts ?? PAGE_JOB_MAX_ATTEMPTS);
+  return completedAttempts >= limit;
 }
 
 export interface PageFinalizeState {

@@ -115,7 +115,7 @@ export default function PrivacyPolicyPage() {
       <h2>Subprocessors</h2>
       <p>
         The Service relies on a short list of subprocessors (Vercel, Firebase,
-        Railway, and OpenAI). See{" "}
+        Google Cloud Run, and OpenAI). See{" "}
         <a href="/legal/subprocessors">/legal/subprocessors</a> for the current
         list and what each one processes.
       </p>

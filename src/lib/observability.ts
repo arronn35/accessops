@@ -7,7 +7,7 @@
  *
  * Behaviour:
  *   - Structured JSON logging ALWAYS happens (works with Vercel /
- *     Railway log drains out of the box).
+ *     Cloud Run log streams out of the box).
  *   - If SENTRY_DSN is set, errors are also POSTed to Sentry's
  *     envelope ingest endpoint via fetch — no SDK, ~1 request.
  *   - If POSTHOG_KEY is set, events are POSTed to PostHog's capture
@@ -56,7 +56,7 @@ async function sendToSentry(err: Error, context: ErrorContext): Promise<void> {
     platform: "node",
     level: "error",
     environment: process.env.NODE_ENV ?? "development",
-    server_name: context.scope ?? "accessops",
+    server_name: context.scope ?? "percevia-ai",
     exception: {
       values: [
         {
@@ -82,7 +82,7 @@ async function sendToSentry(err: Error, context: ErrorContext): Promise<void> {
       method: "POST",
       headers: {
         "content-type": "application/x-sentry-envelope",
-        "x-sentry-auth": `Sentry sentry_version=7, sentry_key=${parsed.publicKey}, sentry_client=accessops/1.0`,
+        "x-sentry-auth": `Sentry sentry_version=7, sentry_key=${parsed.publicKey}, sentry_client=percevia-ai/1.0`,
       },
       body: envelope,
       // Don't let a slow Sentry hold up the request path.
@@ -134,7 +134,7 @@ export async function trackEvent(
         api_key: key,
         event,
         distinct_id: distinctId,
-        properties: { ...properties, $lib: "accessops-server" },
+        properties: { ...properties, $lib: "percevia-server" },
         timestamp: nowIso(),
       }),
       signal: AbortSignal.timeout(2500),

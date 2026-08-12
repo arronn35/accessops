@@ -57,6 +57,13 @@ export interface Workspace {
   framework: string | null;
   targetStandard: string;
   plan: PlanTier;
+  /** Polar (billing) linkage. Absent until the workspace first checks out. */
+  polarCustomerId?: string | null;
+  polarSubscriptionId?: string | null;
+  /** Last subscription status seen from a Polar webhook (active, canceled, …). */
+  subscriptionStatus?: string | null;
+  /** End of the current paid period; the plan is honored until then. */
+  currentPeriodEnd?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -95,6 +102,9 @@ export interface PrivacySettings {
   visualEvidenceRetentionDays: number;
   aiProcessingEnabled: boolean;
   regionPreference: string;
+  statementContactEmail?: string | null;
+  statementLimitations?: string | null;
+  statementPublished?: boolean;
   updatedAt: Date;
 }
 
@@ -262,6 +272,10 @@ export interface ScanSummary {
   wcagIssueCount: number;
   bestPracticeIssueCount: number;
   manualReviewCount: number;
+  /** Absent on summaries created before failed-page-aware scoring. */
+  pagesFailedToScan?: number;
+  /** Failed URLs are reported separately and are not present in pageScoresJson. */
+  failedPageUrls?: string[];
   scoringVersion: string;
   createdAt: Date;
 }

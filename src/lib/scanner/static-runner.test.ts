@@ -109,7 +109,7 @@ describe("analyzeHtml", () => {
     });
   });
 
-  it("completes with a manual-review page when page retrieval fails", async () => {
+  it("keeps a diagnostic issue but marks an unretrievable page unscorable", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () => {
@@ -128,13 +128,86 @@ describe("analyzeHtml", () => {
     });
 
     expect(out.pagesScanned).toBe(1);
+    expect(out.pages[0]).toMatchObject({
+      scanFailed: true,
+      failureCode: "page_unavailable",
+    });
     expect(out.pages[0].rawMetadata).toMatchObject({
       fetchFailureReason: "network_unreachable",
+      scanFailed: true,
+      failureCode: "page_unavailable",
     });
     expect(out.pages[0].issues[0]).toMatchObject({
       ruleId: "page-unavailable",
       severity: "review",
       humanReviewRequired: true,
     });
+  });
+
+  it("records an HTTP access denial instead of analyzing the block page", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: false,
+        status: 403,
+        url: "http://93.184.216.34/",
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () =>
+          "<html><head><title>Access denied</title></head><body><img src='/challenge.png'></body></html>",
+      }))
+    );
+
+    const out = await runStaticScanJob({
+      jobId: "test",
+      url: "http://93.184.216.34/",
+      maxPages: 1,
+      scanType: "single",
+      includeScreenshots: false,
+      storeScreenshots: false,
+      timeoutMs: 1000,
+    });
+
+    expect(out.pages[0].rawMetadata).toMatchObject({
+      fetchFailureReason: "http_403",
+    });
+    expect(out.pages[0]).toMatchObject({
+      scanFailed: true,
+      failureCode: "page_unavailable",
+    });
+    expect(out.pages[0].issues).toHaveLength(1);
+    expect(out.pages[0].issues[0].ruleId).toBe("page-unavailable");
+  });
+
+  it("does not bypass or analyze a human-verification challenge", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        url: "http://93.184.216.34/",
+        headers: new Headers({ "content-type": "text/html" }),
+        text: async () =>
+          "<html><head><title>Just a moment...</title></head><body><div class='cf-chl-widget'>Verify you are human</div><p>Cloudflare</p></body></html>",
+      }))
+    );
+
+    const out = await runStaticScanJob({
+      jobId: "test",
+      url: "http://93.184.216.34/",
+      maxPages: 1,
+      scanType: "single",
+      includeScreenshots: false,
+      storeScreenshots: false,
+      timeoutMs: 1000,
+    });
+
+    expect(out.pages[0].rawMetadata).toMatchObject({
+      fetchFailureReason: "bot_challenge_detected",
+    });
+    expect(out.pages[0]).toMatchObject({
+      scanFailed: true,
+      failureCode: "page_unavailable",
+    });
+    expect(out.pages[0].issues[0].ruleId).toBe("page-unavailable");
   });
 });

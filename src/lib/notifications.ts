@@ -35,6 +35,7 @@ const TITLES: Record<string, string> = {
   "privacy.retention_purge": "Retention cleanup ran",
   "visual_evidence.deleted": "Visual evidence deleted",
   "plan.selected": "Plan changed",
+  "monitor.scan_scheduled": "Scheduled scan started",
 };
 
 function humanize(action: string): string {

@@ -1,10 +1,16 @@
 import Link from "next/link";
 import { ArrowLeft, Printer } from "lucide-react";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
-import { getScanJob, listIssues, listScans, listScanPages } from "@/lib/data/firestore";
+import {
+  getScanJob,
+  getScanSummary,
+  listIssues,
+  listScans,
+  listScanPages,
+} from "@/lib/data/firestore";
 import { renderHtml } from "@/lib/reports/render";
 
-export const metadata = { title: "Report preview — AccessOps AI" };
+export const metadata = { title: "Report preview — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function ReportPreviewPage({
@@ -18,10 +24,24 @@ export default async function ReportPreviewPage({
     ? await getScanJob(ctx.workspace.id, scanId)
     : (await listScans(ctx.workspace.id, 20)).find((item) => item.status === "completed") ?? null;
   if (!scan) return <EmptyState />;
-  const [issues, pages] = await Promise.all([
+  const [issues, pages, summary] = await Promise.all([
     listIssues(ctx.workspace.id, scan.id),
     listScanPages(ctx.workspace.id, scan.id),
+    getScanSummary(ctx.workspace.id, scan.id),
   ]);
+  const failedStoredPages = pages.filter((page) => {
+    const metadata = page.rawMetadataJson;
+    return (
+      metadata !== null &&
+      typeof metadata === "object" &&
+      (metadata as Record<string, unknown>).scanFailed === true
+    );
+  });
+  const failedPageUrls =
+    summary?.failedPageUrls ??
+    Array.from(new Set(failedStoredPages.map((page) => page.url)));
+  const pagesFailedToScan =
+    summary?.pagesFailedToScan ?? failedStoredPages.length;
   const pageById = new Map(pages.map((p) => [p.id, p]));
   const counts = { critical: 0, moderate: 0, minor: 0, passed: 0, review: 0 };
   for (const issue of issues) counts[issue.severity]++;
@@ -30,7 +50,11 @@ export default async function ReportPreviewPage({
     workspaceName: ctx.workspace.name,
     scanId: scan.id,
     baseUrl: scan.baseUrl,
-    pagesScanned: scan.pagesScanned,
+    pagesScanned:
+      summary?.pageScoresJson.length ??
+      Math.max(0, pages.length - failedStoredPages.length),
+    pagesFailedToScan,
+    failedPageUrls,
     scanDate: scan.completedAt ?? scan.createdAt,
     counts,
     agencyBranding: false,

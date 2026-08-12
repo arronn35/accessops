@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { calculateScanScore } from "./scoring";
-import type { Impact, NormalizedIssue, NormalizedPage } from "./types";
+import type {
+  Impact,
+  NormalizedIssue,
+  NormalizedPage,
+  ScanScoreSummary,
+} from "./types";
 
 function issue(overrides: Partial<NormalizedIssue> = {}): NormalizedIssue {
   const impact = overrides.impact ?? "moderate";
@@ -29,15 +34,31 @@ function page(issues: NormalizedIssue[] = [], url = "https://example.com/"): Nor
   };
 }
 
+function failedPage(url: string): NormalizedPage {
+  return {
+    ...page([], url),
+    title: null,
+    statusCode: null,
+    scanFailed: true,
+    failureCode: "page_unavailable",
+  };
+}
+
+function scored(pages: NormalizedPage[]): ScanScoreSummary {
+  const summary = calculateScanScore(pages);
+  if (!summary) throw new Error("expected_scorable_summary");
+  return summary;
+}
+
 describe("calculateScanScore", () => {
-  it("returns a perfect score for empty and all-passed scan results", () => {
-    expect(calculateScanScore([]).overallScore).toBe(100);
-    expect(calculateScanScore([page([])]).overallScore).toBe(100);
-    expect(calculateScanScore([page([])]).grade).toBe("A");
+  it("returns no score for an empty scan and a perfect score for an analyzed pass", () => {
+    expect(calculateScanScore([])).toBeNull();
+    expect(scored([page([])]).overallScore).toBe(100);
+    expect(scored([page([])]).grade).toBe("A");
   });
 
   it("separates WCAG and best-practice issues", () => {
-    const summary = calculateScanScore([
+    const summary = scored([
       page([
         issue({ ruleId: "color-contrast", wcagTags: ["wcag2aa", "wcag143"] }),
         issue({
@@ -58,7 +79,7 @@ describe("calculateScanScore", () => {
 
   it("uses critical, serious, moderate, minor, and review weights", () => {
     const impacts: Impact[] = ["critical", "serious", "moderate", "minor"];
-    const summary = calculateScanScore([
+    const summary = scored([
       page([
         ...impacts.map((impactValue) =>
           issue({
@@ -101,13 +122,13 @@ describe("calculateScanScore", () => {
       })
     );
 
-    const summary = calculateScanScore([page(repeated)]);
+    const summary = scored([page(repeated)]);
     expect(summary.wcagIssueCount).toBe(1);
     expect(summary.overallScore).toBe(70);
   });
 
   it("preserves merged mobile and desktop contexts", () => {
-    const summary = calculateScanScore([
+    const summary = scored([
       page([
         issue({
           contexts: [
@@ -123,7 +144,7 @@ describe("calculateScanScore", () => {
   });
 
   it("counts incomplete/review results as manual review", () => {
-    const summary = calculateScanScore([
+    const summary = scored([
       page([
         issue({
           ruleId: "frame-tested",
@@ -137,5 +158,48 @@ describe("calculateScanScore", () => {
     expect(summary.manualReviewCount).toBe(1);
     expect(summary.issueCounts.review).toBe(1);
     expect(summary.overallScore).toBe(98);
+  });
+
+  it("excludes failed pages from the denominator and page score rows", () => {
+    const penaltyForty = Array.from({ length: 4 }, (_, index) =>
+      issue({
+        ruleId: `critical-${index}`,
+        impact: "critical",
+        severity: "critical",
+        target: [`.critical-${index}`],
+        htmlSnippet: `<div class="critical-${index}"></div>`,
+      })
+    );
+    const failedUrls = Array.from(
+      { length: 4 },
+      (_, index) => `https://example.com/failed-${index + 1}`
+    );
+
+    const summary = scored([
+      page(penaltyForty, "https://example.com/success"),
+      ...failedUrls.map(failedPage),
+    ]);
+
+    expect(summary.overallScore).toBe(60);
+    expect(summary.pagesFailedToScan).toBe(4);
+    expect(summary.failedPageUrls).toEqual(failedUrls);
+    expect(summary.pageScores).toEqual([
+      expect.objectContaining({
+        url: "https://example.com/success",
+        score: 60,
+      }),
+    ]);
+    expect(summary.pageScores.some((row) => failedUrls.includes(row.url))).toBe(
+      false
+    );
+  });
+
+  it("does not publish a 100 score when every page failed to scan", () => {
+    expect(
+      calculateScanScore([
+        failedPage("https://example.com/a"),
+        failedPage("https://example.com/b"),
+      ])
+    ).toBeNull();
   });
 });

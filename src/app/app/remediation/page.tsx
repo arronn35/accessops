@@ -11,7 +11,7 @@ import { fallbackProjectFolder } from "@/lib/remediation/project-folder";
 import { formatRelative } from "@/lib/utils";
 import type { IssueSeverity, RemediationTask } from "@/lib/data/types";
 
-export const metadata = { title: "Remediation board — AccessOps AI" };
+export const metadata = { title: "Remediation board — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 const STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "success" | "danger"> = {

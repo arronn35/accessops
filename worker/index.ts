@@ -1,5 +1,5 @@
 /**
- * AccessOps browser scan worker.
+ * Percevia AI browser scan worker.
  *
  * A long-running container that polls Firestore for queued scan jobs, claims
  * them atomically, and runs the real Playwright + axe-core engine
@@ -29,6 +29,7 @@ import {
   listSweepableScans,
   requeuePageJobOnShutdown,
   requeueScanOnShutdown,
+  renewOwnedScanClaim,
   updateScanJob,
   type ClaimablePageJobRef,
   type ClaimableScanRef,
@@ -68,7 +69,7 @@ const SHUTDOWN_DRAIN_MS = durationFromEnv(
 
 let shuttingDown = false;
 // Set when the shared Chromium can no longer be (re)launched. The worker then
-// fails /healthz and exits nonzero so the platform (Railway) restarts it.
+// fails /healthz and exits nonzero so the platform restarts the container.
 let browserUnhealthy = false;
 const inflight = new Set<Promise<void>>();
 const activeScans = new Map<
@@ -125,13 +126,14 @@ async function claimAndRun(ref: ClaimableScanRef): Promise<void> {
 }
 
 async function claimAndRunPage(ref: ClaimablePageJobRef): Promise<void> {
-  const job = await claimPageJob(
+  const claim = await claimPageJob(
     ref.workspaceId,
     ref.scanId,
     ref.pageJobId,
     WORKER_ID
   );
-  if (!job) return;
+  if (claim.disposition !== "claimed") return;
+  const job = claim.job;
   const scan = await getScanJob(ref.workspaceId, ref.scanId);
   if (!scan) {
     await requeuePageJobOnShutdown(
@@ -158,16 +160,14 @@ async function runAggregationForScan(
 ): Promise<void> {
   if (!scan) return;
   const beat = () =>
-    updateScanJob(scan.workspaceId, scan.id, {
-      claimedBy: WORKER_ID,
-      processorHeartbeatAt: new Date(),
-    });
-  await beat();
+    renewOwnedScanClaim(scan.workspaceId, scan.id, WORKER_ID);
+  if (!(await beat())) return;
   const heartbeat = setInterval(() => void beat().catch(() => undefined), HEARTBEAT_MS);
   try {
     await aggregateScan(scan.id, {
       workspaceId: scan.workspaceId,
       userId: scan.requestedBy,
+      workerId: WORKER_ID,
     });
   } finally {
     clearInterval(heartbeat);
@@ -427,7 +427,7 @@ function startHealthServer(): void {
     res.end(
       JSON.stringify({
         ok,
-        service: "accessops-scan-worker",
+        service: "percevia-scan-worker",
         workerId: WORKER_ID,
         inflight: inflight.size,
         shuttingDown,

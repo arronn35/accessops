@@ -6,6 +6,7 @@ import { Loader2, Sparkles } from "lucide-react";
 import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { Checkbox } from "@/components/ui/Checkbox";
+import { CodeDiffBlock } from "@/components/ai/CodeDiffBlock";
 
 interface InitialAi {
   explanationPlain: string;
@@ -18,29 +19,33 @@ interface InitialAi {
 }
 
 export function AiExplanationPanel({
+  scanId,
   issueId,
   initial,
   aiEnabled,
+  htmlSnippet,
 }: {
+  scanId: string;
   issueId: string;
   initial: InitialAi | null;
   aiEnabled: boolean;
+  htmlSnippet: string | null;
 }) {
   const [current, setCurrent] = useState(initial);
   const [framework, setFramework] = useState<string>("react");
-  const [consent, setConsent] = useState(false);
+  const [outputAcknowledged, setOutputAcknowledged] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   async function generate() {
-    if (!consent || !aiEnabled) return;
+    if (!outputAcknowledged || !aiEnabled) return;
     setLoading(true);
     setError(null);
     try {
       const res = await fetch(`/api/issues/${issueId}/ai-explanation`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ framework, consentChecked: true }),
+        body: JSON.stringify({ scanJobId: scanId, framework, consentChecked: true }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -48,6 +53,8 @@ export function AiExplanationPanel({
           setError(
             "AI processing is disabled. Enable it in Privacy & Compliance Center."
           );
+        } else if (body.error === "ai_disabled_for_scan") {
+          setError("AI explanations were turned off when this scan was started.");
         } else if (body.error === "ai_unavailable") {
           setError(
             "AI integration is not configured for this deployment. Contact your workspace administrator."
@@ -78,6 +85,7 @@ export function AiExplanationPanel({
     return (
       <AiFixCard
         ai={current}
+        htmlSnippet={htmlSnippet}
         onRegenerate={aiEnabled ? () => setCurrent(null) : undefined}
       />
     );
@@ -88,13 +96,14 @@ export function AiExplanationPanel({
       <AlertCallout
         tone="info"
         icon={Sparkles}
-        title="AI processing is disabled"
+        title="AI explanations are unavailable"
       >
         Enable AI in{" "}
         <Link href="/app/compliance" className="underline font-medium">
           Privacy &amp; Compliance Center
         </Link>{" "}
-        to get plain-language explanations and remediation drafts for each finding.
+        and start a scan with AI explanations turned on to get plain-language
+        explanations and remediation drafts for each finding.
       </AlertCallout>
     );
   }
@@ -129,8 +138,8 @@ export function AiExplanationPanel({
 
       <div className="my-3">
         <Checkbox
-          checked={consent}
-          onChange={(e) => setConsent(e.target.checked)}
+          checked={outputAcknowledged}
+          onChange={(e) => setOutputAcknowledged(e.target.checked)}
           label="I understand AI output may be incorrect and will be reviewed before use."
         />
       </div>
@@ -143,7 +152,7 @@ export function AiExplanationPanel({
 
       <button
         onClick={generate}
-        disabled={!consent || loading}
+        disabled={!outputAcknowledged || loading}
         className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-purple-500 text-paper text-sm font-medium hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
       >
         {loading ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Sparkles className="size-4" aria-hidden />}
@@ -155,9 +164,11 @@ export function AiExplanationPanel({
 
 function AiFixCard({
   ai,
+  htmlSnippet,
   onRegenerate,
 }: {
   ai: InitialAi;
+  htmlSnippet: string | null;
   onRegenerate?: () => void;
 }) {
   const [mode, setMode] = useState<"plain" | "technical">("plain");
@@ -212,10 +223,19 @@ function AiFixCard({
             </FixSection>
           )}
           {ai.codeFixExample && (
-            <FixSection label={`Code example${ai.framework ? ` · ${ai.framework}` : ""}`}>
-              <pre className="text-xs leading-relaxed font-mono text-ink-900 bg-canvas-2 p-3 rounded-md overflow-x-auto">
-                <code>{ai.codeFixExample}</code>
-              </pre>
+            <FixSection label="Remediation patch draft">
+              <CodeDiffBlock
+                before={{
+                  label: "Failing HTML snippet",
+                  language: ai.framework === "react" ? "tsx" : "html",
+                  code: htmlSnippet || "",
+                }}
+                after={{
+                  label: `Suggested Fix${ai.framework ? ` (${ai.framework})` : ""}`,
+                  language: ai.framework === "react" ? "tsx" : "html",
+                  code: ai.codeFixExample,
+                }}
+              />
             </FixSection>
           )}
           {ai.verification && (

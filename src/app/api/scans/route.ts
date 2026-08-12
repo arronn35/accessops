@@ -15,6 +15,12 @@ import {
 } from "@/lib/data/firestore";
 import { scanCapsForPlan, normalizePlan } from "@/lib/entitlements";
 import { pageJobsEnabled } from "@/lib/data/page-jobs";
+import {
+  enqueueScanTask,
+  scanDispatchConfiguration,
+  scanDispatchMode,
+} from "@/lib/scanner/dispatch";
+import { captureException } from "@/lib/observability";
 
 const ScanCreateSchema = z.object({
   url: z.string().url().max(2048),
@@ -74,6 +80,15 @@ export async function POST(req: NextRequest) {
 
     const rl = await checkRateLimit("scanCreate", ctx.userId);
     if (!rl.ok) throw rateLimitError(rl.reset, rl.remaining, "Too many scans created recently.");
+
+    const dispatch = scanDispatchConfiguration();
+    if (!dispatch.configured) {
+      throw new ApiError(
+        503,
+        "scan_dispatch_not_configured",
+        `Scan processing is temporarily unavailable (${dispatch.missing.join(", ")}).`
+      );
+    }
 
     const workspace = await getWorkspace(ctx.workspaceId);
     if (!workspace) throw new ApiError(404, "workspace_not_found");
@@ -150,10 +165,24 @@ export async function POST(req: NextRequest) {
       usePageJobs: pageJobsEnabled(),
     });
 
-    // Dispatch is Firestore polling: the job is created with status "queued"
-    // and the dedicated browser worker claims it (see worker/index.ts). No
-    // queue publish step is needed.
+    // Dispatch: the job is always created with status "queued". In poll mode a
+    // long-running worker claims it (see worker/index.ts). In cloud-tasks mode
+    // we also wake the scale-to-zero Cloud Run worker via Cloud Tasks. The
+    // enqueue is best-effort: if it fails the job stays "queued" and the
+    // sweeper (Cloud Scheduler → /api/internal/scans/sweep) re-enqueues it, so
+    // a scan is never silently stranded.
     const mode = "queued" as const;
+    if (scanDispatchMode() === "cloud-tasks") {
+      try {
+        await enqueueScanTask({ scanJobId: job.id, reason: "scan_created" });
+      } catch (err) {
+        void captureException(err, {
+          scope: "scan.dispatch",
+          scanJobId: job.id,
+          workspaceId: ctx.workspaceId,
+        });
+      }
+    }
 
     await audit({
       userId: ctx.userId,

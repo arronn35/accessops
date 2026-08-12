@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  pageJobAttemptsExhausted,
+  pageJobParentClaimDecision,
   planPageFinalize,
   sweepPageJobs,
   terminalScanPhase,
@@ -57,6 +59,63 @@ describe("planPageFinalize", () => {
       "done"
     );
     expect(duplicate.aggregationWon).toBe(false);
+  });
+});
+
+describe("pageJobParentClaimDecision", () => {
+  it("discards jobs whose parent scan is missing or terminal", () => {
+    expect(pageJobParentClaimDecision(null)).toBe("discard");
+    for (const status of ["completed", "failed", "cancelled"] as const) {
+      expect(
+        pageJobParentClaimDecision({
+          status,
+          usePageJobs: true,
+          phase: "failed",
+        })
+      ).toBe("discard");
+    }
+  });
+
+  it("claims only from an active per-page scan in the scanning phase", () => {
+    expect(
+      pageJobParentClaimDecision({
+        status: "running",
+        usePageJobs: true,
+        phase: "scanning",
+      })
+    ).toBe("claim");
+  });
+
+  it("waits while a non-terminal parent is not ready to run page jobs", () => {
+    expect(
+      pageJobParentClaimDecision({
+        status: "queued",
+        usePageJobs: true,
+        phase: null,
+      })
+    ).toBe("wait");
+    expect(
+      pageJobParentClaimDecision({
+        status: "running",
+        usePageJobs: true,
+        phase: "crawling",
+      })
+    ).toBe("wait");
+    expect(
+      pageJobParentClaimDecision({
+        status: "running",
+        usePageJobs: false,
+        phase: "scanning",
+      })
+    ).toBe("wait");
+  });
+});
+
+describe("pageJobAttemptsExhausted", () => {
+  it("terminalizes queued jobs at or beyond their retry limit", () => {
+    expect(pageJobAttemptsExhausted(1, 2)).toBe(false);
+    expect(pageJobAttemptsExhausted(2, 2)).toBe(true);
+    expect(pageJobAttemptsExhausted(3, 2)).toBe(true);
   });
 });
 

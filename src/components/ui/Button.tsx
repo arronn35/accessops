@@ -4,24 +4,28 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { forwardRef, type ButtonHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
+/**
+ * Square, ruled, and heavy — buttons are blocks in the layout, never pills.
+ * Elevation, where it exists, is an offset of solid colour.
+ */
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-md text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 select-none",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap text-sm font-bold transition-colors disabled:pointer-events-none disabled:opacity-50 focus-visible:outline focus-visible:outline-[3px] focus-visible:outline-offset-[3px] focus-visible:outline-blue-600 select-none",
   {
     variants: {
       variant: {
         primary:
           "bg-navy-900 text-paper hover:bg-navy-800 active:bg-navy-700",
         secondary:
-          "bg-paper text-ink-900 ring-1 ring-line hover:bg-canvas-2 hover:ring-line-strong",
+          "bg-paper text-ink-900 border border-rule hover:bg-canvas-2",
         ghost: "bg-transparent text-ink-700 hover:bg-canvas-2",
         accent:
-          "bg-blue-500 text-paper hover:bg-blue-600 active:bg-blue-700",
-        ai: "bg-purple-500 text-paper hover:bg-purple-600",
+          "bg-blue-600 text-paper hover:bg-blue-700",
+        ai: "bg-purple-600 text-paper hover:bg-purple-700",
         danger:
-          "bg-rose-500 text-paper hover:bg-rose-700",
+          "bg-rose-600 text-paper hover:bg-rose-700",
         outline:
-          "border border-line bg-transparent text-ink-700 hover:bg-canvas-2",
-        link: "text-blue-600 underline-offset-4 hover:underline",
+          "border border-rule bg-transparent text-ink-900 hover:bg-canvas-2",
+        link: "text-blue-700 underline-offset-4 hover:underline",
       },
       size: {
         sm: "h-9 px-3 text-sm min-w-[36px]",

@@ -5,6 +5,8 @@ import {
   createDataDeletionJob,
   getLatestDataDeletionJob,
 } from "@/lib/data/deletion";
+import { captureException } from "@/lib/observability";
+import { enqueueScanTask, scanDispatchMode } from "@/lib/scanner/dispatch";
 import type { DataDeletionJob } from "@/lib/data/types";
 
 const DeleteSchema = z.object({
@@ -49,6 +51,20 @@ export async function POST(req: Request) {
         resourceType: "deletion_job",
         resourceId: job.id,
       });
+      if (scanDispatchMode() === "cloud-tasks") {
+        try {
+          await enqueueScanTask({
+            scanJobId: job.id,
+            reason: "deletion_created",
+          });
+        } catch (err) {
+          void captureException(err, {
+            scope: "privacy.deletion.dispatch",
+            workspaceId: ctx.workspaceId,
+            deletionJobId: job.id,
+          });
+        }
+      }
     }
     return Response.json(
       { ok: true, job: jobResponse(job) },

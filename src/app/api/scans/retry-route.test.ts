@@ -4,13 +4,23 @@ const {
   requireSessionMock,
   checkRateLimitMock,
   auditMock,
+  clearScanResultCollectionsMock,
+  countInflightScansMock,
+  deletePageJobsMock,
   getScanJobMock,
+  getWorkspaceMock,
+  reserveScanQuotaMock,
   updateScanJobMock,
 } = vi.hoisted(() => ({
   requireSessionMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
   auditMock: vi.fn(),
+  clearScanResultCollectionsMock: vi.fn(),
+  countInflightScansMock: vi.fn(),
+  deletePageJobsMock: vi.fn(),
   getScanJobMock: vi.fn(),
+  getWorkspaceMock: vi.fn(),
+  reserveScanQuotaMock: vi.fn(),
   updateScanJobMock: vi.fn(),
 }));
 
@@ -52,7 +62,12 @@ vi.mock("@/lib/api/rate-limit", () => ({
 
 vi.mock("@/lib/data/firestore", () => ({
   audit: auditMock,
+  clearScanResultCollections: clearScanResultCollectionsMock,
+  countInflightScans: countInflightScansMock,
+  deletePageJobs: deletePageJobsMock,
   getScanJob: getScanJobMock,
+  getWorkspace: getWorkspaceMock,
+  reserveScanQuota: reserveScanQuotaMock,
   updateScanJob: updateScanJobMock,
 }));
 
@@ -104,7 +119,15 @@ beforeEach(() => {
   requireSessionMock.mockReset().mockResolvedValue(ctx);
   checkRateLimitMock.mockReset().mockResolvedValue({ ok: true, remaining: 4, reset: 0 });
   auditMock.mockReset().mockResolvedValue(undefined);
+  clearScanResultCollectionsMock.mockReset().mockResolvedValue(undefined);
+  countInflightScansMock.mockReset().mockResolvedValue(0);
+  deletePageJobsMock.mockReset().mockResolvedValue(0);
   getScanJobMock.mockReset();
+  getWorkspaceMock.mockReset().mockResolvedValue({ id: "ws-1", plan: "free" });
+  reserveScanQuotaMock.mockReset().mockResolvedValue({
+    maxPages: 1,
+    usage: {},
+  });
   updateScanJobMock.mockReset().mockResolvedValue(undefined);
 });
 
@@ -123,6 +146,7 @@ describe("POST /api/scans/[id]/retry", () => {
       expect.objectContaining({
         status: "queued",
         progressStep: "queued",
+        maxPages: 1,
         queueAttempts: 0,
         lastQueuePublishedAt: null,
         processorStartedAt: null,
@@ -132,6 +156,90 @@ describe("POST /api/scans/[id]/retry", () => {
     );
     expect(auditMock).toHaveBeenCalledWith(
       expect.objectContaining({ action: "scan.retried", metadata: { mode: "queued" } })
+    );
+    expect(countInflightScansMock).toHaveBeenCalledWith("ws-1", "scan-1");
+    expect(reserveScanQuotaMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      plan: "free",
+      maxPages: 1,
+    });
+  });
+
+  it("rejects a role without create_scans permission before reading the scan", async () => {
+    requireSessionMock.mockResolvedValue({
+      ...ctx,
+      role: "report_viewer",
+    });
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+
+    expect(res.status).toBe(403);
+    expect(getScanJobMock).not.toHaveBeenCalled();
+    expect(reserveScanQuotaMock).not.toHaveBeenCalled();
+    expect(updateScanJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects retry when another scan already uses the workspace concurrency slot", async () => {
+    getScanJobMock.mockResolvedValue(scan());
+    countInflightScansMock.mockResolvedValue(1);
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(429);
+    expect(body.error).toBe("scan_concurrency_limit");
+    expect(countInflightScansMock).toHaveBeenCalledWith("ws-1", "scan-1");
+    expect(reserveScanQuotaMock).not.toHaveBeenCalled();
+    expect(updateScanJobMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects retry without mutating scan state when the daily plan quota is exhausted", async () => {
+    getScanJobMock.mockResolvedValue(scan({ usePageJobs: true }));
+    reserveScanQuotaMock.mockRejectedValue(
+      new Error("daily_workspace_capacity_reached:3")
+    );
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(429);
+    expect(body.error).toBe("daily_scan_limit");
+    expect(clearScanResultCollectionsMock).not.toHaveBeenCalled();
+    expect(deletePageJobsMock).not.toHaveBeenCalled();
+    expect(updateScanJobMock).not.toHaveBeenCalled();
+  });
+
+  it("applies the current plan page cap to a retried scan", async () => {
+    getScanJobMock.mockResolvedValue(scan({ maxPages: 100 }));
+    reserveScanQuotaMock.mockResolvedValue({
+      maxPages: 3,
+      usage: {},
+    });
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+
+    expect(res.status).toBe(200);
+    expect(reserveScanQuotaMock).toHaveBeenCalledWith({
+      workspaceId: "ws-1",
+      plan: "free",
+      maxPages: 3,
+    });
+    expect(updateScanJobMock).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      expect.objectContaining({ maxPages: 3 })
     );
   });
 

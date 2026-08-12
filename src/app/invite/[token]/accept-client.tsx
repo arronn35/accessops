@@ -34,7 +34,7 @@ export function AcceptInviteButton({ token }: { token: string }) {
         type="button"
         onClick={accept}
         disabled={busy}
-        className="inline-flex h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium items-center justify-center disabled:opacity-50"
+        className="inline-flex h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-bold items-center justify-center disabled:opacity-50"
       >
         {busy ? "Accepting…" : "Accept invitation"}
       </button>

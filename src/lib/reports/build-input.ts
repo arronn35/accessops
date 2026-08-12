@@ -1,6 +1,7 @@
 import "server-only";
 import {
   getScanJob,
+  getScanSummary,
   listIssueGroups,
   listIssues,
   listScanPages,
@@ -37,11 +38,28 @@ export async function buildReportInput(
 ): Promise<ReportInput | null> {
   const scan = await getScanJob(params.workspaceId, params.scanJobId);
   if (!scan) return null;
-  const [issues, pages, groups] = await Promise.all([
+  const [issues, pages, groups, summary] = await Promise.all([
     listIssues(params.workspaceId, scan.id),
     listScanPages(params.workspaceId, scan.id),
     listIssueGroups(params.workspaceId, scan.id),
+    getScanSummary(params.workspaceId, scan.id),
   ]);
+  const failedStoredPages = pages.filter((page) => {
+    const metadata = page.rawMetadataJson;
+    return (
+      metadata !== null &&
+      typeof metadata === "object" &&
+      (metadata as Record<string, unknown>).scanFailed === true
+    );
+  });
+  const failedPageUrls =
+    summary?.failedPageUrls ??
+    Array.from(new Set(failedStoredPages.map((page) => page.url)));
+  const pagesFailedToScan =
+    summary?.pagesFailedToScan ?? failedStoredPages.length;
+  const successfullyScoredPages =
+    summary?.pageScoresJson.length ??
+    Math.max(0, pages.length - failedStoredPages.length);
   const pageById = new Map(pages.map((p) => [p.id, p]));
   const counts = { critical: 0, moderate: 0, minor: 0, passed: 0, review: 0 };
   for (const issue of issues) counts[issue.severity]++;
@@ -63,7 +81,9 @@ export async function buildReportInput(
     workspaceName: params.workspaceName,
     scanId: scan.id,
     baseUrl: scan.baseUrl,
-    pagesScanned: scan.pagesScanned,
+    pagesScanned: successfullyScoredPages,
+    pagesFailedToScan,
+    failedPageUrls,
     scanDate: scan.completedAt ?? scan.createdAt,
     agencyBranding: params.agencyBranding,
     sections: params.sections ?? null,

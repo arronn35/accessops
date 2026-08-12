@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { isAdminEmail, memberLimitForPlan, scanCapsForPlan } from "@/lib/entitlements";
+import { polarConfigured } from "@/lib/billing/polar";
 import { PlanPicker } from "./plan-picker";
 
 export const metadata = { title: "Plan — Percevia AI" };
@@ -20,6 +21,8 @@ export default async function BillingPage() {
   const isTesterAdmin = isAdminEmail(user.email);
   const caps = scanCapsForPlan(workspace.plan);
   const memberLimit = memberLimitForPlan(workspace.plan);
+  const billingEnabled = polarConfigured();
+  const hasSubscription = Boolean(workspace.polarCustomerId);
 
   return (
     <div className="max-w-3xl mx-auto px-4 lg:px-8 py-10">
@@ -49,6 +52,14 @@ export default async function BillingPage() {
           <li>Up to {memberLimit} team members</li>
           <li>{caps.dailyScanCap} scans / day · {caps.maxPagesCap} pages / scan</li>
         </ul>
+        {workspace.subscriptionStatus && (
+          <p className="text-xs text-ink-600 mt-3">
+            Subscription status:{" "}
+            <span className="font-medium text-ink-800">
+              {workspace.subscriptionStatus}
+            </span>
+          </p>
+        )}
         {isTesterAdmin && workspace.plan === "enterprise" && (
           <p className="text-xs text-blue-700 mt-3">
             Tester admin entitlement is active. This workspace keeps Enterprise
@@ -58,12 +69,18 @@ export default async function BillingPage() {
       </div>
 
       <div className="mt-6">
-        <PlanPicker plan={workspace.plan} canManage={canManage} />
+        <PlanPicker
+          plan={workspace.plan}
+          canManage={canManage}
+          billingEnabled={billingEnabled}
+          hasSubscription={hasSubscription}
+        />
       </div>
 
       <p className="text-xs text-ink-500 leading-relaxed mt-6">
-        Payment processing is being rebuilt. For now, plan changes take effect
-        immediately. Billing will be reconnected later.
+        {billingEnabled
+          ? "Paid plans are processed securely by Polar. Choosing a paid plan opens checkout; manage or cancel anytime from the customer portal."
+          : "Billing is not yet connected in this environment, so plan changes apply immediately for testing."}
       </p>
     </div>
   );

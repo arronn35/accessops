@@ -25,8 +25,8 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
           <span
             aria-hidden
             className={cn(
-              "size-5 rounded-sm ring-1 ring-line-strong bg-paper transition-colors",
-              "peer-checked:bg-navy-900 peer-checked:ring-navy-900",
+              "size-5 border border-rule bg-paper transition-colors",
+              "peer-checked:bg-navy-900",
               "peer-focus-visible:ring-2 peer-focus-visible:ring-blue-500 peer-focus-visible:ring-offset-2"
             )}
           />

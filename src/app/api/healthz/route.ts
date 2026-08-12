@@ -4,6 +4,15 @@ import {
   isWorkerHeartbeatFresh,
 } from "@/lib/data/worker-health";
 import { firebaseAdminConfigured, firestore } from "@/lib/firebase/admin";
+import {
+  listClaimablePageJobRefs,
+  listClaimableScanRefs,
+} from "@/lib/data/firestore";
+import { listClaimableDataDeletionJobs } from "@/lib/data/deletion";
+import {
+  scanDispatchConfiguration,
+  type ScanDispatchConfiguration,
+} from "@/lib/scanner/dispatch";
 
 export const dynamic = "force-dynamic";
 
@@ -32,17 +41,59 @@ async function checkFirestore(): Promise<{ ok: boolean; detail?: string }> {
  * Scan-worker liveness from `workerHeartbeats`. Sanitized: exposes only
  * freshness and beat age, never worker ids, hosts, or job details.
  */
-async function checkWorker(): Promise<{ ok: boolean; lastSeenSecondsAgo: number | null }> {
-  try {
-    const lastSeenAt = await withTimeout(getLatestWorkerHeartbeat(), 3000, "worker-heartbeat");
+async function checkWorker(dispatch: ScanDispatchConfiguration): Promise<{
+  ok: boolean;
+  state: "active" | "idle_or_scaled_to_zero" | "stale" | "not_configured";
+  lastSeenSecondsAgo: number | null;
+  pending: boolean | null;
+}> {
+  if (!dispatch.configured) {
     return {
-      ok: isWorkerHeartbeatFresh(lastSeenAt),
+      ok: false,
+      state: "not_configured",
+      lastSeenSecondsAgo: null,
+      pending: null,
+    };
+  }
+  try {
+    const [lastSeenAt, pending] = await Promise.all([
+      withTimeout(getLatestWorkerHeartbeat(), 3000, "worker-heartbeat"),
+      dispatch.mode === "cloud-tasks"
+        ? withTimeout(
+            Promise.all([
+              listClaimableScanRefs(1),
+              listClaimablePageJobRefs(1),
+              listClaimableDataDeletionJobs(1),
+            ]).then((groups) => groups.some((group) => group.length > 0)),
+            3000,
+            "pending-work"
+          )
+        : Promise.resolve(false),
+    ]);
+    const fresh = isWorkerHeartbeatFresh(lastSeenAt);
+    const ok =
+      dispatch.mode === "cloud-tasks"
+        ? !pending || fresh
+        : fresh;
+    return {
+      ok,
+      state: fresh
+        ? "active"
+        : dispatch.mode === "cloud-tasks" && !pending
+          ? "idle_or_scaled_to_zero"
+          : "stale",
       lastSeenSecondsAgo: lastSeenAt
         ? Math.max(0, Math.round((Date.now() - lastSeenAt.getTime()) / 1000))
         : null,
+      pending,
     };
   } catch {
-    return { ok: false, lastSeenSecondsAgo: null };
+    return {
+      ok: false,
+      state: "stale",
+      lastSeenSecondsAgo: null,
+      pending: null,
+    };
   }
 }
 
@@ -58,10 +109,16 @@ export async function GET(req: NextRequest) {
     });
   }
 
+  const dispatch = scanDispatchConfiguration();
   const firestoreCheck = await checkFirestore();
   const workerCheck = firestoreCheck.ok
-    ? await checkWorker()
-    : { ok: false, lastSeenSecondsAgo: null };
+    ? await checkWorker(dispatch)
+    : {
+        ok: false,
+        state: "stale" as const,
+        lastSeenSecondsAgo: null,
+        pending: null,
+      };
 
   // `ok` (and the 503) reflects only the web app's own dependencies; a
   // stale worker marks the service `degraded` (scans queue but don't run)
@@ -70,10 +127,10 @@ export async function GET(req: NextRequest) {
   return Response.json(
     {
       ok,
-      degraded: ok && !workerCheck.ok,
+      degraded: ok && (!dispatch.configured || !workerCheck.ok),
       service: "percevia-web",
       mode: "readiness",
-      dispatch: "firestore-polling-worker",
+      dispatch,
       checks: { firestore: firestoreCheck, worker: workerCheck },
       ts: new Date().toISOString(),
     },
