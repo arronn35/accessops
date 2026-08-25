@@ -25,6 +25,10 @@ const {
   listScansMock,
   reserveScanQuotaMock,
   updateScanJobMock,
+  afterMock,
+  getLatestWorkerHeartbeatMock,
+  isWorkerHeartbeatFreshMock,
+  processScanInlineMock,
 } = vi.hoisted(() => ({
   requireSessionMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -36,6 +40,15 @@ const {
   listScansMock: vi.fn(),
   reserveScanQuotaMock: vi.fn(),
   updateScanJobMock: vi.fn(),
+  afterMock: vi.fn(),
+  getLatestWorkerHeartbeatMock: vi.fn(),
+  isWorkerHeartbeatFreshMock: vi.fn(),
+  processScanInlineMock: vi.fn(),
+}));
+
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: afterMock,
 }));
 
 vi.mock("@/lib/api/context", () => {
@@ -87,6 +100,15 @@ vi.mock("@/lib/data/firestore", () => ({
 
 vi.mock("@/lib/observability", () => ({ captureException: vi.fn() }));
 
+vi.mock("@/lib/data/worker-health", () => ({
+  getLatestWorkerHeartbeat: getLatestWorkerHeartbeatMock,
+  isWorkerHeartbeatFresh: isWorkerHeartbeatFreshMock,
+}));
+
+vi.mock("@/lib/scanner/inline-runner", () => ({
+  processScanInline: processScanInlineMock,
+}));
+
 import { POST } from "./route";
 
 function makeRequest(body: unknown): Request {
@@ -121,6 +143,10 @@ beforeEach(() => {
     usage: {},
   });
   updateScanJobMock.mockReset().mockResolvedValue(undefined);
+  afterMock.mockReset();
+  getLatestWorkerHeartbeatMock.mockReset().mockResolvedValue(new Date());
+  isWorkerHeartbeatFreshMock.mockReset().mockReturnValue(true);
+  processScanInlineMock.mockReset().mockResolvedValue(undefined);
   requireSessionMock.mockResolvedValue(VALID_SESSION);
   checkRateLimitMock.mockResolvedValue({ ok: true, remaining: 4, reset: 0 });
 });
@@ -215,6 +241,28 @@ describe("POST /api/scans — validation gates", () => {
         baseUrl: "https://example.org",
       })
     );
+  });
+
+  it("schedules a bounded static fallback when the poll worker is stale", async () => {
+    isWorkerHeartbeatFreshMock.mockReturnValue(false);
+
+    const res = await POST(
+      makeRequest({ url: "https://example.org", permissionConfirmed: true }) as never
+    );
+    const body = await res.json();
+
+    expect(res.status).toBe(201);
+    expect(body.mode).toBe("inline_static");
+    expect(body.warnings).toContain(
+      "The browser scanner is temporarily unavailable. This scan will run in limited static HTML mode."
+    );
+    expect(afterMock).toHaveBeenCalledOnce();
+
+    const task = afterMock.mock.calls[0][0] as () => Promise<void>;
+    await task();
+    expect(processScanInlineMock).toHaveBeenCalledWith("scan-1", {
+      allowQueueFailureFallback: true,
+    });
   });
 
   it("creates a scan when the workspace plan is an unknown/legacy value (no 500)", async () => {

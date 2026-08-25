@@ -13,6 +13,7 @@ import type {
   ScanViewport,
   VisualEvidenceMetadata,
 } from "./types";
+import { withOp, isOpTimeout } from "./page-ops";
 import { buildEvidenceClip } from "./evidence-crop";
 
 const MIN_ELEMENT_SCREENSHOT_SIZE = 24;
@@ -48,6 +49,9 @@ export function isSensitivePageUrl(url: string): boolean {
     return true;
   }
 }
+
+/** Wall-clock cap for capturing evidence for one issue. */
+const CAPTURE_TIMEOUT_MS = 12_000;
 
 export async function captureVisualEvidenceForIssues(args: {
   page: Page;
@@ -93,11 +97,24 @@ export async function captureVisualEvidenceForIssues(args: {
       continue;
     }
 
-    const captured = await captureOne({ page, issue, selectors, viewport, state }).catch(
+    // Reserve the slot *before* awaiting. Pages are scanned in parallel and
+    // share this budget; checking `remaining` and decrementing it on either
+    // side of an await would let two pages both take the last screenshot.
+    budget.remaining -= 1;
+
+    // Hard bound per issue: capture measures the DOM through the renderer's
+    // main thread, so a busy page could otherwise stall the whole scan here.
+    const captured = await withOp(
+      "evidence.captureOne",
+      CAPTURE_TIMEOUT_MS,
+      () => captureOne({ page, issue, selectors, viewport, state })
+    ).catch(
       (err): VisualEvidenceMetadata => ({
         visualEvidenceEnabled: true,
         screenshotStatus: "failed",
-        screenshotFailureReason: (err as Error).message || "capture_failed",
+        screenshotFailureReason: isOpTimeout(err)
+          ? "capture_timeout"
+          : (err as Error).message || "capture_failed",
         selector: selectors[0],
         viewport,
         state,
@@ -105,8 +122,10 @@ export async function captureVisualEvidenceForIssues(args: {
       })
     );
     if (captured.screenshotStatus === "captured" || captured.screenshotStatus === "redacted") {
-      budget.remaining -= 1;
       budget.seen.add(key);
+    } else {
+      // Nothing was stored, so hand the reservation back.
+      budget.remaining += 1;
     }
     out.push({ ...issue, visualEvidence: captured });
   }

@@ -69,7 +69,7 @@ const SHUTDOWN_DRAIN_MS = durationFromEnv(
 
 let shuttingDown = false;
 // Set when the shared Chromium can no longer be (re)launched. The worker then
-// fails /healthz and exits nonzero so the platform restarts the container.
+// fails /health and exits nonzero so the platform restarts the container.
 let browserUnhealthy = false;
 const inflight = new Set<Promise<void>>();
 const activeScans = new Map<
@@ -409,7 +409,7 @@ function startHealthServer(): void {
   }
 
   healthServer = createServer((req, res) => {
-    if (req.url !== "/healthz") {
+    if (req.url !== "/health") {
       res.writeHead(404, { "content-type": "application/json" });
       res.end(JSON.stringify({ ok: false, error: "not_found" }));
       return;
@@ -439,7 +439,7 @@ function startHealthServer(): void {
   });
 
   healthServer.listen(port, () => {
-    console.log(`[worker] health listening on :${port}/healthz`);
+    console.log(`[worker] health listening on :${port}/health`);
   });
 }
 
@@ -457,7 +457,7 @@ async function main(): Promise<void> {
   startHealthServer();
 
   // One shared Chromium for the whole process (Phase 4). If it can no longer be
-  // relaunched after a crash, fail fast: flag unhealthy so /healthz 503s and
+  // relaunched after a crash, fail fast: flag unhealthy so /health 503s and
   // start a clean shutdown that exits nonzero for the platform to restart us.
   getBrowserManager().onUnhealthy = (err) => {
     if (browserUnhealthy) return;

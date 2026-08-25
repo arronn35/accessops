@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { after, NextRequest } from "next/server";
 import {
   apiError,
   ApiError,
@@ -22,6 +22,14 @@ import {
   updateScanJob,
 } from "@/lib/data/firestore";
 import { isScanWorkerHeartbeatStale } from "@/lib/data/scan-lifecycle";
+import {
+  enqueueScanTask,
+  scanDispatchConfiguration,
+  scanDispatchMode,
+} from "@/lib/scanner/dispatch";
+import { scanNeedsInlineFallback } from "@/lib/scanner/availability";
+import { processScanInline } from "@/lib/scanner/inline-runner";
+import { captureException } from "@/lib/observability";
 
 export async function POST(
   _req: NextRequest,
@@ -41,6 +49,16 @@ export async function POST(
     }
     const rl = await checkRateLimit("scanCreate", ctx.userId);
     if (!rl.ok) throw rateLimitError(rl.reset, rl.remaining, "Too many scans started recently.");
+
+    const dispatch = scanDispatchConfiguration();
+    if (!dispatch.configured) {
+      throw new ApiError(
+        503,
+        "scan_dispatch_not_configured",
+        `Scan processing is temporarily unavailable (${dispatch.missing.join(", ")}).`
+      );
+    }
+    const useInlineFallback = await scanNeedsInlineFallback();
 
     const workspace = await getWorkspace(ctx.workspaceId);
     if (!workspace) throw new ApiError(404, "workspace_not_found");
@@ -107,7 +125,9 @@ export async function POST(
       lastProgressAt: null,
       startedAt: null,
       completedAt: null,
-      errorMessage: null,
+      errorMessage: useInlineFallback
+        ? "The browser scanner is temporarily unavailable. This scan will run in limited static HTML mode."
+        : null,
       errorCode: null,
       queueAttempts: 0,
       reclaimAttempts: 0,
@@ -121,15 +141,40 @@ export async function POST(
       createdAt: new Date(),
     });
 
+    const mode = useInlineFallback ? "inline_static" as const : "queued" as const;
+    if (useInlineFallback) {
+      after(async () => {
+        try {
+          await processScanInline(id, { allowQueueFailureFallback: true });
+        } catch (err) {
+          void captureException(err, {
+            scope: "scan.retry.inline-fallback",
+            scanJobId: id,
+            workspaceId: ctx.workspaceId,
+          });
+        }
+      });
+    } else if (scanDispatchMode() === "cloud-tasks") {
+      try {
+        await enqueueScanTask({ scanJobId: id, reason: "scan_retried" });
+      } catch (err) {
+        void captureException(err, {
+          scope: "scan.retry.dispatch",
+          scanJobId: id,
+          workspaceId: ctx.workspaceId,
+        });
+      }
+    }
+
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
       action: "scan.retried",
       resourceType: "scan_job",
       resourceId: id,
-      metadata: { mode: "queued" },
+      metadata: { mode },
     });
-    return Response.json({ ok: true, scanJobId: id, mode: "queued" });
+    return Response.json({ ok: true, scanJobId: id, mode });
   } catch (err) {
     return apiError(err);
   }

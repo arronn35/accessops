@@ -120,4 +120,20 @@ describe("checkRateLimit (Firestore-backed)", () => {
 
     expect(result.ok).toBe(true);
   });
+
+  it("can fail closed for unauthenticated compute endpoints", async () => {
+    firestoreMock.mockImplementation(() => {
+      throw new Error("firestore down");
+    });
+
+    const result = await checkRateLimit("publicCheck", "visitor-a", {
+      failureMode: "closed",
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      remaining: 0,
+      reason: "backend_unavailable",
+    });
+  });
 });

@@ -26,9 +26,9 @@ export function Logo({ variant = "wordmark", className }: LogoProps) {
     return (
       <Image
         src="/brand/percevia-logo.png"
-        alt="percevia"
-        width={620}
-        height={620}
+        alt="Percevia AI"
+        width={1356}
+        height={1356}
         priority
         className={cn("size-10 shrink-0 bg-black object-contain", className)}
       />

@@ -92,13 +92,13 @@ score is computed from the pages that completed.
 ### Shared browser lifecycle (worker process — Phase 4)
 
 Not persisted in Firestore; this is the in-process Chromium the worker shares
-across page jobs. Surfaced in worker logs (`browser.*`) and `/healthz`.
+across page jobs. Surfaced in worker logs (`browser.*`) and `/health`.
 
 ```mermaid
 stateDiagram-v2
     [*] --> launching: first acquire()
     launching --> ready: browser.launched
-    ready --> recycling: RSS over WORKER_MAX_RSS_MB or job count hits WORKER_BROWSER_RECYCLE_JOBS
+    ready --> recycling: RSS over WORKER_MAX_RSS_MB, job count hits WORKER_BROWSER_RECYCLE_JOBS, or a leaked context
     recycling --> ready: browser.recycled then relaunch
     ready --> relaunching: browser.disconnected (crash)
     relaunching --> ready: browser.relaunched (within attempts)
@@ -106,6 +106,98 @@ stateDiagram-v2
     unhealthy --> [*]: healthz 503 then exit nonzero (platform restart)
     ready --> [*]: SIGTERM (graceful close)
 ```
+
+### Analysis engine — how one page is scanned
+
+One page = one browser context **per viewport** (desktop / tablet / mobile),
+not per variant.
+
+```
+per viewport:
+  goto(domcontentloaded)                     ← the only navigation in the happy path
+  waitForSettled: load (<=5s) + networkidle (<=2s, best effort)
+  axe pass                                    ← "initial" variant
+  for each interactive state (menu, dialog, accordion, tab, form-focus):
+    for each candidate (max 2):
+      fingerprint → applyState → settle 350ms → fingerprint
+        unchanged? skip the axe pass (the control did nothing)
+        changed?   axe pass = one more variant
+      revertState → fingerprint must match the baseline
+        mismatch → reload (max 2 per viewport), else stop this viewport
+  dispose page + context (bounded; a refusal is reported as a leak)
+```
+
+Two properties this relies on:
+
+1. **Network idle is a bonus, never a requirement.** Sites with analytics,
+   polling or websockets never go idle. The old engine waited for idle on
+   every variant (up to 8s × 33 variants) and routinely spent the whole job
+   budget before finishing one page. `load` is the contract now.
+2. **Nothing that talks to the renderer is unbounded.** `page.evaluate`,
+   `content()`, `title()`, `close()` are not covered by Playwright's default
+   timeout — a page that busy-loops holds them forever. Every one of them goes
+   through `withOp()` in `src/lib/scanner/page-ops.ts`.
+
+### Parallelism — two numbers, one ceiling
+
+A crawl scans several pages at once. Two settings control it and they are not
+interchangeable:
+
+| Setting | Default | Meaning |
+| --- | --- | --- |
+| `SCAN_MAX_CONCURRENT_CONTEXTS` | 2 | **Hard memory ceiling.** Max browser contexts open at any moment in the worker process, across every scan and every page job. This is the number tied to instance RAM. |
+| `SCAN_PAGE_CONCURRENCY` | 2 | How many pages a *single* scan tries to run at once. Purely a shaping knob — every page still queues on the ceiling above. |
+
+Raising `SCAN_PAGE_CONCURRENCY` alone can never increase peak memory; it only
+lets one scan use slots that would otherwise sit idle while other jobs are
+quiet. Raising `SCAN_MAX_CONCURRENT_CONTEXTS` **does** raise peak memory and
+must be matched with RAM (see `docs/worker-deploy.md`).
+
+The slot is taken per *viewport*, not per page, so a second scan never waits
+behind a whole page — at most one viewport pass (~2–3s).
+
+Crawl invariants that hold under concurrency:
+
+- **Exact page cap.** Claiming a URL, counting it and enqueuing discovered
+  links all happen synchronously in one tick, so two workers cannot claim the
+  same URL or overshoot `maxPages`.
+- **Stable output order.** Results are returned in claim order, not completion
+  order, so a report does not reshuffle because one page was slow.
+- **Frontier patience.** A crawl starts from a single seed; a worker that finds
+  an empty queue waits while peers are still scanning rather than exiting,
+  otherwise the crawl would collapse back to one worker.
+- **Exact screenshot budget.** The visual-evidence budget is reserved before
+  the capture and returned if it fails, so parallel pages cannot both take the
+  last screenshot.
+
+Measured on a 6-page fixture (250ms server latency, three viewports per page):
+56.6s at concurrency 1 → 31.7s at 2 → 22.3s at 3, with identical findings
+(78) and identical navigation counts (18).
+
+`/health` reports `contexts: { size, inFlight, queued }`. A `queued` value that
+stays above zero means the memory ceiling — not CPU — is pacing scans.
+
+Page metadata carries the engine's own telemetry: `navigations`,
+`renavigations`, `skippedUnchangedVariants`, `opTimeouts`, `viewportsFailed`,
+`scriptErrors`, `contextLeaked`, `degraded`. Those are the first fields to read
+when a scan looks wrong.
+
+### Code that runs inside the scanned page
+
+Everything the scanner executes in the page lives in
+`src/lib/scanner/browser-scripts.ts` **as strings**, and is called through
+`inlineScript()`.
+
+This is not a style choice. The worker runs under tsx/esbuild
+(`CMD npx tsx worker/serve.ts`), and esbuild's `keepNames` rewrites named
+arrows inside a `page.evaluate` callback into `__name(…)` calls. `__name` does
+not exist in the browser, so the callback threw
+`ReferenceError: __name is not defined` — and because a page-side throw was
+read as "this page has no menu", every interactive-state pass silently did
+nothing in production while the scan still reported success. Strings are
+opaque to the bundler, so the failure mode cannot return.
+`browser-scripts.test.ts` fails the build if a bundler helper ever appears in
+one of those strings.
 
 ---
 
@@ -149,7 +241,7 @@ render in `FailedPagesNotice`).
 |---|---|---|
 | `browser.recycled` | Memory guard closed+relaunched Chromium (`reason: rss` or `jobs`). | Informational. Frequent `rss` recycles → consider more RAM or a lower `WORKER_BROWSER_RECYCLE_JOBS`. |
 | `browser.disconnected` → `browser.relaunched` | Chromium crashed and was auto-recovered; the in-flight page job requeued. | Informational if occasional. A steady stream means the box is memory-starved. |
-| `browser_relaunch_exhausted` → `browser.unhealthy` | Relaunch failed `WORKER_BROWSER_RELAUNCH_ATTEMPTS` times; worker fails `/healthz` and exits nonzero. | The platform restarts the container. If it crash-loops, the image/host is broken — check memory limits and `Dockerfile.worker`. |
+| `browser_relaunch_exhausted` → `browser.unhealthy` | Relaunch failed `WORKER_BROWSER_RELAUNCH_ATTEMPTS` times; worker fails `/health` and exits nonzero. | The platform restarts the container. If it crash-loops, the image/host is broken — check memory limits and `Dockerfile.worker`. |
 
 ---
 
@@ -205,6 +297,8 @@ container; flag/budget vars are read wherever the code runs.
 
 | Var | Default | Effect |
 |---|---|---|
+| `SCAN_MAX_CONCURRENT_CONTEXTS` | 2 | Process-wide ceiling on concurrent browser contexts. Tied to instance RAM — raise only with more memory. |
+| `SCAN_PAGE_CONCURRENCY` | 2 | Pages one scan runs at once. Bounded by the ceiling above; safe to raise on its own. |
 | `PAGE_JOBS_ENABLED` | off | When truthy (`1/true/yes/on`), new scans are stamped `usePageJobs` and run the per-page path. |
 | `PAGE_JOB_MAX_ATTEMPTS` | 2 | Attempts per page (initial + retries). |
 | `PAGE_JOB_DEADLINE_MS` | 60000 | Hard per-page wall-clock budget. |
@@ -233,7 +327,7 @@ container; flag/budget vars are read wherever the code runs.
 | `WORKER_STALE_RECLAIM_LIMIT` | 3 | Reclaims before a scan is failed `worker_heartbeat_stale`. |
 | `SWEEP_QUEUE_TIMEOUT_MS` | 1800000 | Age before a still-queued scan is failed `queue_timeout`. |
 | `WORKER_SHUTDOWN_DRAIN_MS` | 5000 | Drain window for in-flight jobs on SIGTERM before requeue. |
-| `WORKER_HEALTH_PORT` / `PORT` | — | Enables the worker `/healthz` server. |
+| `WORKER_HEALTH_PORT` / `PORT` | — | Enables the worker `/health` server. |
 | `SCAN_RENDER_PROFILE` | real | `real` loads CSS/fonts/images (accurate contrast); `minimal` blocks them. |
 
 ---
@@ -261,7 +355,7 @@ top-down; each step narrows the cause.
    defining only the `COLLECTION_GROUP` override disables that default index
    and makes `POST /api/scans` return `firestore_index_unavailable`.
 
-3. **Is the worker's browser healthy?** Worker `/healthz` → `browserHealthy`
+3. **Is the worker's browser healthy?** Worker `/health` → `browserHealthy`
    and `browser` stats. Grep worker logs for `browser.disconnected`,
    `browser.relaunch-failed`, `browser.unhealthy`. A crash-looping browser
    (relaunch exhausted → exit nonzero) means the host is memory-starved or the

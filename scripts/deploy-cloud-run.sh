@@ -39,6 +39,8 @@ INTERNAL_SECRET_NAME="${INTERNAL_SECRET_NAME:-scan-worker-internal-secret}"
 IMAGE_TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)-$(date -u +%Y%m%d%H%M%S)}"
 RUNTIME_SA="${RUNTIME_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
 TASK_INVOKER_SA="${TASK_INVOKER_SA_NAME}@${PROJECT}.iam.gserviceaccount.com"
+PROJECT_NUMBER="$(gcloud projects describe "$PROJECT" --format 'value(projectNumber)')"
+CLOUD_TASKS_SERVICE_AGENT="service-${PROJECT_NUMBER}@gcp-sa-cloudtasks.iam.gserviceaccount.com"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${ARTIFACT_REPO}/${SERVICE}:${IMAGE_TAG}"
 
 echo "==> Enabling Google Cloud APIs"
@@ -87,6 +89,14 @@ gcloud iam service-accounts add-iam-policy-binding "$TASK_INVOKER_SA" \
   --project "$PROJECT" \
   --member "serviceAccount:${TASK_CREATOR_SERVICE_ACCOUNT}" \
   --role roles/iam.serviceAccountUser >/dev/null
+gcloud iam service-accounts add-iam-policy-binding "$TASK_INVOKER_SA" \
+  --project "$PROJECT" \
+  --member "serviceAccount:${CLOUD_TASKS_SERVICE_AGENT}" \
+  --role roles/iam.serviceAccountUser >/dev/null
+gcloud iam service-accounts add-iam-policy-binding "$TASK_INVOKER_SA" \
+  --project "$PROJECT" \
+  --member "serviceAccount:${CLOUD_TASKS_SERVICE_AGENT}" \
+  --role roles/iam.serviceAccountOpenIdTokenCreator >/dev/null
 
 echo "==> Storing the worker shared secret in Secret Manager"
 gcloud secrets describe "$INTERNAL_SECRET_NAME" --project "$PROJECT" >/dev/null 2>&1 \
@@ -116,8 +126,9 @@ gcloud run deploy "$SERVICE" \
   --concurrency 1 \
   --min-instances 0 --max-instances "${MAX_INSTANCES:-5}" \
   --timeout 600 \
+  --invoker-iam-check \
   --no-allow-unauthenticated \
-  --set-env-vars "FIREBASE_PROJECT_ID=${PROJECT},SCAN_RENDER_PROFILE=real,WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2},WORKER_PROCESS_BUDGET_MS=${WORKER_PROCESS_BUDGET_MS:-240000},WORKER_HEARTBEAT_MS=${WORKER_HEARTBEAT_MS:-15000},WORKER_STALE_RUNNING_MS=${WORKER_STALE_RUNNING_MS:-45000},WORKER_MAX_RSS_MB=${WORKER_MAX_RSS_MB:-1536},WORKER_BROWSER_RECYCLE_JOBS=${WORKER_BROWSER_RECYCLE_JOBS:-50},WORKER_BROWSER_RELAUNCH_ATTEMPTS=${WORKER_BROWSER_RELAUNCH_ATTEMPTS:-3},WORKER_BROWSER_RELAUNCH_BASE_MS=${WORKER_BROWSER_RELAUNCH_BASE_MS:-500}" \
+  --set-env-vars "FIREBASE_PROJECT_ID=${PROJECT},SCAN_RENDER_PROFILE=real,WORKER_CONCURRENCY=${WORKER_CONCURRENCY:-2},WORKER_PROCESS_BUDGET_MS=${WORKER_PROCESS_BUDGET_MS:-240000},WORKER_HEARTBEAT_MS=${WORKER_HEARTBEAT_MS:-15000},WORKER_STALE_RUNNING_MS=${WORKER_STALE_RUNNING_MS:-45000},WORKER_MAX_RSS_MB=${WORKER_MAX_RSS_MB:-1536},WORKER_BROWSER_RECYCLE_JOBS=${WORKER_BROWSER_RECYCLE_JOBS:-50},WORKER_BROWSER_RELAUNCH_ATTEMPTS=${WORKER_BROWSER_RELAUNCH_ATTEMPTS:-3},WORKER_BROWSER_RELAUNCH_BASE_MS=${WORKER_BROWSER_RELAUNCH_BASE_MS:-500},SCAN_MAX_CONCURRENT_CONTEXTS=${SCAN_MAX_CONCURRENT_CONTEXTS:-2},SCAN_PAGE_CONCURRENCY=${SCAN_PAGE_CONCURRENCY:-2}" \
   --set-secrets "INTERNAL_WORKER_SECRET=${INTERNAL_SECRET_NAME}:latest"
 
 WORKER_URL="$(gcloud run services describe "$SERVICE" --project "$PROJECT" --region "$REGION" --format 'value(status.url)')"

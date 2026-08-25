@@ -35,6 +35,15 @@ export function isProduction(): boolean {
   return process.env.NODE_ENV === "production";
 }
 
+/**
+ * Anonymous compute stays opt-in in production. Local development and tests
+ * get the feature by default unless it is explicitly disabled.
+ */
+export function publicCheckEnabled(): boolean {
+  if (isProduction()) return process.env.PUBLIC_CHECK_ENABLED === "true";
+  return process.env.PUBLIC_CHECK_ENABLED !== "false";
+}
+
 export function visualEvidenceEnabled(): boolean {
   return process.env.VISUAL_EVIDENCE_ENABLED === "true";
 }

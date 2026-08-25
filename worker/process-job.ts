@@ -51,7 +51,15 @@ async function defaultRunScanJob(
 ): Promise<ScanOutcome> {
   const lease = await getBrowserManager().acquire();
   try {
-    return await runScanJobEngine(input, onProgress, { browser: lease.browser });
+    const outcome = await runScanJobEngine(input, onProgress, {
+      browser: lease.browser,
+    });
+    // A page that ignored close() leaves its renderer process behind. Replace
+    // the browser between jobs rather than letting those accumulate.
+    if (outcome.pages.some((page) => page.rawMetadata?.contextLeaked === true)) {
+      getBrowserManager().requestRecycle("leak");
+    }
+    return outcome;
   } finally {
     lease.release();
   }

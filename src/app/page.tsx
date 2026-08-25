@@ -1,10 +1,13 @@
 import Link from "next/link";
 import type { CSSProperties } from "react";
 import { MarketingShell } from "@/components/marketing/MarketingShell";
+import { ProductPreview } from "@/components/marketing/ProductPreview";
+import { PublicCheckForm } from "@/components/marketing/PublicCheckForm";
 import { SectionTag, Aside } from "@/components/marketing/SectionTag";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 import { PLANS, planFeatures } from "@/lib/marketing/plans";
 import { verifySessionCookie } from "@/lib/auth/session";
+import { publicCheckEnabled } from "@/lib/config";
 
 export const metadata = {
   title: "maitrico Percevia AI — Accessibility operations, not one-click compliance",
@@ -137,6 +140,7 @@ const FAQ = [
 
 export default async function LandingPage() {
   const signedIn = Boolean(await verifySessionCookie().catch(() => null));
+  const showPublicCheck = publicCheckEnabled();
 
   return (
     <MarketingShell signedIn={signedIn}>
@@ -167,13 +171,20 @@ export default async function LandingPage() {
               not one-click compliance — actual, shippable fixes
             </Aside>
 
-            <div className="mt-9 flex flex-wrap gap-3">
-              <Link
-                href="/onboarding"
-                className="bg-navy-900 px-7 py-4 text-sm font-bold text-paper shadow-[var(--shadow-pop)] hover:bg-navy-800"
-              >
-                Start free scan
-              </Link>
+            {showPublicCheck ? (
+              <PublicCheckForm />
+            ) : (
+              <div className="mt-9">
+                <Link
+                  href="/onboarding"
+                  className="inline-flex bg-navy-900 px-7 py-4 text-sm font-bold text-paper shadow-[var(--shadow-pop)] hover:bg-navy-800"
+                >
+                  Start free scan
+                </Link>
+              </div>
+            )}
+
+            <div className="mt-5 flex flex-wrap gap-3">
               <Link
                 href="#how"
                 className="border border-rule bg-canvas px-7 py-4 text-sm font-bold text-navy-900 hover:bg-canvas-2"
@@ -291,11 +302,32 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 04 Audience ---------- */}
+        {/* ---------- 04 Product workspace ---------- */}
+        <section id="product" className="border-b border-rule">
+          <div className="flex flex-wrap items-end justify-between gap-5 px-6 pb-9 pt-12 sm:px-10">
+            <div>
+              <SectionTag index="04" label="Product workspace" />
+              <h2 className={`mt-7 max-w-[19ch] ${H2}`}>
+                The dashboard is where findings become owned work.
+              </h2>
+            </div>
+            <div className="max-w-[48ch]">
+              <p className="text-[15px] leading-relaxed text-ink-600">
+                Scan status, impact, remediation ownership, monitoring, AI guidance,
+                privacy controls, and reporting stay connected instead of scattering
+                across exports and tickets.
+              </p>
+              <Aside className="mt-4">the working product, not a decorative mockup</Aside>
+            </div>
+          </div>
+          <ProductPreview signedIn={signedIn} />
+        </section>
+
+        {/* ---------- 05 Audience ---------- */}
         <section id="who" className="border-b border-rule">
           <div className="flex flex-wrap items-end justify-between gap-5 px-6 sm:px-10 pt-12 pb-9">
             <div>
-              <SectionTag index="04" label="Audience" />
+              <SectionTag index="05" label="Audience" />
               <h2 className={`mt-7 max-w-[18ch] ${H2}`}>
                 Built for the people who actually have to fix things.
               </h2>
@@ -325,11 +357,11 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 05 Output ---------- */}
+        {/* ---------- 06 Output ---------- */}
         <section id="report" className="border-b border-rule bg-navy-900 text-paper">
           <div className="grid lg:grid-cols-2">
             <div className="px-6 sm:px-10 py-14 lg:border-r lg:border-paper/20">
-              <SectionTag index="05" label="Output" tone="light" />
+              <SectionTag index="06" label="Output" tone="light" />
               <h2 className={`mt-7 max-w-[16ch] ${H2}`}>
                 A client-ready PDF, not a wall of red flags.
               </h2>
@@ -380,11 +412,11 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 06 Stance ---------- */}
+        {/* ---------- 07 Stance ---------- */}
         <section id="privacy" className="border-b border-rule">
           <div className="grid lg:grid-cols-2">
             <div className="border-rule px-6 sm:px-10 py-12 lg:border-r">
-              <SectionTag index="06" label="Stance" />
+              <SectionTag index="07" label="Stance" />
               <h2 className={`mt-7 max-w-[14ch] ${H2}`}>
                 We’d rather be useful than make legal promises.
               </h2>
@@ -414,11 +446,11 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 07 Pricing ---------- */}
+        {/* ---------- 08 Pricing ---------- */}
         <section id="pricing" className="border-b border-rule">
           <div className="flex flex-wrap items-end justify-between gap-5 px-6 sm:px-10 pt-12 pb-9">
             <div>
-              <SectionTag index="07" label="Pricing" />
+              <SectionTag index="08" label="Pricing" />
               <h2 className={`mt-7 max-w-[16ch] ${H2}`}>Pricing that scales with your team</h2>
             </div>
             <p className="max-w-[46ch] text-[15px] leading-relaxed text-ink-600">
@@ -495,10 +527,10 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 08 Compliance Center ---------- */}
+        {/* ---------- 09 Compliance Center ---------- */}
         <section id="compliance" className="border-b border-rule">
           <div className={HEAD_PAD}>
-            <SectionTag index="08" label="Compliance Center" />
+            <SectionTag index="09" label="Compliance Center" />
             <h2 className={`mt-7 max-w-[20ch] ${H2}`}>
               Privacy, AI use, and the limits of automated scanning
             </h2>
@@ -621,10 +653,10 @@ export default async function LandingPage() {
           </div>
         </section>
 
-        {/* ---------- 09 Questions ---------- */}
+        {/* ---------- 10 Questions ---------- */}
         <section id="faq" className="border-b border-rule">
           <div className={HEAD_PAD}>
-            <SectionTag index="09" label="Questions" />
+            <SectionTag index="10" label="Questions" />
             <h2 className={`mt-7 max-w-[20ch] ${H2}`}>
               Direct answers to the questions every buyer asks.
             </h2>

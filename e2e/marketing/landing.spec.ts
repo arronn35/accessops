@@ -18,6 +18,10 @@ test.describe("landing page", () => {
     ).toBeVisible();
     // Two distinct hero CTAs.
     await expect(page.getByRole("link", { name: /Start free scan/i }).first()).toBeVisible();
+    await expect(
+      page.getByRole("textbox", { name: /Check one public page/i })
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /Check page/i })).toBeVisible();
     await expect(page.getByRole("link", { name: /See how it works/i })).toBeVisible();
   });
 

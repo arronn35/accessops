@@ -57,14 +57,24 @@ whole-scan mode). Contexts are always closed in a `finally`; the browser is
 long-lived. This is what keeps a 2 GB instance stable — there is no full browser
 launch per job.
 
-- **Supported baseline: `WORKER_CONCURRENCY=2` (two concurrent contexts) on a
-  2 GB instance (Cloud Run `--memory 2Gi`).** Raise concurrency only with
-  proportionally more RAM.
+- **Supported baseline: two concurrent contexts on a 2 GB instance (Cloud Run
+  `--memory 2Gi`).** Since scans now run several pages in parallel, the context
+  count is capped directly by `SCAN_MAX_CONCURRENT_CONTEXTS` (default 2) rather
+  than implied by `WORKER_CONCURRENCY`. That single number is the one to match
+  against RAM; budget roughly **1 GB per concurrent context** including the
+  browser and Node itself.
+  - `WORKER_CONCURRENCY` — how many *jobs* the worker claims at once.
+  - `SCAN_PAGE_CONCURRENCY` — how many *pages* one scan runs at once.
+  - `SCAN_MAX_CONCURRENT_CONTEXTS` — the ceiling both of the above queue on.
+
+  Raising either of the first two without raising the ceiling changes
+  throughput shape, never peak memory. Watch `contexts.queued` on `/health`:
+  persistently above zero means work is waiting on the ceiling.
 - **Crash recovery:** the worker listens for Chromium's `disconnected` event. A
   crash marks the in-flight page job for retry (it requeues via the normal
   page-job retry path) and relaunches Chromium with exponential backoff (up to
   `WORKER_BROWSER_RELAUNCH_ATTEMPTS`, default 3). If every relaunch fails, the
-  worker reports unhealthy on `/healthz` (503) and exits nonzero so the platform
+  worker reports unhealthy on `/health` (503) and exits nonzero so the platform
   restarts the container.
 - **Memory guard:** after every page job the worker checks `process.memoryUsage().rss`.
   Above `WORKER_MAX_RSS_MB` (default 1536) **or** after `WORKER_BROWSER_RECYCLE_JOBS`
@@ -132,7 +142,7 @@ docker build -f Dockerfile.worker -t percevia-worker .
 docker run --rm -p 8080:8080 --env-file .env.local percevia-worker
 # trigger a drain by hand:
 curl -XPOST localhost:8080/process -H "x-internal-worker-secret: $INTERNAL_WORKER_SECRET"
-curl localhost:8080/healthz
+curl localhost:8080/health
 
 # poll mode: override the command
 docker run --rm --env-file .env.local percevia-worker npx tsx worker/index.ts
@@ -141,7 +151,7 @@ docker run --rm --env-file .env.local percevia-worker npx tsx worker/index.ts
 In serve mode you should see `[serve] listening on :8080`. Create a scan from the
 app (with `SCAN_DISPATCH_MODE=cloud-tasks` it is enqueued automatically; locally
 you can hit `/process` directly) and watch it go `queued → running → completed`.
-`GET /healthz` returns 503 once the shared Chromium is unrecoverable so Cloud Run
+`GET /health` returns 503 once the shared Chromium is unrecoverable so Cloud Run
 recycles the instance.
 
 ## Deploy — Cloud Run + Cloud Tasks + Cloud Scheduler (recommended)
@@ -170,6 +180,11 @@ VERCEL_APP_URL=https://<your-app>
 
 The script prints the exact Vercel variables to set, including the generated
 Cloud Run URL and OIDC invoker identity. Set them and redeploy the web app.
+
+The worker stays private behind Cloud Run IAM and also requires the 256-bit
+`INTERNAL_WORKER_SECRET` on `POST /process`. Use `/health` rather than
+`/healthz`: Cloud Run reserves some paths ending in `z` and can intercept them
+before they reach the container.
 
 **Cost:** at low volume the worker stays at zero and fits the Cloud Run free
 tier — effectively $0/mo. You pay only for compute while scans run.
@@ -202,5 +217,5 @@ Scheduler needed (the in-process sweeper handles recovery).
   `worker_heartbeat_stale`, and fails queued jobs older than 30 minutes with
   `queue_timeout`.
 - **Health:** the job's `processorHeartbeatAt` advances every
-  `WORKER_HEARTBEAT_MS` while a scan runs. The container `/healthz` returns 503
+  `WORKER_HEARTBEAT_MS` while a scan runs. The container `/health` returns 503
   when the shared Chromium is unrecoverable (`browserHealthy: false`).

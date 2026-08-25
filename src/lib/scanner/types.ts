@@ -192,6 +192,8 @@ export interface ScanOutcome {
   pagesDiscovered: number;
   pagesScanned: number;
   durationMs: number;
+  /** Pages the crawl actually scanned in parallel (1 = sequential). */
+  concurrency?: number;
 }
 
 export type ProgressStep =

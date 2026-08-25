@@ -29,9 +29,14 @@ export const ANALYSIS_PASSES_PER_VIEWPORT =
 export const ANALYSIS_PASSES_PER_PAGE =
   SCAN_VIEWPORT_COUNT * ANALYSIS_PASSES_PER_VIEWPORT;
 
-// Rough heuristics, calibrated against observed runs. Bounded estimates, not
-// guarantees — the UI always frames them as approximate.
-const SECONDS_PER_PASS = 2;
+// Calibrated against observed runs of the current engine, which loads a page
+// once per viewport and drives the interactive states in-place:
+//   * per viewport: navigation + readiness wait  ≈ 2.5s
+//   * per analysis pass: axe + state toggle      ≈ 0.9s
+// (The previous model charged 2s per pass because every pass re-navigated and
+// waited for network idle; that is no longer what the runner does.)
+const SECONDS_PER_VIEWPORT_LOAD = 2.5;
+const SECONDS_PER_PASS = 0.9;
 const SCREENSHOT_SECONDS_PER_PAGE = 1.5;
 
 export interface ScanScopeInput {
@@ -65,7 +70,8 @@ export function estimateScanPlan(input: ScanScopeInput): ScanPlanEstimate {
   const passesPerPage = ANALYSIS_PASSES_PER_PAGE;
   const totalPasses = pages * passesPerPage;
   const estSeconds = Math.round(
-    totalPasses * SECONDS_PER_PASS +
+    pages * SCAN_VIEWPORT_COUNT * SECONDS_PER_VIEWPORT_LOAD +
+      totalPasses * SECONDS_PER_PASS +
       (input.includeScreenshots ? pages * SCREENSHOT_SECONDS_PER_PAGE : 0)
   );
   return {

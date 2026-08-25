@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ArrowLeft, ExternalLink } from "lucide-react";
+import { StandardsCard } from "@/components/compliance/StandardsCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
@@ -124,6 +125,9 @@ export default async function IssueDetailPage({
               <p className="break-words font-mono">Tags: {issue.wcagTagsJson.join(", ") || "-"}</p>
             </CardContent>
           </Card>
+          <div className="mt-4">
+            <StandardsCard wcagTags={issue.wcagTagsJson} />
+          </div>
         </aside>
       </div>
     </div>

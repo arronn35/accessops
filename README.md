@@ -107,7 +107,7 @@ Smoke expectations:
 - `/api/healthz` returns `ok: true`.
 - `/api/healthz?deep=1` reports Firestore readiness plus a sanitized scan-worker
   heartbeat check (`checks.worker`, `degraded: true` when no worker beat recently).
-- The worker `/healthz` endpoint (enabled when `PORT` or `WORKER_HEALTH_PORT` is set)
+- The worker `/health` endpoint (enabled when `PORT` or `WORKER_HEALTH_PORT` is set)
   returns `ok: true` while healthy and 503 with `browserHealthy: false` once the
   shared Chromium can no longer be relaunched, just before the worker exits for a restart.
 - A new scan appears as `queued`, then the worker logs `claimed <scanId>` and the UI moves to `running`.

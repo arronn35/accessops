@@ -626,7 +626,7 @@ npm run test:e2e
 - **AI:** OpenAI Responses API
 - **Tarayıcı:** Worker container içindeki Playwright Chromium
 
-Worker için ayrı `Dockerfile.worker` bulunur. Web uygulaması ve worker aynı Firestore projesini paylaşır. Worker `/healthz` sunabilir; web uygulamasındaki derin sağlık kontrolü Firestore erişimini ve güncel worker heartbeat bilgisini denetler.
+Worker için ayrı `Dockerfile.worker` bulunur. Web uygulaması ve worker aynı Firestore projesini paylaşır. Worker `/health` sunabilir; web uygulamasındaki derin sağlık kontrolü Firestore erişimini ve güncel worker heartbeat bilgisini denetler.
 
 V1'de harici ekran görüntüsü veya PDF depolama hizmeti yoktur. Raporlar istek sırasında üretilir, kanıtlar Firestore'da tutulur. Bu mimari ilk sürüm için sadedir, fakat yüksek hacimde nesne depolama, gerçek kuyruk altyapısı ve daha ayrıntılı iş gözlemlenebilirliği gerektirebilir.
 

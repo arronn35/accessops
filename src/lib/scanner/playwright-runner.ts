@@ -29,6 +29,23 @@ import {
   validateUrl,
 } from "./url-validation";
 import { normalizeAxeResults } from "./normalize";
+import {
+  APPLY_STATE_SCRIPT,
+  COLLECT_LINKS_SCRIPT,
+  DOM_FINGERPRINT_SCRIPT,
+  REVERT_STATE_SCRIPT,
+  STATE_MARKER_ATTR,
+  inlineScript,
+} from "./browser-scripts";
+import { scanContextPool, scanPageConcurrency } from "./context-pool";
+import {
+  isOpTimeout,
+  safeDispose,
+  waitForSettled,
+  withOp,
+  withOpOr,
+  type SettleResult,
+} from "./page-ops";
 import { staticExpertHeuristics } from "./expert-heuristics";
 import {
   captureVisualEvidenceForIssues,
@@ -70,6 +87,33 @@ const MAX_RESPONSE_BYTES = 10 * 1024 * 1024; // 10 MB cap per page
 const NAV_TIMEOUT_MS = 30_000;
 const AXE_TIMEOUT_MS = 25_000;
 const MIN_SCAN_DEADLINE_MS = 500;
+
+/** Rule tags requested from axe-core. See ../compliance/frameworks for what
+ *  each WCAG success criterion maps to in law. */
+const AXE_RULE_TAGS = [
+  "wcag2a",
+  "wcag2aa",
+  "wcag21a",
+  "wcag21aa",
+  "wcag22aa",
+  "best-practice",
+] as const;
+
+/** Readiness waits. `load` is the contract; network idle is a bonus (see
+ *  waitForSettled) — most real pages never go idle at all. */
+const LOAD_WAIT_MS = 5_000;
+const IDLE_WAIT_MS = 2_000;
+/** Settle time after driving a control before re-analysing. */
+const STATE_SETTLE_MS = 350;
+/** Bounds for renderer round-trips that Playwright itself never times out. */
+const EVAL_TIMEOUT_MS = 8_000;
+const CONTENT_TIMEOUT_MS = 8_000;
+const TITLE_TIMEOUT_MS = 3_000;
+/** Don't start a variant we cannot finish; don't reload without room to analyse. */
+const MIN_VARIANT_BUDGET_MS = 3_000;
+const MIN_RENAVIGATION_BUDGET_MS = 8_000;
+/** A viewport reloads at most this many times to recover a dirty DOM. */
+const MAX_RENAVIGATIONS_PER_VIEWPORT = 2;
 const PLAYWRIGHT_VERSION =
   typeof playwrightPackage.version === "string" ? playwrightPackage.version : null;
 
@@ -77,6 +121,26 @@ interface ScanDeadline {
   startedAt: number;
   deadlineAt: number;
   truncated: boolean;
+}
+
+/** Outcome of analysing one viewport, including why it stopped early. */
+interface ViewportRun {
+  variants: PageVariantResult[];
+  /** Page loads spent (1 in the healthy case). */
+  navigations: number;
+  /** Reloads forced by a state that could not be reverted in place. */
+  renavigations: number;
+  /** Axe passes skipped because the control changed nothing observable. */
+  skippedUnchanged: number;
+  /** Renderer round-trips that had to be abandoned. */
+  opTimeouts: number;
+  /** A page/context ignored close(); the browser should be recycled. */
+  contextLeaked: boolean;
+  /** Page-side throws, surfaced instead of being read as "no such control". */
+  scriptErrors: string[];
+  /** Same-origin hrefs seen on the loaded page (crawl input, first viewport). */
+  links: string[];
+  error: unknown;
 }
 
 interface PageVariantResult {
@@ -303,6 +367,11 @@ export async function scanSinglePage(
     signal?: AbortSignal;
     /** Fired as each viewport batch begins, for sub-page progress/heartbeat. */
     onViewport?: (viewportName: string) => void | Promise<void>;
+    /**
+     * Same-origin hrefs found on the loaded page. Supplied so a crawl does not
+     * need a second navigation per page just to read its links.
+     */
+    onLinks?: (hrefs: string[]) => void;
   } = {}
 ): Promise<NormalizedPage> {
   const deadline = options.deadline ?? createDeadline(60_000);
@@ -311,6 +380,18 @@ export async function scanSinglePage(
   const blocklist = resourceBlocklist(profile);
   const pageStartedAt = Date.now();
   const variants: PageVariantResult[] = [];
+  const health = {
+    navigations: 0,
+    renavigations: 0,
+    skippedUnchanged: 0,
+    opTimeouts: 0,
+    contextLeaked: false,
+    viewportsCompleted: 0,
+    viewportsFailed: 0,
+    scriptErrors: [] as string[],
+  };
+  let firstError: unknown = null;
+  let linksReported = false;
 
   for (const viewport of VIEWPORTS) {
     if (options.signal?.aborted) {
@@ -324,26 +405,63 @@ export async function scanSinglePage(
       break;
     }
     await options.onViewport?.(viewport.name);
-    const viewportResults = await scanViewportVariants({
-      browser,
-      url: validated.normalized,
-      validated,
-      profile,
-      blocklist,
-      viewport,
-      visualEvidenceEnabled: !!options.visualEvidenceEnabled,
-      evidenceBudget: options.evidenceBudget,
-      deadline,
-      signal: options.signal,
-    });
-    variants.push(...viewportResults);
+    // A viewport never throws: it reports what it managed to collect, so one
+    // bad breakpoint cannot discard the analysis of the other two.
+    //
+    // The context slot is taken per viewport, not per page: a page holds
+    // exactly one context at a time, and releasing between viewports lets a
+    // parallel crawl interleave instead of reserving memory it is not using.
+    const run = await scanContextPool().withSlot(() =>
+      scanViewportVariants({
+        browser,
+        url: validated.normalized,
+        validated,
+        profile,
+        blocklist,
+        viewport,
+        visualEvidenceEnabled: !!options.visualEvidenceEnabled,
+        evidenceBudget: options.evidenceBudget,
+        deadline,
+        signal: options.signal,
+        collectLinks: Boolean(options.onLinks) && !linksReported,
+      })
+    );
+    if (options.onLinks && !linksReported && run.links.length > 0) {
+      linksReported = true;
+      options.onLinks(run.links);
+    }
+    variants.push(...run.variants);
+    health.navigations += run.navigations;
+    health.renavigations += run.renavigations;
+    health.skippedUnchanged += run.skippedUnchanged;
+    health.opTimeouts += run.opTimeouts;
+    health.contextLeaked = health.contextLeaked || run.contextLeaked;
+    for (const scriptError of run.scriptErrors) {
+      if (!health.scriptErrors.includes(scriptError)) health.scriptErrors.push(scriptError);
+    }
+    if (run.error) {
+      health.viewportsFailed += 1;
+      firstError ??= run.error;
+    } else {
+      health.viewportsCompleted += 1;
+    }
   }
 
   if (!variants.length) {
-    return pageErrorResult(url, new ScannerRunnerError("deadline_exceeded", "Scan deadline exceeded before any viewport completed."), "deadline_exceeded", {
-      renderProfile: profile,
-      resourcePolicy: Array.from(blocklist).sort(),
-    });
+    return pageErrorResult(
+      url,
+      firstError ??
+        new ScannerRunnerError(
+          "deadline_exceeded",
+          "Scan deadline exceeded before any viewport completed."
+        ),
+      "deadline_exceeded",
+      {
+        renderProfile: profile,
+        resourcePolicy: Array.from(blocklist).sort(),
+        ...health,
+      }
+    );
   }
 
   const first = variants[0];
@@ -373,12 +491,39 @@ export async function scanSinglePage(
       durationMs: Date.now() - pageStartedAt,
       truncatedByDeadline: deadline.truncated,
       variantCount: variants.length,
+      // Engine health for this page — how many loads it really cost, what was
+      // skipped, and whether the renderer stopped answering.
+      navigations: health.navigations,
+      renavigations: health.renavigations,
+      skippedUnchangedVariants: health.skippedUnchanged,
+      opTimeouts: health.opTimeouts,
+      contextLeaked: health.contextLeaked,
+      viewportsCompleted: health.viewportsCompleted,
+      viewportsFailed: health.viewportsFailed,
+      scriptErrors: health.scriptErrors.slice(0, 5),
+      degraded:
+        health.viewportsFailed > 0 ||
+        health.opTimeouts > 0 ||
+        health.scriptErrors.length > 0,
       variants: metadata,
     },
     issues,
   };
 }
 
+/**
+ * Everything one viewport needs, in a single browser context.
+ *
+ * The old shape re-navigated for *every* variant: 3 viewports × (1 initial +
+ * 5 states × 2 candidates) = 33 full page loads per page, each followed by a
+ * `networkidle` wait. Measured against real pages that wait was ~85% of the
+ * total cost (0.5s–8s per pass) while the axe run itself was ~300ms — so a
+ * single page routinely exceeded the whole job budget and came back
+ * truncated, which is what "the scan hangs" looked like from the outside.
+ *
+ * Now: one navigation per viewport, states driven in-page, and a
+ * re-navigation only when a state cannot be reverted cleanly.
+ */
 async function scanViewportVariants(args: {
   browser: Browser;
   url: string;
@@ -390,104 +535,166 @@ async function scanViewportVariants(args: {
   evidenceBudget?: EvidenceBudget;
   deadline: ScanDeadline;
   signal?: AbortSignal;
-}): Promise<PageVariantResult[]> {
+  /** Harvest crawl links from this viewport's already-loaded page. */
+  collectLinks?: boolean;
+}): Promise<ViewportRun> {
   const { browser, url, validated, profile, blocklist, viewport, deadline } = args;
+  const run: ViewportRun = {
+    variants: [],
+    navigations: 0,
+    renavigations: 0,
+    skippedUnchanged: 0,
+    opTimeouts: 0,
+    contextLeaked: false,
+    scriptErrors: [],
+    links: [],
+    error: null,
+  };
+
   const context = await newHardenedContext(browser, viewport);
   const page = await context.newPage();
   await configurePage(page, validated.host, blocklist);
-  let bytesSeen = 0;
-  const results: PageVariantResult[] = [];
 
-  page.on("response", async (resp) => {
-    try {
-      const cl = resp.headers()["content-length"];
-      if (cl) bytesSeen += Number(cl);
-    } catch {
-      // ignore
-    }
+  let bytesSeen = 0;
+  page.on("response", (resp) => {
+    const cl = resp.headers()["content-length"];
+    if (cl) bytesSeen += Number(cl) || 0;
   });
 
   try {
-    const initial = await scanPageVariant({
+    const nav = await navigateForAnalysis({
       page,
       url,
       validated,
-      profile,
-      viewport,
-      state: "initial",
-      bytesSeen: () => bytesSeen,
-      visualEvidenceEnabled: args.visualEvidenceEnabled,
-      evidenceBudget: args.evidenceBudget,
       deadline,
+      bytesSeen: () => bytesSeen,
     });
-    results.push(initial);
+    run.navigations += 1;
 
-    for (const state of INTERACTIVE_STATES) {
+    const analyze = (state: ScanState, candidateIndex?: number) =>
+      analyzeVariant({
+        page,
+        profile,
+        viewport,
+        state,
+        candidateIndex,
+        finalUrl: nav.finalUrl,
+        statusCode: nav.statusCode,
+        settle: nav.settle,
+        deadline,
+        visualEvidenceEnabled: args.visualEvidenceEnabled,
+        evidenceBudget: args.evidenceBudget,
+        run,
+      });
+
+    run.variants.push(await analyze("initial"));
+
+    // The page is loaded and parsed right here, so crawl discovery is a DOM
+    // read rather than a second navigation in its own context.
+    if (args.collectLinks) {
+      run.links = await withOpOr(
+        "page.evaluate:links",
+        Math.min(EVAL_TIMEOUT_MS, remainingMs(deadline, EVAL_TIMEOUT_MS)),
+        () => page.evaluate<string[]>(inlineScript(COLLECT_LINKS_SCRIPT)),
+        [] as string[]
+      );
+    }
+
+    const baseline = await domFingerprint(page, run);
+
+    states: for (const state of INTERACTIVE_STATES) {
       for (let candidateIndex = 0; candidateIndex < STATE_CANDIDATE_LIMIT; candidateIndex += 1) {
         if (args.signal?.aborted) {
-          throw new ScannerRunnerError(
-            "deadline_exceeded",
-            "Page scan deadline exceeded."
-          );
+          throw new ScannerRunnerError("deadline_exceeded", "Page scan deadline exceeded.");
         }
-        if (!hasBudget(deadline)) {
+        // A variant needs an axe pass plus teardown; starting one with less
+        // than that left only produces a truncated result.
+        if (!hasBudget(deadline, MIN_VARIANT_BUDGET_MS)) {
           deadline.truncated = true;
-          return results;
+          break states;
         }
-        const result = await scanPageVariant({
-          page,
-          url,
-          validated,
-          profile,
-          viewport,
-          state,
-          candidateIndex,
-          bytesSeen: () => bytesSeen,
-          visualEvidenceEnabled: args.visualEvidenceEnabled,
-          evidenceBudget: args.evidenceBudget,
-          deadline,
-        }).catch((err) => {
-          const normalized = scannerError(err, "state_unavailable");
-          if (normalized.code === "deadline_exceeded") deadline.truncated = true;
-          return null;
-        });
-        if (!result) break;
-        results.push(result);
+
+        const before = await domFingerprint(page, run);
+        const applied = await applyState(page, state, candidateIndex, run);
+        if (applied === "unavailable") break; // no further candidates for this state
+        if (applied === "blocked") break states; // renderer is not answering
+
+        await page
+          .waitForTimeout(Math.min(STATE_SETTLE_MS, remainingMs(deadline, STATE_SETTLE_MS)))
+          .catch(() => undefined);
+
+        const after = await domFingerprint(page, run);
+        if (before && after && before === after) {
+          // The control did nothing observable; axe would return a
+          // byte-identical result, so the pass is pure cost.
+          run.skippedUnchanged += 1;
+        } else {
+          run.variants.push(await analyze(state, candidateIndex));
+        }
+
+        const reverted = await revertState(page, state, run);
+        const clean =
+          reverted === "reverted" && (await domFingerprint(page, run)) === baseline;
+        if (clean) continue;
+        if (reverted === "blocked") break states;
+
+        // Could not put the DOM back: reload so the next candidate is probed
+        // from the same starting point the first one saw.
+        if (
+          run.renavigations >= MAX_RENAVIGATIONS_PER_VIEWPORT ||
+          !hasBudget(deadline, MIN_RENAVIGATION_BUDGET_MS)
+        ) {
+          break states;
+        }
+        try {
+          await navigateForAnalysis({
+            page,
+            url,
+            validated,
+            deadline,
+            bytesSeen: () => bytesSeen,
+          });
+          run.navigations += 1;
+          run.renavigations += 1;
+        } catch {
+          break states;
+        }
       }
     }
-    return results;
+  } catch (err) {
+    run.error = err;
+    if (isOpTimeout(err)) run.opTimeouts += 1;
   } finally {
-    await page.close({ runBeforeUnload: false }).catch(() => undefined);
-    await context.close().catch(() => undefined);
+    const disposed = await safeDispose({ page, context });
+    run.contextLeaked = disposed.leaked;
   }
+
+  return run;
 }
 
-async function scanPageVariant(args: {
+/** Navigate, re-validate the post-redirect URL, and wait until analysable. */
+async function navigateForAnalysis(args: {
   page: Page;
   url: string;
   validated: Awaited<ReturnType<typeof validateUrl>>;
-  profile: RenderProfile;
-  viewport: ScanViewport;
-  state: ScanState;
-  candidateIndex?: number;
-  bytesSeen: () => number;
-  visualEvidenceEnabled: boolean;
-  evidenceBudget?: EvidenceBudget;
   deadline: ScanDeadline;
-}): Promise<PageVariantResult> {
-  const { page, url, validated, profile, viewport, state, deadline } = args;
+  bytesSeen: () => number;
+}): Promise<{ finalUrl: string; statusCode: number | null; settle: SettleResult }> {
+  const { page, url, validated, deadline } = args;
   assertBudget(deadline);
 
-  const response = await page.goto(url, {
-    waitUntil: "domcontentloaded",
-    timeout: remainingMs(deadline, NAV_TIMEOUT_MS),
-  }).catch((err) => {
-    const message = (err as Error).message;
-    throw new ScannerRunnerError(
-      /timeout/i.test(message) ? "deadline_exceeded" : "navigation_failed",
-      message
-    );
-  });
+  const response = await page
+    .goto(url, {
+      waitUntil: "domcontentloaded",
+      timeout: remainingMs(deadline, NAV_TIMEOUT_MS),
+    })
+    .catch((err) => {
+      const message = (err as Error).message;
+      throw new ScannerRunnerError(
+        /timeout/i.test(message) ? "deadline_exceeded" : "navigation_failed",
+        message
+      );
+    });
 
   const finalUrl = page.url();
   if (finalUrl !== url) {
@@ -508,42 +715,50 @@ async function scanPageVariant(args: {
     );
   }
 
-  await page.waitForLoadState("networkidle", {
-    timeout: remainingMs(deadline, 8_000),
-  }).catch(() => undefined);
+  const settle = await waitForSettled(page, {
+    loadMs: remainingMs(deadline, LOAD_WAIT_MS),
+    idleMs: remainingMs(deadline, IDLE_WAIT_MS),
+  });
 
-  if (state !== "initial") {
-    const applied = await applyState(page, state, args.candidateIndex ?? 0);
-    if (!applied) {
-      throw new ScannerRunnerError("state_unavailable", "state_not_available");
-    }
-    await page.waitForTimeout(Math.min(350, remainingMs(deadline, 350))).catch(() => undefined);
-    await page.waitForLoadState("networkidle", {
-      timeout: remainingMs(deadline, 2_000),
-    }).catch(() => undefined);
-  }
+  return { finalUrl, statusCode: response?.status() ?? null, settle };
+}
 
+/** Run axe + heuristics + optional evidence on whatever is on screen now. */
+async function analyzeVariant(args: {
+  page: Page;
+  profile: RenderProfile;
+  viewport: ScanViewport;
+  state: ScanState;
+  candidateIndex?: number;
+  finalUrl: string;
+  statusCode: number | null;
+  settle: SettleResult;
+  deadline: ScanDeadline;
+  visualEvidenceEnabled: boolean;
+  evidenceBudget?: EvidenceBudget;
+  run: ViewportRun;
+}): Promise<PageVariantResult> {
+  const { page, profile, viewport, state, deadline, run } = args;
   assertBudget(deadline);
-  const axeBuilder = new AxeBuilder({ page }).withTags([
-    "wcag2a",
-    "wcag2aa",
-    "wcag21a",
-    "wcag21aa",
-    "wcag22aa",
-    "best-practice",
-  ]);
 
-  const axeResult = (await Promise.race([
-    axeBuilder.analyze(),
-    new Promise((_, rej) =>
-      setTimeout(() => rej(new ScannerRunnerError("axe_failed", "axe timeout")), remainingMs(deadline, AXE_TIMEOUT_MS))
-    ),
-  ]).catch((err) => {
+  const axeBuilder = new AxeBuilder({ page }).withTags([...AXE_RULE_TAGS]);
+  const axeResult = (await withOp("axe.analyze", remainingMs(deadline, AXE_TIMEOUT_MS), () =>
+    axeBuilder.analyze()
+  ).catch((err) => {
+    if (isOpTimeout(err)) {
+      run.opTimeouts += 1;
+      throw new ScannerRunnerError("axe_failed", "axe timeout");
+    }
     const normalized = scannerError(err, "axe_failed");
     throw new ScannerRunnerError(normalized.code, normalized.message);
   })) as Awaited<ReturnType<AxeBuilder["analyze"]>>;
 
-  const domHtml = await page.content().catch(() => "");
+  const domHtml = await withOpOr(
+    "page.content",
+    remainingMs(deadline, CONTENT_TIMEOUT_MS),
+    () => page.content(),
+    ""
+  );
   const contextMeta: IssueContext = { viewport: viewport.name, state };
   let issues = withContext(
     [
@@ -558,7 +773,7 @@ async function scanPageVariant(args: {
   if (args.visualEvidenceEnabled && args.evidenceBudget) {
     issues = await captureVisualEvidenceForIssues({
       page,
-      pageUrl: finalUrl,
+      pageUrl: args.finalUrl,
       issues,
       viewport,
       state,
@@ -568,9 +783,9 @@ async function scanPageVariant(args: {
   }
 
   return {
-    finalUrl,
-    title: await page.title().catch(() => null),
-    statusCode: response?.status() ?? null,
+    finalUrl: args.finalUrl,
+    title: await withOpOr("page.title", remainingMs(deadline, TITLE_TIMEOUT_MS), () => page.title(), null),
+    statusCode: args.statusCode,
     issues,
     metadata: {
       axeVersion: axeResult.testEngine?.version ?? null,
@@ -583,112 +798,85 @@ async function scanPageVariant(args: {
       incomplete: axeResult.incomplete.length,
       violations: axeResult.violations.length,
       renderProfile: profile,
+      settleLevel: args.settle.level,
+      settleWaitedMs: args.settle.waitedMs,
       deadlineRemainingMs: deadline.deadlineAt - Date.now(),
     },
   };
 }
 
+/**
+ * Cheap signature of the parts of the DOM an interactive state changes.
+ *
+ * Used for two things: skipping an axe pass when a control did nothing, and
+ * proving a state was fully reverted before probing the next candidate.
+ */
+async function domFingerprint(page: Page, run: ViewportRun): Promise<string | null> {
+  const value = await withOpOr(
+    "page.evaluate:fingerprint",
+    EVAL_TIMEOUT_MS,
+    () => page.evaluate<string>(inlineScript(DOM_FINGERPRINT_SCRIPT)),
+    null as string | null
+  );
+  if (value === null) run.opTimeouts += 1;
+  return value;
+}
+
+type StateApplication = "applied" | "unavailable" | "blocked";
+type StateReversion = "reverted" | "dirty" | "blocked";
+
+/**
+ * Drive the page into an interactive state, tagging the element we touched so
+ * `revertState` can undo exactly that action.
+ */
 async function applyState(
   page: Page,
   state: Exclude<ScanState, "initial">,
-  candidateIndex: number
-): Promise<boolean> {
-  return page.evaluate(
-    ({ state, candidateIndex }) => {
-      const danger =
-        /(checkout|payment|pay|purchase|buy|order|cart|delete|remove|destroy|submit|subscribe|sign\s?out|log\s?out)/i;
-      const visible = (el: Element) => {
-        const rect = el.getBoundingClientRect();
-        const style = window.getComputedStyle(el);
-        return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-      };
-      const name = (el: Element) =>
-        [
-          el.getAttribute("aria-label"),
-          el.getAttribute("title"),
-          el.getAttribute("data-testid"),
-          el.getAttribute("id"),
-          el.textContent,
-        ]
-          .filter(Boolean)
-          .join(" ")
-          .trim();
-      const safe = (el: Element) => {
-        const label = name(el);
-        if (!visible(el) || danger.test(label)) return false;
-        if (el instanceof HTMLButtonElement) {
-          if (el.disabled || el.type === "submit" || el.closest("form")) return false;
-        }
-        if (el instanceof HTMLAnchorElement) {
-          const href = el.getAttribute("href") ?? "";
-          if (href && href !== "#" && !href.startsWith("#") && !href.startsWith("javascript:")) {
-            return false;
-          }
-        }
-        return true;
-      };
-      const click = (el: Element) => {
-        (el as HTMLElement).scrollIntoView({ block: "center", inline: "center" });
-        (el as HTMLElement).click();
-        return true;
-      };
-      const buttonish = Array.from(
-        document.querySelectorAll<HTMLElement>("button,[role='button'],summary")
-      ).filter(safe);
-      let candidates: HTMLElement[] = [];
+  candidateIndex: number,
+  run: ViewportRun
+): Promise<StateApplication> {
+  try {
+    const applied = await withOp("page.evaluate:applyState", EVAL_TIMEOUT_MS, () =>
+      page.evaluate<boolean>(
+        inlineScript(APPLY_STATE_SCRIPT, {
+          state,
+          candidateIndex,
+          marker: STATE_MARKER_ATTR,
+        })
+      )
+    );
+    return applied ? "applied" : "unavailable";
+  } catch (err) {
+    if (isOpTimeout(err)) {
+      run.opTimeouts += 1;
+      return "blocked";
+    }
+    // A page-side throw means the state could not be driven here; it must not
+    // be mistaken for "this page has no menu".
+    run.scriptErrors.push(`applyState:${state}:${(err as Error).message}`.slice(0, 200));
+    return "unavailable";
+  }
+}
 
-      if (state === "menu-open") {
-        candidates = buttonish.filter((el) => {
-          const label = name(el);
-          return (
-            el.getAttribute("aria-expanded") === "false" &&
-            (/menu|navigation|nav|hamburger/i.test(label) ||
-              el.getAttribute("aria-haspopup") === "menu" ||
-              /menu|nav/i.test(el.getAttribute("aria-controls") ?? ""))
-          );
-        });
-      } else if (state === "dialog-open") {
-        candidates = buttonish.filter((el) => {
-          const label = name(el);
-          return (
-            el.getAttribute("aria-haspopup") === "dialog" ||
-            /modal|dialog/i.test(label) ||
-            /modal|dialog/i.test(el.getAttribute("aria-controls") ?? "")
-          );
-        });
-      } else if (state === "accordion-open") {
-        candidates = buttonish.filter((el) => {
-          if (el.tagName.toLowerCase() === "summary") return true;
-          const label = name(el);
-          return (
-            el.getAttribute("aria-expanded") === "false" &&
-            !/menu|navigation|nav|modal|dialog/i.test(label) &&
-            el.getAttribute("aria-haspopup") !== "menu" &&
-            el.getAttribute("aria-haspopup") !== "dialog"
-          );
-        });
-      } else if (state === "tab-open") {
-        candidates = Array.from(
-          document.querySelectorAll<HTMLElement>("[role='tab'][aria-selected='false']")
-        ).filter(safe);
-      } else if (state === "form-focus") {
-        candidates = Array.from(
-          document.querySelectorAll<HTMLElement>(
-            "input:not([type='hidden']):not([type='submit']):not([type='button']):not([type='reset']),textarea,select,[contenteditable='true']"
-          )
-        ).filter((el) => visible(el) && !(el as HTMLInputElement).disabled);
-        const target = candidates[candidateIndex];
-        if (!target) return false;
-        target.scrollIntoView({ block: "center", inline: "center" });
-        target.focus({ preventScroll: true });
-        return document.activeElement === target;
-      }
-
-      const target = candidates[candidateIndex];
-      return target ? click(target) : false;
-    },
-    { state, candidateIndex }
-  );
+/** Undo the exact element `applyState` touched, so no reload is needed. */
+async function revertState(
+  page: Page,
+  state: Exclude<ScanState, "initial">,
+  run: ViewportRun
+): Promise<StateReversion> {
+  try {
+    const reverted = await withOp("page.evaluate:revertState", EVAL_TIMEOUT_MS, () =>
+      page.evaluate<boolean>(inlineScript(REVERT_STATE_SCRIPT, { state, marker: STATE_MARKER_ATTR }))
+    );
+    return reverted ? "reverted" : "dirty";
+  } catch (err) {
+    if (isOpTimeout(err)) {
+      run.opTimeouts += 1;
+      return "blocked";
+    }
+    run.scriptErrors.push(`revertState:${state}:${(err as Error).message}`.slice(0, 200));
+    return "dirty";
+  }
 }
 
 /**
@@ -751,14 +939,52 @@ export async function crawlSameDomain(
     };
   }
 
+  // ---- Shared crawl frontier -------------------------------------------
+  //
+  // Pages are scanned by a small pool of workers rather than one at a time.
+  // Everything below is deliberately synchronous: claiming a URL, counting
+  // against `maxPages` and pushing discovered links all happen in one tick,
+  // so two workers can never claim the same page or overshoot the cap.
   const queue: string[] = [...sourcePlan.targets];
   const seen = new Set<string>(queue);
-  const results: NormalizedPage[] = [];
+  const completed = new Map<number, NormalizedPage>();
   const evidenceBudget = createEvidenceBudget(
     input.visualEvidenceEnabled
       ? input.visualEvidenceMaxScreenshots ?? 0
       : 0
   );
+  let claimed = 0;
+  let lastStartedUrl: string | null = null;
+
+  /** Claim the next URL, or null when the crawl is finished/full. */
+  const claimNext = (): { url: string; index: number } | null => {
+    if (claimed >= input.maxPages) return null;
+    const url = queue.shift();
+    if (!url) return null;
+    const index = claimed;
+    claimed += 1;
+    return { url, index };
+  };
+
+  /** Room left for newly discovered URLs: in-flight + done + already queued. */
+  const enqueueDiscovered = (links: string[]): void => {
+    for (const link of links) {
+      if (claimed + queue.length >= input.maxPages) return;
+      if (seen.has(link)) continue;
+      seen.add(link);
+      queue.push(link);
+    }
+  };
+
+  const reportProgress = async (currentUrl?: string | null, currentState?: string) => {
+    await onProgress?.({
+      step: "scanning",
+      pagesScanned: completed.size,
+      pagesDiscovered: seen.size,
+      currentUrl: currentUrl ?? lastStartedUrl ?? undefined,
+      ...(currentState ? { currentState } : {}),
+    });
+  };
 
   await onProgress?.({
     step: "starting_browser",
@@ -766,84 +992,99 @@ export async function crawlSameDomain(
     pagesDiscovered: seen.size,
   });
 
-  while (queue.length > 0 && results.length < input.maxPages) {
-    if (!hasBudget(deadline)) {
-      deadline.truncated = true;
-      if (results.length > 0) {
-        const last = results[results.length - 1];
-        last.rawMetadata = {
-          ...(last.rawMetadata ?? {}),
-          truncatedByDeadline: true,
-        };
-      } else {
-        results.push(
-          pageErrorResult(
-            queue[0] ?? input.url,
-            new ScannerRunnerError("deadline_exceeded", "Scan deadline exceeded before the first page completed."),
-            "deadline_exceeded"
-          )
-        );
+  const collectLinks = input.scanType === "multi";
+
+  let inFlight = 0;
+
+  const scanWorker = async (): Promise<void> => {
+    for (;;) {
+      if (!hasBudget(deadline)) {
+        deadline.truncated = true;
+        return;
       }
-      break;
+      if (claimed >= input.maxPages) return;
+
+      const claim = claimNext();
+      if (!claim) {
+        // Empty frontier: a peer that is still scanning may yet discover more
+        // links. Only stop once nothing is in flight to grow it.
+        if (inFlight === 0) return;
+        await idle(FRONTIER_POLL_MS);
+        continue;
+      }
+
+      inFlight += 1;
+      lastStartedUrl = claim.url;
+      await reportProgress(claim.url);
+
+      let page: NormalizedPage;
+      try {
+        page = await scanSinglePage(browser, claim.url, {
+          includeScreenshots: input.includeScreenshots,
+          visualEvidenceEnabled: !!input.visualEvidenceEnabled,
+          evidenceBudget,
+          deadline,
+          // Links come from the page this scan already loaded, so a crawl
+          // costs one navigation per page instead of two.
+          onLinks: collectLinks
+            ? (hrefs) =>
+                enqueueDiscovered(
+                  normalizeDiscoveredLinks(hrefs, claim.url, startValidated.origin)
+                )
+            : undefined,
+          // Per-viewport ping: keeps the realtime UI moving and the worker
+          // heartbeat fresh while a single page runs all of its analysis passes.
+          onViewport: async (viewportName) => {
+            await reportProgress(claim.url, viewportName);
+          },
+        });
+      } catch (err) {
+        // One bad page should not poison the whole scan.
+        completed.set(claim.index, pageErrorResult(claim.url, err, "page_unavailable"));
+        continue;
+      } finally {
+        inFlight -= 1;
+      }
+
+      page.rawMetadata = {
+        ...(page.rawMetadata ?? {}),
+        discoverySource: sourcePlan.discoverySource,
+        sitemapUrl: sourcePlan.sitemapUrl ?? null,
+      };
+      completed.set(claim.index, page);
+      await reportProgress();
     }
-    const next = queue.shift()!;
+  };
 
-    await onProgress?.({
-      step: "scanning",
-      pagesScanned: results.length,
-      pagesDiscovered: seen.size,
-      currentUrl: next,
-    });
+  // Sized against the page cap, never the seed count: a crawl starts with one
+  // URL and discovers the rest as it goes. Every worker still queues on the
+  // process-wide context pool, so the memory ceiling holds no matter how many
+  // scans are running at once.
+  const workerCount = Math.max(1, Math.min(scanPageConcurrency(), input.maxPages));
+  await Promise.all(Array.from({ length: workerCount }, () => scanWorker()));
 
-    let page: NormalizedPage;
-    try {
-      page = await scanSinglePage(browser, next, {
-        includeScreenshots: input.includeScreenshots,
-        visualEvidenceEnabled: !!input.visualEvidenceEnabled,
-        evidenceBudget,
-        deadline,
-        // Per-viewport ping: keeps the realtime UI moving and the worker
-        // heartbeat fresh while a single page runs all of its analysis passes.
-        onViewport: async (viewportName) => {
-          await onProgress?.({
-            step: "scanning",
-            pagesScanned: results.length,
-            pagesDiscovered: seen.size,
-            currentUrl: next,
-            currentState: viewportName,
-          });
-        },
-      });
-    } catch (err) {
-      // One bad page should not poison the whole scan.
-      results.push(pageErrorResult(next, err, "page_unavailable"));
-      continue;
-    }
-    results.push(page);
+  // Restore claim order: results must not depend on which page finished first.
+  const results = Array.from(completed.keys())
+    .sort((a, b) => a - b)
+    .map((index) => completed.get(index)!);
 
-    page.rawMetadata = {
-      ...(page.rawMetadata ?? {}),
-      discoverySource: sourcePlan.discoverySource,
-      sitemapUrl: sourcePlan.sitemapUrl ?? null,
+  if (results.length === 0) {
+    results.push(
+      pageErrorResult(
+        sourcePlan.targets[0] ?? input.url,
+        new ScannerRunnerError(
+          "deadline_exceeded",
+          "Scan deadline exceeded before the first page completed."
+        ),
+        "deadline_exceeded"
+      )
+    );
+  } else if (deadline.truncated) {
+    const last = results[results.length - 1];
+    last.rawMetadata = {
+      ...(last.rawMetadata ?? {}),
+      truncatedByDeadline: true,
     };
-
-    // Discover more links only for multi-page scans.
-    if (
-      input.scanType === "multi" &&
-      results.length < input.maxPages &&
-      page.statusCode &&
-      page.statusCode >= 200 &&
-      page.statusCode < 400
-    ) {
-      const links = await discoverLinksOnce(browser, page.url, startValidated.origin, deadline)
-        .catch(() => []);
-      for (const link of links) {
-        if (!seen.has(link) && queue.length + results.length < input.maxPages) {
-          seen.add(link);
-          queue.push(link);
-        }
-      }
-    }
   }
 
   return {
@@ -851,7 +1092,47 @@ export async function crawlSameDomain(
     pagesDiscovered: seen.size,
     pagesScanned: results.length,
     durationMs: Date.now() - started,
+    concurrency: workerCount,
   };
+}
+
+
+/**
+ * How long a worker waits before re-checking an empty frontier.
+ *
+ * A crawl starts from a single seed and only grows once that page has been
+ * read, so workers must idle rather than exit the moment the queue is empty —
+ * otherwise the whole crawl collapses back to one worker.
+ */
+const FRONTIER_POLL_MS = 25;
+
+const idle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Filter raw hrefs down to crawlable, same-origin, canonical URLs.
+ *
+ * Shared by both discovery paths: the links a page hands back while it is
+ * being scanned, and the standalone discovery pass used to plan page jobs.
+ */
+export function normalizeDiscoveredLinks(
+  hrefs: readonly string[],
+  pageUrl: string,
+  expectedOrigin: string
+): string[] {
+  const out = new Set<string>();
+  for (const href of hrefs) {
+    try {
+      const parsed = new URL(href);
+      if (parsed.origin !== expectedOrigin) continue;
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") continue;
+      // Strip fragment and trailing-slash variations for dedup.
+      const normalized = sameOriginCanonicalUrl(parsed.toString(), pageUrl, expectedOrigin);
+      if (normalized) out.add(normalized);
+    } catch {
+      // Skip anything that is not a usable absolute URL.
+    }
+  }
+  return Array.from(out);
 }
 
 /**
@@ -877,28 +1158,17 @@ async function discoverLinksOnce(
       waitUntil: "domcontentloaded",
       timeout: remainingMs(deadline, NAV_TIMEOUT_MS),
     });
-    const hrefs = await page.evaluate(() =>
-      Array.from(document.querySelectorAll<HTMLAnchorElement>("a[href]"))
-        .map((a) => a.href)
-        .filter(Boolean)
+    // Bounded: link extraction runs on the renderer's main thread, which a
+    // busy page can hold indefinitely.
+    const hrefs = await withOpOr(
+      "page.evaluate:links",
+      Math.min(EVAL_TIMEOUT_MS, remainingMs(deadline, EVAL_TIMEOUT_MS)),
+      () => page.evaluate<string[]>(inlineScript(COLLECT_LINKS_SCRIPT)),
+      [] as string[]
     );
-    const out = new Set<string>();
-    for (const href of hrefs) {
-      try {
-        const u = new URL(href);
-        if (u.origin !== expectedOrigin) continue;
-        if (u.protocol !== "http:" && u.protocol !== "https:") continue;
-        // Strip fragment and trailing slash variations for dedup.
-        const normalized = sameOriginCanonicalUrl(u.toString(), pageUrl, expectedOrigin);
-        if (normalized) out.add(normalized);
-      } catch {
-        // skip invalid
-      }
-    }
-    return Array.from(out);
+    return normalizeDiscoveredLinks(hrefs, pageUrl, expectedOrigin);
   } finally {
-    await page.close({ runBeforeUnload: false }).catch(() => undefined);
-    await context.close().catch(() => undefined);
+    await safeDispose({ page, context });
   }
 }
 
@@ -1061,20 +1331,50 @@ export async function resolveScanTargets(
     }
   }
   try {
+    // Breadth-first, but several pages are fetched at once. Like the scan
+    // crawl, all bookkeeping is synchronous so the page cap is exact and no
+    // URL is visited twice; each fetch still takes a slot from the global
+    // context pool, so discovery cannot exceed the memory ceiling either.
     const out: string[] = [...plan.targets];
     const seen = new Set<string>(out);
     const queue: string[] = [...plan.targets];
-    while (queue.length > 0 && out.length < input.maxPages && hasBudget(deadline)) {
-      const next = queue.shift()!;
-      const links = await discoverLinksOnce(browser, next, origin, deadline).catch(() => []);
+    let inFlight = 0;
+
+    const record = (links: string[]): void => {
       for (const link of links) {
-        if (out.length >= input.maxPages) break;
+        if (out.length >= input.maxPages) return;
         if (seen.has(link)) continue;
         seen.add(link);
         out.push(link);
         queue.push(link);
       }
-    }
+    };
+
+    const discoverWorker = async (): Promise<void> => {
+      for (;;) {
+        if (out.length >= input.maxPages || !hasBudget(deadline)) return;
+        const next = queue.shift();
+        if (next === undefined) {
+          // Nothing queued right now, but a peer may still be about to push
+          // more. Give it a turn before deciding the frontier is exhausted.
+          if (inFlight === 0) return;
+          await idle(FRONTIER_POLL_MS);
+          continue;
+        }
+        inFlight += 1;
+        try {
+          const links = await scanContextPool()
+            .withSlot(() => discoverLinksOnce(browser, next, origin, deadline))
+            .catch(() => [] as string[]);
+          record(links);
+        } finally {
+          inFlight -= 1;
+        }
+      }
+    };
+
+    const workerCount = Math.max(1, Math.min(scanPageConcurrency(), input.maxPages));
+    await Promise.all(Array.from({ length: workerCount }, () => discoverWorker()));
     return out.slice(0, input.maxPages);
   } finally {
     if (!shared) await browser.close().catch(() => undefined);

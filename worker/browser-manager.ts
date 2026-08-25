@@ -19,7 +19,7 @@
  *      in-flight page job(s) on the dead browser throw and requeue through the
  *      normal `failPageJob` path — they are never lost. If every relaunch fails,
  *      the manager goes unhealthy and fires `onUnhealthy` so the worker can fail
- *      its /healthz and exit nonzero for the platform to restart it.
+ *      its /health and exit nonzero for the platform to restart it.
  *
  *   3. Memory guard. After every job (each `release`) we check RSS and the job
  *      count on the current browser. Above `maxRssBytes` (env WORKER_MAX_RSS_MB)
@@ -32,7 +32,14 @@
 import type { Browser } from "playwright";
 import { logScanEvent, type WorkerLogLevel } from "./log";
 
-export type RecycleReason = "rss" | "jobs";
+/**
+ * Why a browser is being replaced.
+ *   rss   — memory ceiling reached
+ *   jobs  — job count reached
+ *   leak  — a page or context ignored close(); its renderer process is still
+ *           around and only a relaunch reclaims it (see scanner/page-ops).
+ */
+export type RecycleReason = "rss" | "jobs" | "leak";
 
 export interface BrowserLease {
   /** The shared browser. Open `browser.newContext()` on it; never close it. */
@@ -115,7 +122,7 @@ export class BrowserManager {
   private lastLaunchError: string | null = null;
   private releaseWaiters: Array<() => void> = [];
 
-  /** Wired by the worker to fail /healthz and exit nonzero for a restart. */
+  /** Wired by the worker to fail /health and exit nonzero for a restart. */
   onUnhealthy?: (err: Error) => void;
 
   constructor(options: BrowserManagerOptions) {
@@ -190,12 +197,12 @@ export class BrowserManager {
     };
   }
 
-  /** Health for the worker's /healthz endpoint. */
+  /** Health for the worker's /health endpoint. */
   isHealthy(): boolean {
     return this.healthy && !this.fatalError;
   }
 
-  /** Sanitized lifecycle stats for /healthz. */
+  /** Sanitized lifecycle stats for /health. */
   stats(): {
     connected: boolean;
     healthy: boolean;
@@ -385,6 +392,21 @@ export class BrowserManager {
         this.wakeReleaseWaiters();
       }
     }
+  }
+
+  /**
+   * Ask for a recycle after the current job. Used when a scan reports a page
+   * or context that never closed: the renderer survives the scan, so the only
+   * way to reclaim it is to replace the browser.
+   */
+  requestRecycle(reason: RecycleReason): void {
+    if (this.recyclePending || this.shuttingDown) return;
+    this.recyclePending = reason;
+    this.log("info", "browser.recycle-scheduled", {
+      reason,
+      jobs: this.jobsSinceLaunch,
+      rssMb: this.rssMb(),
+    });
   }
 
   private recycleReason(): RecycleReason | null {

@@ -14,8 +14,9 @@
  * Failure modes:
  *   - Firebase Admin not configured (local dev, unit tests): fall back to
  *     the in-memory window.
- *   - Firestore errors: fail open (allow the request) and log, so a limiter
- *     outage cannot take down the API.
+ *   - Firestore errors fail open by default so an internal limiter outage
+ *     cannot take down authenticated product APIs. Public, unauthenticated
+ *     compute endpoints opt into fail-closed behavior to prevent abuse.
  */
 import { Timestamp } from "firebase-admin/firestore";
 import { firebaseAdminConfigured, firestore } from "@/lib/firebase/admin";
@@ -23,6 +24,7 @@ import { firebaseAdminConfigured, firestore } from "@/lib/firebase/admin";
 const buckets = new Map<string, { count: number; reset: number }>();
 
 export const limiters = {
+  publicCheck: { max: 5, windowMs: 60 * 60_000 },
   scanCreate: { max: 10, windowMs: 60_000 },
   aiExplain: { max: 60, windowMs: 60 * 60_000 },
   reportExport: { max: 30, windowMs: 60 * 60_000 },
@@ -35,6 +37,11 @@ export interface RateLimitResult {
   ok: boolean;
   remaining: number;
   reset: number;
+  reason?: "limit_exceeded" | "backend_unavailable";
+}
+
+export interface RateLimitOptions {
+  failureMode?: "open" | "closed";
 }
 
 /** TTL slack so a doc outlives its window long enough to be read once more. */
@@ -54,6 +61,7 @@ function checkInMemory(name: LimiterName, key: string): RateLimitResult {
     ok: bucket.count <= cfg.max,
     remaining: Math.max(0, cfg.max - bucket.count),
     reset: bucket.reset,
+    ...(bucket.count > cfg.max ? { reason: "limit_exceeded" as const } : {}),
   };
 }
 
@@ -90,13 +98,15 @@ async function checkInFirestore(
       ok: count <= cfg.max,
       remaining: Math.max(0, cfg.max - count),
       reset: resetAt,
+      ...(count > cfg.max ? { reason: "limit_exceeded" as const } : {}),
     };
   });
 }
 
 export async function checkRateLimit(
   name: LimiterName,
-  key: string
+  key: string,
+  options: RateLimitOptions = {}
 ): Promise<RateLimitResult> {
   if (!firebaseAdminConfigured()) {
     return checkInMemory(name, key);
@@ -104,11 +114,19 @@ export async function checkRateLimit(
   try {
     return await checkInFirestore(name, key);
   } catch (err) {
-    // Fail open: a limiter outage must not become an API outage.
-    console.error("[rate-limit] firestore check failed; allowing request", {
+    const failureMode = options.failureMode ?? "open";
+    console.error(`[rate-limit] firestore check failed; failing ${failureMode}`, {
       limiter: name,
       error: err instanceof Error ? err.message : String(err),
     });
+    if (failureMode === "closed") {
+      return {
+        ok: false,
+        remaining: 0,
+        reset: Date.now() + limiters[name].windowMs,
+        reason: "backend_unavailable",
+      };
+    }
     return {
       ok: true,
       remaining: limiters[name].max,

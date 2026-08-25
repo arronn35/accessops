@@ -119,6 +119,7 @@ export interface ScanTaskPayload {
   scanJobId: string;
   reason?:
     | "scan_created"
+    | "scan_retried"
     | "sweep_requeue"
     | "deletion_created"
     | "monitor_due";

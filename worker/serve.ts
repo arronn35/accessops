@@ -9,7 +9,7 @@
  *                     engine, run an aggregation pass, then return. Cloud Tasks
  *                     delivers these (see src/lib/scanner/dispatch.ts); the
  *                     shared INTERNAL_WORKER_SECRET guards the endpoint.
- *   GET  /healthz   — liveness; 503 once the shared Chromium is unrecoverable.
+ *   GET  /health   — liveness; 503 once the shared Chromium is unrecoverable.
  *
  * Dispatch (who calls /process):
  *   - POST /api/scans enqueues a task on scan creation.
@@ -50,6 +50,7 @@ import { aggregateScan } from "@/lib/scanner/persistence";
 import { processScanJob } from "./process-job";
 import { processPageJob } from "./process-page-job";
 import { getBrowserManager } from "./browser-manager";
+import { scanContextPool } from "@/lib/scanner/context-pool";
 import { claimMissBackoffMs } from "./claim-backoff";
 
 function durationFromEnv(name: string, fallback: number, minimum: number): number {
@@ -382,7 +383,7 @@ function startServer(): Server {
   const server = createServer((req, res) => {
     const url = (req.url ?? "/").split("?")[0];
 
-    if (req.method === "GET" && url === "/healthz") {
+    if (req.method === "GET" && url === "/health") {
       const ok = !browserUnhealthy;
       res.writeHead(ok ? 200 : 503, {
         "cache-control": "no-store",
@@ -397,6 +398,13 @@ function startServer(): Server {
           processing,
           browserHealthy: !browserUnhealthy,
           browser: getBrowserManager().stats(),
+          // Contexts are the memory unit; `queued` above zero for long means
+          // the ceiling, not the CPU, is what is pacing scans.
+          contexts: {
+            size: scanContextPool().size,
+            inFlight: scanContextPool().inFlight,
+            queued: scanContextPool().queued,
+          },
           ts: new Date().toISOString(),
         })
       );
@@ -438,7 +446,7 @@ async function main(): Promise<void> {
   }
 
   // A Chromium that can no longer be relaunched makes this instance useless:
-  // flag unhealthy so /healthz 503s and in-flight /process returns 503 (the
+  // flag unhealthy so /health 503s and in-flight /process returns 503 (the
   // Cloud Task retries on a fresh instance), then exit so Cloud Run recycles us.
   getBrowserManager().onUnhealthy = (err) => {
     if (browserUnhealthy) return;

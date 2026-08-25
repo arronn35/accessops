@@ -1,4 +1,4 @@
-import { NextRequest } from "next/server";
+import { after, NextRequest } from "next/server";
 import { z } from "zod";
 import { validateUrl, UrlValidationFailed } from "@/lib/scanner/url-validation";
 import { apiError, ApiError, rateLimitError, requireSession } from "@/lib/api/context";
@@ -21,6 +21,8 @@ import {
   scanDispatchMode,
 } from "@/lib/scanner/dispatch";
 import { captureException } from "@/lib/observability";
+import { processScanInline } from "@/lib/scanner/inline-runner";
+import { scanNeedsInlineFallback } from "@/lib/scanner/availability";
 
 const ScanCreateSchema = z.object({
   url: z.string().url().max(2048),
@@ -89,6 +91,7 @@ export async function POST(req: NextRequest) {
         `Scan processing is temporarily unavailable (${dispatch.missing.join(", ")}).`
       );
     }
+    const useInlineFallback = await scanNeedsInlineFallback();
 
     const workspace = await getWorkspace(ctx.workspaceId);
     if (!workspace) throw new ApiError(404, "workspace_not_found");
@@ -109,6 +112,11 @@ export async function POST(req: NextRequest) {
     }
     if (screenshotsRequested && !screenshotsAllowed) {
       warnings.push("Visual evidence was requested, but workspace visual evidence and screenshot storage consent are both required.");
+    }
+    if (useInlineFallback) {
+      warnings.push(
+        "The browser scanner is temporarily unavailable. This scan will run in limited static HTML mode."
+      );
     }
     const maxConcurrent = Number(process.env.MAX_CONCURRENT_SCANS_PER_WORKSPACE ?? 1);
     if ((await countInflightScans(ctx.workspaceId)) >= maxConcurrent) {
@@ -171,8 +179,20 @@ export async function POST(req: NextRequest) {
     // enqueue is best-effort: if it fails the job stays "queued" and the
     // sweeper (Cloud Scheduler → /api/internal/scans/sweep) re-enqueues it, so
     // a scan is never silently stranded.
-    const mode = "queued" as const;
-    if (scanDispatchMode() === "cloud-tasks") {
+    const mode = useInlineFallback ? "inline_static" as const : "queued" as const;
+    if (useInlineFallback) {
+      after(async () => {
+        try {
+          await processScanInline(job.id, { allowQueueFailureFallback: true });
+        } catch (err) {
+          void captureException(err, {
+            scope: "scan.inline-fallback",
+            scanJobId: job.id,
+            workspaceId: ctx.workspaceId,
+          });
+        }
+      });
+    } else if (scanDispatchMode() === "cloud-tasks") {
       try {
         await enqueueScanTask({ scanJobId: job.id, reason: "scan_created" });
       } catch (err) {

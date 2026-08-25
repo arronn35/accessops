@@ -35,6 +35,22 @@ yarn-error.log*
 .pnpm-debug.log*
 .percevia/
 
+# local editor and generated media
+.claude/
+/artifacts/
+/shots*.mjs
+
+# generated outreach data (contains contact details)
+/docs/marketing/customer-emails-*.txt
+/docs/marketing/customer-lead-seeds-*.json
+/docs/marketing/customer-leads-*.csv
+/docs/marketing/customer-leads-*.json
+/docs/marketing/customer-leads-*.xlsx
+/docs/marketing/lead-seeds.json
+/docs/marketing/leads.csv
+/docs/marketing/leads.json
+/docs/marketing/percevia-lead-tracker.xlsx
+
 # env files (can opt-in for committing if needed)
 .env*
 

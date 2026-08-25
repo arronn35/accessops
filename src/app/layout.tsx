@@ -37,7 +37,10 @@ export const metadata: Metadata = {
   title: "maitrico Percevia AI — Accessibility operations, not one-click compliance",
   description:
     "AI-assisted accessibility scanning, remediation guidance, and audit-ready reporting for agencies, founders, developers, and product teams.",
-  icons: { icon: "/brand/favicon.svg" },
+  icons: {
+    icon: "/brand/percevia-logo.png",
+    apple: "/brand/percevia-logo.png",
+  },
   openGraph: {
     type: "website",
     title: "maitrico Percevia AI",

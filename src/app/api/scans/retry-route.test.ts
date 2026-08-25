@@ -11,6 +11,13 @@ const {
   getWorkspaceMock,
   reserveScanQuotaMock,
   updateScanJobMock,
+  afterMock,
+  enqueueScanTaskMock,
+  getLatestWorkerHeartbeatMock,
+  isWorkerHeartbeatFreshMock,
+  processScanInlineMock,
+  scanDispatchConfigurationMock,
+  scanDispatchModeMock,
 } = vi.hoisted(() => ({
   requireSessionMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -22,6 +29,18 @@ const {
   getWorkspaceMock: vi.fn(),
   reserveScanQuotaMock: vi.fn(),
   updateScanJobMock: vi.fn(),
+  afterMock: vi.fn(),
+  enqueueScanTaskMock: vi.fn(),
+  getLatestWorkerHeartbeatMock: vi.fn(),
+  isWorkerHeartbeatFreshMock: vi.fn(),
+  processScanInlineMock: vi.fn(),
+  scanDispatchConfigurationMock: vi.fn(),
+  scanDispatchModeMock: vi.fn(),
+}));
+
+vi.mock("next/server", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("next/server")>()),
+  after: afterMock,
 }));
 
 vi.mock("@/lib/api/context", () => {
@@ -70,6 +89,23 @@ vi.mock("@/lib/data/firestore", () => ({
   reserveScanQuota: reserveScanQuotaMock,
   updateScanJob: updateScanJobMock,
 }));
+
+vi.mock("@/lib/data/worker-health", () => ({
+  getLatestWorkerHeartbeat: getLatestWorkerHeartbeatMock,
+  isWorkerHeartbeatFresh: isWorkerHeartbeatFreshMock,
+}));
+
+vi.mock("@/lib/scanner/dispatch", () => ({
+  enqueueScanTask: enqueueScanTaskMock,
+  scanDispatchConfiguration: scanDispatchConfigurationMock,
+  scanDispatchMode: scanDispatchModeMock,
+}));
+
+vi.mock("@/lib/scanner/inline-runner", () => ({
+  processScanInline: processScanInlineMock,
+}));
+
+vi.mock("@/lib/observability", () => ({ captureException: vi.fn() }));
 
 import { POST } from "./[id]/retry/route";
 import type { ScanJob } from "@/lib/data/types";
@@ -129,6 +165,17 @@ beforeEach(() => {
     usage: {},
   });
   updateScanJobMock.mockReset().mockResolvedValue(undefined);
+  afterMock.mockReset();
+  enqueueScanTaskMock.mockReset().mockResolvedValue({ enqueued: true });
+  getLatestWorkerHeartbeatMock.mockReset().mockResolvedValue(new Date());
+  isWorkerHeartbeatFreshMock.mockReset().mockReturnValue(true);
+  processScanInlineMock.mockReset().mockResolvedValue(undefined);
+  scanDispatchConfigurationMock.mockReset().mockReturnValue({
+    mode: "poll",
+    configured: true,
+    missing: [],
+  });
+  scanDispatchModeMock.mockReset().mockReturnValue("poll");
 });
 
 describe("POST /api/scans/[id]/retry", () => {
@@ -162,6 +209,55 @@ describe("POST /api/scans/[id]/retry", () => {
       workspaceId: "ws-1",
       plan: "free",
       maxPages: 1,
+    });
+  });
+
+  it("runs the static fallback when retrying with a stale poll worker", async () => {
+    getScanJobMock.mockResolvedValue(scan());
+    isWorkerHeartbeatFreshMock.mockReturnValue(false);
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+    const body = await res.json();
+
+    expect(body.mode).toBe("inline_static");
+    expect(updateScanJobMock).toHaveBeenCalledWith(
+      "ws-1",
+      "scan-1",
+      expect.objectContaining({
+        status: "queued",
+        errorMessage:
+          "The browser scanner is temporarily unavailable. This scan will run in limited static HTML mode.",
+      })
+    );
+    expect(afterMock).toHaveBeenCalledOnce();
+    const task = afterMock.mock.calls[0][0] as () => Promise<void>;
+    await task();
+    expect(processScanInlineMock).toHaveBeenCalledWith("scan-1", {
+      allowQueueFailureFallback: true,
+    });
+  });
+
+  it("re-enqueues a Cloud Task when retrying in push mode", async () => {
+    getScanJobMock.mockResolvedValue(scan());
+    scanDispatchModeMock.mockReturnValue("cloud-tasks");
+    scanDispatchConfigurationMock.mockReturnValue({
+      mode: "cloud-tasks",
+      configured: true,
+      missing: [],
+    });
+
+    const res = await POST(
+      new Request("http://test/api/scans/scan-1/retry") as never,
+      params()
+    );
+
+    expect(res.status).toBe(200);
+    expect(enqueueScanTaskMock).toHaveBeenCalledWith({
+      scanJobId: "scan-1",
+      reason: "scan_retried",
     });
   });
 
