@@ -6,9 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Input, Label, Select, FieldHint } from "@/components/ui/Input";
 import { A11ySettingsPanel } from "@/components/accessibility/A11ySettingsPanel";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
-import { Bell, Palette, User } from "lucide-react";
+import { Bell, Languages, Palette, User } from "lucide-react";
 import { updateWorkspaceAction } from "@/lib/server/workspace-actions";
 import { NotificationAvailability } from "./notification-availability";
+import { LanguageSettings } from "@/components/i18n/LanguageSettings";
 
 export interface SettingsWorkspace {
   name: string;
@@ -40,6 +41,7 @@ export function SettingsClient({
         <TabsList className="flex-wrap">
           <TabsTrigger value="workspace"><User className="size-4 mr-1.5" aria-hidden />Workspace</TabsTrigger>
           <TabsTrigger value="notifications"><Bell className="size-4 mr-1.5" aria-hidden />Notifications</TabsTrigger>
+          <TabsTrigger value="language"><Languages className="size-4 mr-1.5" aria-hidden />Language</TabsTrigger>
           <TabsTrigger value="accessibility"><Palette className="size-4 mr-1.5" aria-hidden />Accessibility</TabsTrigger>
         </TabsList>
 
@@ -153,6 +155,10 @@ export function SettingsClient({
 
         <TabsContent value="notifications">
           <NotificationAvailability />
+        </TabsContent>
+
+        <TabsContent value="language">
+          <LanguageSettings />
         </TabsContent>
 
         <TabsContent value="accessibility">

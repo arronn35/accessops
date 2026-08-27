@@ -1,8 +1,12 @@
 import type { Metadata } from "next";
+import { cookies } from "next/headers";
 import { Archivo, Caveat, IBM_Plex_Mono } from "next/font/google";
 import "./globals.css";
 import { A11yProvider } from "@/components/accessibility/A11yProvider";
 import { SkipToContent } from "@/components/accessibility/SkipToContent";
+import { LanguageProvider } from "@/components/i18n/LanguageProvider";
+import { LOCALE_COOKIE_NAME, normalizeLocale } from "@/lib/i18n/config";
+import type { TranslationCatalog } from "@/lib/i18n/runtime";
 
 /**
  * Type system: a heavy grotesk for everything structural, mono for
@@ -50,20 +54,27 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
+  const locale = normalizeLocale((await cookies()).get(LOCALE_COOKIE_NAME)?.value);
+  const initialCatalog: TranslationCatalog | null = locale === "tr"
+    ? (await import("@/lib/i18n/translations.tr.json")).default
+    : null;
+
   return (
     <html
-      lang="en"
+      lang={locale}
       className={`h-full antialiased ${archivo.variable} ${plexMono.variable} ${caveat.variable}`}
       suppressHydrationWarning
     >
       <body className="min-h-full flex flex-col">
-        <A11yProvider>
-          <SkipToContent />
-          {children}
-        </A11yProvider>
+        <LanguageProvider initialLocale={locale} initialCatalog={initialCatalog}>
+          <A11yProvider>
+            <SkipToContent />
+            {children}
+          </A11yProvider>
+        </LanguageProvider>
       </body>
     </html>
   );

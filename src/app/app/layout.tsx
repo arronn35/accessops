@@ -6,6 +6,7 @@ import { AppRoutePrefetcher } from "@/components/nav/AppRoutePrefetcher";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { isFirestoreQuotaError } from "@/lib/data/firestore-errors";
 import { AppServiceUnavailable } from "@/components/app/AppServiceUnavailable";
+import { AccountLocaleSync } from "@/components/i18n/AccountLocaleSync";
 
 export default async function AppLayout({ children }: { children: ReactNode }) {
   let ctx: Awaited<ReturnType<typeof getCurrentWorkspaceOrRedirect>>;
@@ -18,6 +19,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
 
   return (
     <div className="flex min-h-screen w-full">
+      <AccountLocaleSync locale={ctx.user.locale} />
       <SideNav />
       <div className="flex-1 flex flex-col min-w-0">
         <TopNav

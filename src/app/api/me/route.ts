@@ -6,6 +6,7 @@ import { firestore } from "@/lib/firebase/admin";
 const BodySchema = z.object({
   name: z.string().trim().min(1).max(120).optional(),
   fullName: z.string().trim().max(160).optional(),
+  locale: z.enum(["en", "tr"]).optional(),
 });
 
 export async function PATCH(req: Request) {
@@ -13,14 +14,11 @@ export async function PATCH(req: Request) {
     const ctx = await requireSession();
     const parsed = BodySchema.safeParse(await req.json().catch(() => ({})));
     if (!parsed.success) throw new ApiError(400, "invalid_input");
-    await firestore().collection("users").doc(ctx.userId).set(
-      {
-        name: parsed.data.name,
-        fullName: parsed.data.fullName || null,
-        updatedAt: new Date(),
-      },
-      { merge: true }
-    );
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (parsed.data.name !== undefined) update.name = parsed.data.name;
+    if (parsed.data.fullName !== undefined) update.fullName = parsed.data.fullName || null;
+    if (parsed.data.locale !== undefined) update.locale = parsed.data.locale;
+    await firestore().collection("users").doc(ctx.userId).set(update, { merge: true });
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,

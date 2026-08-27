@@ -43,6 +43,7 @@ export interface User {
   emailVerified: Date | null;
   image: string | null;
   fullName?: string | null;
+  locale?: "en" | "tr" | null;
   currentWorkspaceId?: string | null;
   createdAt: Date;
   updatedAt: Date;
