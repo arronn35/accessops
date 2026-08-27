@@ -8,7 +8,7 @@ import { SeverityBadge } from "@/components/scan/SeverityBadge";
 import { WcagBadge } from "@/components/scan/WcagBadge";
 import { HumanReviewBanner } from "@/components/compliance/HumanReviewBanner";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
-import { getIssue, getScanJob, getVisualEvidenceForIssue, listScanPages } from "@/lib/data/firestore";
+import { getIssue, getLatestAiExplanationForIssue, getScanJob, getVisualEvidenceForIssue, listScanPages } from "@/lib/data/firestore";
 import { AiExplanationPanel } from "./ai-panel";
 import { IssueActions } from "./issue-actions";
 import { IssueEvidenceImage } from "./issue-evidence-image";
@@ -30,6 +30,21 @@ export default async function IssueDetailPage({
     getVisualEvidenceForIssue(ctx.workspace.id, issueId),
   ]);
   if (!scan || !issue) notFound();
+  const aiEnabled = Boolean(ctx.privacy.aiProcessingEnabled && scan.aiExplanationsEnabled);
+  const storedAi = aiEnabled
+    ? await getLatestAiExplanationForIssue(ctx.workspace.id, issueId)
+    : null;
+  const initialAi = storedAi
+    ? {
+        explanationPlain: storedAi.explanationPlain,
+        remediationSummary: storedAi.remediationSummary ?? null,
+        codeFixExample: storedAi.codeFixExample ?? null,
+        verification: storedAi.verification ?? null,
+        framework: storedAi.framework,
+        modelProvider: storedAi.modelProvider,
+        createdAt: storedAi.createdAt.toISOString(),
+      }
+    : null;
   const page = issue.scanPageId ? pages.find((item) => item.id === issue.scanPageId) : null;
   const level = issue.wcagTagsJson.includes("wcag2aaa")
     ? "AAA"
@@ -107,10 +122,8 @@ export default async function IssueDetailPage({
           <AiExplanationPanel
             scanId={id}
             issueId={issueId}
-            initial={null}
-            aiEnabled={Boolean(
-              ctx.privacy.aiProcessingEnabled && scan.aiExplanationsEnabled
-            )}
+            initial={initialAi}
+            aiEnabled={aiEnabled}
             htmlSnippet={issue.htmlSnippet}
           />
           {issue.humanReviewRequired && <HumanReviewBanner />}

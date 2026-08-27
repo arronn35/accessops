@@ -32,6 +32,11 @@ service cloud.firestore {
     // scheduler), so they stay denied here. Add a read rule only if a realtime
     // client view of monitors is ever introduced.
 
+    // Persisted AI output (workspaces/{ws}/aiExplanations/{id} and
+    // workspaces/{ws}/aiAssistantResults/{scanId}) is likewise server-only:
+    // written by the AI routes and read by server components via Admin SDK.
+    // No client rule is granted.
+
     // Everything else is denied to clients (no catch-all allow).
   }
 }

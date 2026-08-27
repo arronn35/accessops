@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { explainIssue, AiUnavailableError, DEFAULT_AI_MODEL } from "./explain";
+import { explainIssue, AiRequestError, AiUnavailableError, DEFAULT_AI_MODEL } from "./explain";
 
 const ISSUE_INPUT = {
   ruleId: "button-name",
@@ -25,7 +25,22 @@ function completedBody(explanationPlain = "Add an accessible name.") {
     status: "completed",
     error: null,
     incomplete_details: null,
-    output_text: JSON.stringify({ explanationPlain }),
+    output_text: JSON.stringify({
+      explanationPlain,
+      remediationSummary: "Add a durable accessible name in the shared component.",
+      codeFixExample: '<button aria-label="Save"></button>',
+      verification: "Re-run the scan and test the control with a screen reader.",
+      clientFriendlyExplanation: "The control needs a name that assistive technology can announce.",
+      reactFix: '<Button aria-label="Save" />',
+      projectGuidance: {
+        summary: "Fix the shared unlabeled-button pattern.",
+        priority: "Address the shared component first.",
+        whyItMatters: "Users need to understand the control before activating it.",
+        recommendedSteps: ["Update the shared component."],
+        readerNotes: ["Review the generated code before applying it."],
+        verificationSteps: ["Re-run the scan."],
+      },
+    }),
   };
 }
 
@@ -34,14 +49,17 @@ describe("explainIssue", () => {
   let originalMock: string | undefined;
   let originalTimeout: string | undefined;
   let originalBackoff: string | undefined;
+  let originalMaxTokens: string | undefined;
   beforeEach(() => {
     originalKey = process.env.OPENAI_API_KEY;
     originalMock = process.env.AI_MOCK_ENABLED;
     originalTimeout = process.env.OPENAI_REQUEST_TIMEOUT_MS;
     originalBackoff = process.env.OPENAI_RETRY_BACKOFF_MS;
+    originalMaxTokens = process.env.OPENAI_MAX_OUTPUT_TOKENS;
     delete process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_REQUEST_TIMEOUT_MS;
     delete process.env.OPENAI_RETRY_BACKOFF_MS;
+    delete process.env.OPENAI_MAX_OUTPUT_TOKENS;
     vi.stubEnv("NODE_ENV", "test");
     vi.spyOn(console, "error").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
@@ -58,6 +76,8 @@ describe("explainIssue", () => {
     else process.env.OPENAI_REQUEST_TIMEOUT_MS = originalTimeout;
     if (originalBackoff === undefined) delete process.env.OPENAI_RETRY_BACKOFF_MS;
     else process.env.OPENAI_RETRY_BACKOFF_MS = originalBackoff;
+    if (originalMaxTokens === undefined) delete process.env.OPENAI_MAX_OUTPUT_TOKENS;
+    else process.env.OPENAI_MAX_OUTPUT_TOKENS = originalMaxTokens;
   });
 
   it("returns a mock explanation when no key is set and AI_MOCK_ENABLED=true", async () => {
@@ -141,11 +161,65 @@ describe("explainIssue", () => {
     expect(out.projectGuidance?.summary).toMatch(/scan-1/);
     const requestInit = fetchMock.mock.calls[0]?.[1] as RequestInit;
     const body = JSON.parse(String(requestInit.body));
-    expect(body.max_output_tokens).toBe(900);
+    expect(body.max_output_tokens).toBe(4096);
+    // Mode "issue" (default): codeFixExample is requested, reactFix is not.
+    const schema = body.text.format.schema;
+    expect(schema.required).toContain("codeFixExample");
+    expect(schema.required).not.toContain("reactFix");
+    expect(schema.required).not.toContain("clientFriendlyExplanation");
+    expect(Object.keys(schema.properties)).toEqual(schema.required);
     const userContent = body.input[1].content as string;
     expect(userContent).toMatch(/Project folder: Storefront/);
     expect(userContent).toMatch(/Base the answer on the selected scan context/);
     expect(userContent).toMatch(/projectGuidance/);
+  });
+
+  it("requests only mode-relevant fields in the structured output schema", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_MOCK_ENABLED = "false";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => providerResponse(completedBody()));
+
+    await explainIssue({ ...ISSUE_INPUT, mode: "client" });
+    let schema = JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).text
+      .format.schema;
+    expect(schema.required).toContain("clientFriendlyExplanation");
+    expect(schema.required).not.toContain("codeFixExample");
+    expect(schema.required).not.toContain("reactFix");
+
+    await explainIssue({ ...ISSUE_INPUT, mode: "react" });
+    schema = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)).text
+      .format.schema;
+    expect(schema.required).toContain("reactFix");
+    expect(schema.required).toContain("codeFixExample");
+
+    await explainIssue({ ...ISSUE_INPUT, mode: "test" });
+    schema = JSON.parse(String((fetchMock.mock.calls[2]?.[1] as RequestInit).body)).text
+      .format.schema;
+    expect(schema.required).not.toContain("codeFixExample");
+    expect(schema.required).toContain("projectGuidance");
+  });
+
+  it("clamps the OPENAI_MAX_OUTPUT_TOKENS budget into the supported range", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_MOCK_ENABLED = "false";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async () => providerResponse(completedBody()));
+
+    process.env.OPENAI_MAX_OUTPUT_TOKENS = "99999";
+    await explainIssue(ISSUE_INPUT);
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[0]?.[1] as RequestInit).body)).max_output_tokens
+    ).toBe(16384);
+
+    process.env.OPENAI_MAX_OUTPUT_TOKENS = "10";
+    await explainIssue(ISSUE_INPUT);
+    expect(
+      JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit).body)).max_output_tokens
+    ).toBe(1024);
+    delete process.env.OPENAI_MAX_OUTPUT_TOKENS;
   });
 
   it("aborts timed-out requests and stops after two attempts", async () => {
@@ -171,8 +245,8 @@ describe("explainIssue", () => {
     );
 
     const result = expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
-      name: "AiUnavailableError",
-      message: "AI request failed. Please try again later.",
+      name: "AiRequestError",
+      code: "ai_timeout",
     });
     await vi.advanceTimersByTimeAsync(1_000);
     await vi.advanceTimersByTimeAsync(25);
@@ -221,9 +295,32 @@ describe("explainIssue", () => {
         )
       );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
-    );
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_provider_error",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces repeated provider 429s as ai_rate_limited with retry guidance", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_MOCK_ENABLED = "false";
+    process.env.OPENAI_RETRY_BACKOFF_MS = "25";
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        providerResponse(
+          { error: { message: "quota" } },
+          429,
+          { "retry-after": "2" }
+        )
+      );
+
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_rate_limited",
+      retryAfterMs: 1000,
+    });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -240,8 +337,8 @@ describe("explainIssue", () => {
       );
 
     await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
-      name: "AiUnavailableError",
-      message: "AI request failed. Please try again later.",
+      name: "AiRequestError",
+      code: "ai_provider_error",
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(
@@ -249,25 +346,40 @@ describe("explainIssue", () => {
     );
   });
 
-  it.each([
-    {
-      status: "incomplete",
-      incomplete_details: { reason: "max_output_tokens" },
-    },
-    { status: "failed", error: null },
-  ])("rejects non-completed provider responses: %j", async (state) => {
+  it("retries a truncated (incomplete) provider response once, then fails with ai_incomplete", async () => {
     process.env.OPENAI_API_KEY = "test-key";
     process.env.AI_MOCK_ENABLED = "false";
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    process.env.OPENAI_RETRY_BACKOFF_MS = "25";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
       providerResponse({
-        ...state,
+        status: "incomplete",
+        incomplete_details: { reason: "max_output_tokens" },
         output_text: JSON.stringify({ explanationPlain: "Do not use this." }),
       })
     );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_incomplete",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects a failed provider response without retrying", async () => {
+    process.env.OPENAI_API_KEY = "test-key";
+    process.env.AI_MOCK_ENABLED = "false";
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      providerResponse({
+        status: "failed",
+        error: null,
+        output_text: JSON.stringify({ explanationPlain: "Do not use this." }),
+      })
     );
+
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_bad_response",
+    });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -281,9 +393,10 @@ describe("explainIssue", () => {
       })
     );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
-    );
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_bad_response",
+    });
   });
 
   it("rejects refusal content instead of treating it as output text", async () => {
@@ -308,9 +421,10 @@ describe("explainIssue", () => {
       })
     );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
-    );
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_refused",
+    });
   });
 
   it("rejects completed responses with no output text", async () => {
@@ -325,9 +439,10 @@ describe("explainIssue", () => {
       })
     );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
-    );
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_bad_response",
+    });
   });
 
   it("rejects structured output with an empty explanationPlain", async () => {
@@ -337,9 +452,10 @@ describe("explainIssue", () => {
       providerResponse(completedBody("   "))
     );
 
-    await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-      AiUnavailableError
-    );
+    await expect(explainIssue(ISSUE_INPUT)).rejects.toMatchObject({
+      name: "AiRequestError",
+      code: "ai_bad_response",
+    });
   });
 
   it("never enables mock output in production", async () => {
@@ -369,7 +485,7 @@ describe("explainIssue", () => {
         );
 
       await expect(explainIssue(ISSUE_INPUT)).rejects.toBeInstanceOf(
-        AiUnavailableError
+        AiRequestError
       );
       expect(fetchMock).toHaveBeenCalledTimes(status === 503 ? 2 : 1);
       expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(

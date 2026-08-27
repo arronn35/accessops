@@ -37,6 +37,8 @@ import {
 } from "./page-jobs";
 import type {
   AccessibilityIssue,
+  AiAssistantResultRecord,
+  AiExplanationRecord,
   AuditLog,
   IssueGroup,
   Monitor,
@@ -2146,6 +2148,159 @@ export async function deleteRemediationTask(
   if (!existing) return false;
   await remediationDoc(workspaceId, taskId).delete();
   return true;
+}
+
+// ---------------------------------------------------------------------------
+// Persisted AI output. Both collections live under the workspace and are
+// keyed deterministically so regenerating overwrites the previous result
+// instead of accumulating paid-for history. Server-only (Admin SDK).
+// ---------------------------------------------------------------------------
+
+function aiExplanationsCollection(workspaceId: string) {
+  return db()
+    .collection("workspaces")
+    .doc(workspaceId)
+    .collection("aiExplanations");
+}
+
+/** Doc ids must stay Firestore-path-safe; frameworks come from enum values. */
+function aiExplanationDocId(issueId: string, framework: string): string {
+  return `${issueId}_${framework.replace(/[^A-Za-z0-9_-]/g, "_")}`;
+}
+
+export async function getAiExplanation(
+  workspaceId: string,
+  issueId: string,
+  framework: string
+): Promise<AiExplanationRecord | null> {
+  return getDoc<AiExplanationRecord>(
+    aiExplanationsCollection(workspaceId).doc(aiExplanationDocId(issueId, framework))
+  );
+}
+
+/**
+ * Most recently stored explanation for an issue, regardless of framework.
+ * The issue detail page renders this as the initial AI card so revisiting
+ * the page does not require a new paid generation.
+ */
+export async function getLatestAiExplanationForIssue(
+  workspaceId: string,
+  issueId: string
+): Promise<AiExplanationRecord | null> {
+  const snap = await aiExplanationsCollection(workspaceId)
+    .where("issueId", "==", issueId)
+    .limit(10)
+    .get();
+  const records = snap.docs
+    .map((d) => readDoc<AiExplanationRecord>(d.id, d.data())!)
+    .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  return records[0] ?? null;
+}
+
+export async function saveAiExplanation(
+  workspaceId: string,
+  input: {
+    scanJobId: string;
+    issueId: string;
+    framework: string;
+    mode: string;
+    createdBy: string;
+    payload: Omit<
+      AiExplanationRecord,
+      | "id"
+      | "workspaceId"
+      | "scanJobId"
+      | "issueId"
+      | "framework"
+      | "mode"
+      | "createdBy"
+      | "createdAt"
+    >;
+  }
+): Promise<AiExplanationRecord> {
+  const docId = aiExplanationDocId(input.issueId, input.framework);
+  const row: AiExplanationRecord = {
+    ...input.payload,
+    id: docId,
+    workspaceId,
+    scanJobId: input.scanJobId,
+    issueId: input.issueId,
+    framework: input.framework,
+    mode: input.mode,
+    createdBy: input.createdBy,
+    createdAt: now(),
+  };
+  await aiExplanationsCollection(workspaceId)
+    .doc(docId)
+    .set(stripUndefined(row as unknown as Record<string, unknown>));
+  return row;
+}
+
+function aiAssistantResultsCollection(workspaceId: string) {
+  return db()
+    .collection("workspaces")
+    .doc(workspaceId)
+    .collection("aiAssistantResults");
+}
+
+export async function saveAssistantResult(
+  workspaceId: string,
+  input: {
+    scanJobId: string;
+    preset: string;
+    framework: string;
+    primaryIssueSnippet: string | null;
+    createdBy: string;
+    payload: Omit<
+      AiAssistantResultRecord,
+      | "id"
+      | "workspaceId"
+      | "scanJobId"
+      | "preset"
+      | "framework"
+      | "primaryIssueSnippet"
+      | "createdBy"
+      | "createdAt"
+    >;
+  }
+): Promise<AiAssistantResultRecord> {
+  const row: AiAssistantResultRecord = {
+    ...input.payload,
+    id: input.scanJobId,
+    workspaceId,
+    scanJobId: input.scanJobId,
+    preset: input.preset,
+    framework: input.framework,
+    primaryIssueSnippet: input.primaryIssueSnippet,
+    createdBy: input.createdBy,
+    createdAt: now(),
+  };
+  await aiAssistantResultsCollection(workspaceId)
+    .doc(input.scanJobId)
+    .set(stripUndefined(row as unknown as Record<string, unknown>));
+  return row;
+}
+
+/**
+ * Latest assistant results for a set of scans, keyed by scan id. Used by the
+ * AI Assistant page to restore the last generated plan per scan without
+ * burning a new paid generation on every visit.
+ */
+export async function getLatestAssistantResults(
+  workspaceId: string,
+  scanIds: readonly string[]
+): Promise<Record<string, AiAssistantResultRecord>> {
+  const out: Record<string, AiAssistantResultRecord> = {};
+  const refs = scanIds.map((scanId) =>
+    aiAssistantResultsCollection(workspaceId).doc(scanId)
+  );
+  if (refs.length === 0) return out;
+  const snaps = await db().getAll(...refs);
+  for (const snap of snaps) {
+    const record = readDoc<AiAssistantResultRecord>(snap.id, snap.data());
+    if (record) out[snap.id] = record;
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

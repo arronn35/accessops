@@ -8,6 +8,18 @@
  *   4. System prompt forbids legal-compliance claims and overlay endorsement.
  *   5. Output is post-processed against a forbidden-claims list.
  *   6. Mock output is allowed only outside production and when AI_MOCK_ENABLED.
+ *
+ * Reliability rules:
+ *   - The structured-output schema is mode-aware: only the fields a mode can
+ *     consume are requested, so the model never burns its token budget on
+ *     fields the UI will discard.
+ *   - The output token budget is configurable via OPENAI_MAX_OUTPUT_TOKENS
+ *     (bounded 1.024–16.384, default 4.096). The previous hardcoded 900 was
+ *     smaller than the full schema needs and caused frequent truncations.
+ *   - Provider failures surface as AiRequestError with a stable
+ *     machine-readable code; routes map codes to HTTP statuses and the UI
+ *     maps them to actionable messages. Missing configuration surfaces as
+ *     AiUnavailableError.
  */
 import { aiMockEnabled, isProduction } from "@/lib/config";
 
@@ -15,6 +27,29 @@ export class AiUnavailableError extends Error {
   constructor(message = "AI integration is unavailable.") {
     super(message);
     this.name = "AiUnavailableError";
+  }
+}
+
+/**
+ * Stable machine-readable codes for provider failures. API routes map these
+ * to HTTP responses and the UI maps them to user-facing messages — do not
+ * rename without updating both sides.
+ */
+export type AiErrorCode =
+  | "ai_timeout"
+  | "ai_rate_limited"
+  | "ai_refused"
+  | "ai_incomplete"
+  | "ai_bad_response"
+  | "ai_provider_error";
+
+export class AiRequestError extends Error {
+  constructor(
+    public readonly code: AiErrorCode,
+    public readonly retryAfterMs?: number
+  ) {
+    super(code);
+    this.name = "AiRequestError";
   }
 }
 
@@ -27,7 +62,9 @@ const MAX_REQUEST_TIMEOUT_MS = 120_000;
 const DEFAULT_RETRY_BACKOFF_MS = 250;
 const MIN_RETRY_BACKOFF_MS = 25;
 const MAX_RETRY_BACKOFF_MS = 1_000;
-const USER_SAFE_FAILURE_MESSAGE = "AI request failed. Please try again later.";
+const DEFAULT_MAX_OUTPUT_TOKENS = 4_096;
+const MIN_MAX_OUTPUT_TOKENS = 1_024;
+const MAX_MAX_OUTPUT_TOKENS = 16_384;
 
 type ProviderFailureKind =
   | "http"
@@ -47,6 +84,25 @@ class ProviderFailure extends Error {
   ) {
     super("AI provider request failed");
     this.name = "ProviderFailure";
+  }
+}
+
+function aiErrorCodeFromFailure(failure: ProviderFailure): AiErrorCode {
+  switch (failure.kind) {
+    case "timeout":
+      return "ai_timeout";
+    case "refusal":
+      return "ai_refused";
+    case "incomplete":
+      return "ai_incomplete";
+    case "invalid_response":
+    case "empty_output":
+      return "ai_bad_response";
+    case "http":
+      return failure.status === 429 ? "ai_rate_limited" : "ai_provider_error";
+    case "network":
+    default:
+      return "ai_provider_error";
   }
 }
 
@@ -74,6 +130,15 @@ const FORBIDDEN_PHRASES = [
   /\bcertified\b/gi,
 ];
 
+export type ExplainMode =
+  | "issue"
+  | "react"
+  | "client"
+  | "test"
+  | "html"
+  | "shopify"
+  | "wordpress";
+
 export interface ExplainInput {
   ruleId: string;
   description: string;
@@ -81,7 +146,7 @@ export interface ExplainInput {
   wcagTags: readonly string[];
   htmlSnippet?: string;
   framework?: string;
-  mode?: "issue" | "react" | "client" | "test" | "html" | "shopify" | "wordpress";
+  mode?: ExplainMode;
   userPrompt?: string;
   projectContext?: string;
 }
@@ -107,7 +172,65 @@ export interface ExplainOutput {
   model?: string;
 }
 
-function responseSchema() {
+/**
+ * Mode-aware field selection. Only the fields a mode can consume are added
+ * to the schema; strict structured outputs require every listed property to
+ * be required, so `required` is simply the list of included properties.
+ */
+function fieldsForMode(mode: ExplainMode): string[] {
+  const fields = ["explanationPlain", "remediationSummary"];
+  if (mode === "client") {
+    fields.push("clientFriendlyExplanation");
+  } else if (mode === "react") {
+    fields.push("codeFixExample", "reactFix");
+  } else if (mode !== "test") {
+    fields.push("codeFixExample");
+  }
+  fields.push("verification", "projectGuidance");
+  return fields;
+}
+
+function responseSchema(mode: ExplainMode) {
+  const allProperties: Record<string, unknown> = {
+    explanationPlain: { type: "string" },
+    remediationSummary: { type: "string" },
+    codeFixExample: { type: "string" },
+    verification: { type: "string" },
+    clientFriendlyExplanation: { type: "string" },
+    reactFix: { type: "string" },
+    projectGuidance: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        summary: { type: "string" },
+        priority: { type: "string" },
+        whyItMatters: { type: "string" },
+        recommendedSteps: {
+          type: "array",
+          items: { type: "string" },
+        },
+        readerNotes: {
+          type: "array",
+          items: { type: "string" },
+        },
+        verificationSteps: {
+          type: "array",
+          items: { type: "string" },
+        },
+      },
+      required: [
+        "summary",
+        "priority",
+        "whyItMatters",
+        "recommendedSteps",
+        "readerNotes",
+        "verificationSteps",
+      ],
+    },
+  };
+  const fields = fieldsForMode(mode);
+  const properties: Record<string, unknown> = {};
+  for (const field of fields) properties[field] = allProperties[field];
   return {
     type: "json_schema",
     name: "accessibility_explanation",
@@ -115,52 +238,8 @@ function responseSchema() {
     schema: {
       type: "object",
       additionalProperties: false,
-      properties: {
-        explanationPlain: { type: "string" },
-        remediationSummary: { type: "string" },
-        codeFixExample: { type: "string" },
-        verification: { type: "string" },
-        clientFriendlyExplanation: { type: "string" },
-        reactFix: { type: "string" },
-        projectGuidance: {
-          type: "object",
-          additionalProperties: false,
-          properties: {
-            summary: { type: "string" },
-            priority: { type: "string" },
-            whyItMatters: { type: "string" },
-            recommendedSteps: {
-              type: "array",
-              items: { type: "string" },
-            },
-            readerNotes: {
-              type: "array",
-              items: { type: "string" },
-            },
-            verificationSteps: {
-              type: "array",
-              items: { type: "string" },
-            },
-          },
-          required: [
-            "summary",
-            "priority",
-            "whyItMatters",
-            "recommendedSteps",
-            "readerNotes",
-            "verificationSteps",
-          ],
-        },
-      },
-      required: [
-        "explanationPlain",
-        "remediationSummary",
-        "codeFixExample",
-        "verification",
-        "clientFriendlyExplanation",
-        "reactFix",
-        "projectGuidance",
-      ],
+      properties,
+      required: fields,
     },
   };
 }
@@ -170,7 +249,9 @@ function stringArray(value: unknown): string[] {
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
-function parseStructured(raw: string): Omit<ExplainOutput, "modelProvider" | "model"> {
+type ParsedExplainOutput = Omit<ExplainOutput, "modelProvider" | "model">;
+
+function parseStructured(raw: string): ParsedExplainOutput | null {
   const stripped = raw.replace(/```(?:json)?/gi, "").trim();
   const start = stripped.indexOf("{");
   const end = stripped.lastIndexOf("}");
@@ -196,10 +277,10 @@ function parseStructured(raw: string): Omit<ExplainOutput, "modelProvider" | "mo
           : undefined,
       });
     } catch {
-      // fall through to plain-text handling
+      return null;
     }
   }
-  return sanitizeOutput({ explanationPlain: stripped });
+  return null;
 }
 
 function sanitizeOutput(
@@ -209,10 +290,12 @@ function sanitizeOutput(
     ...out,
     explanationPlain: sanitize(out.explanationPlain),
     remediationSummary: out.remediationSummary ? sanitize(out.remediationSummary) : undefined,
+    codeFixExample: out.codeFixExample ? sanitize(out.codeFixExample) : undefined,
     verification: out.verification ? sanitize(out.verification) : undefined,
     clientFriendlyExplanation: out.clientFriendlyExplanation
       ? sanitize(out.clientFriendlyExplanation)
       : undefined,
+    reactFix: out.reactFix ? sanitize(out.reactFix) : undefined,
     projectGuidance: out.projectGuidance
       ? {
           summary: sanitize(out.projectGuidance.summary),
@@ -268,7 +351,7 @@ function mockExplanation(input: ExplainInput): ExplainOutput {
   };
 }
 
-function boundedEnvMs(
+function boundedEnvInt(
   name: string,
   fallback: number,
   minimum: number,
@@ -280,7 +363,7 @@ function boundedEnvMs(
 }
 
 function requestTimeoutMs(): number {
-  return boundedEnvMs(
+  return boundedEnvInt(
     "OPENAI_REQUEST_TIMEOUT_MS",
     DEFAULT_REQUEST_TIMEOUT_MS,
     MIN_REQUEST_TIMEOUT_MS,
@@ -289,11 +372,20 @@ function requestTimeoutMs(): number {
 }
 
 function retryBackoffMs(): number {
-  return boundedEnvMs(
+  return boundedEnvInt(
     "OPENAI_RETRY_BACKOFF_MS",
     DEFAULT_RETRY_BACKOFF_MS,
     MIN_RETRY_BACKOFF_MS,
     MAX_RETRY_BACKOFF_MS
+  );
+}
+
+function outputTokenBudget(): number {
+  return boundedEnvInt(
+    "OPENAI_MAX_OUTPUT_TOKENS",
+    DEFAULT_MAX_OUTPUT_TOKENS,
+    MIN_MAX_OUTPUT_TOKENS,
+    MAX_MAX_OUTPUT_TOKENS
   );
 }
 
@@ -326,18 +418,20 @@ function normalizeProviderFailure(err: unknown, timedOut: boolean): ProviderFail
 async function requestOpenAi(
   key: string,
   model: string,
-  prompt: string
-): Promise<unknown> {
+  prompt: string,
+  mode: ExplainMode
+): Promise<Omit<ExplainOutput, "modelProvider" | "model">> {
   const requestBody = JSON.stringify({
     model,
     input: [
       { role: "system", content: SYSTEM_PROMPT },
       { role: "user", content: prompt },
     ],
-    text: { format: responseSchema() },
-    max_output_tokens: 900,
+    text: { format: responseSchema(mode) },
+    max_output_tokens: outputTokenBudget(),
   });
 
+  let failure: ProviderFailure = new ProviderFailure("invalid_response", false);
   for (let attempt = 1; attempt <= MAX_PROVIDER_ATTEMPTS; attempt += 1) {
     const controller = new AbortController();
     let timedOut = false;
@@ -345,7 +439,6 @@ async function requestOpenAi(
       timedOut = true;
       controller.abort();
     }, requestTimeoutMs());
-    let failure: ProviderFailure | null = null;
 
     try {
       const response = await fetch(OPENAI_RESPONSES_URL, {
@@ -366,7 +459,14 @@ async function requestOpenAi(
           retryAfterMs(response.headers)
         );
       } else {
-        return body;
+        try {
+          return validateProviderOutput(body, mode);
+        } catch (err) {
+          failure =
+            err instanceof ProviderFailure
+              ? err
+              : new ProviderFailure("invalid_response", false);
+        }
       }
     } catch (err) {
       failure = normalizeProviderFailure(err, timedOut);
@@ -374,9 +474,6 @@ async function requestOpenAi(
       clearTimeout(timeout);
     }
 
-    if (!failure) {
-      throw new ProviderFailure("invalid_response", false);
-    }
     if (!failure.retryable || attempt === MAX_PROVIDER_ATTEMPTS) {
       throw failure;
     }
@@ -391,7 +488,7 @@ async function requestOpenAi(
     await sleep(delayMs);
   }
 
-  throw new ProviderFailure("invalid_response", false);
+  throw failure;
 }
 
 function objectRecord(value: unknown): Record<string, unknown> | null {
@@ -415,14 +512,20 @@ function containsRefusal(body: Record<string, unknown>): boolean {
 }
 
 function validateProviderOutput(
-  bodyValue: unknown
+  bodyValue: unknown,
+  mode: ExplainMode
 ): Omit<ExplainOutput, "modelProvider" | "model"> {
   const body = objectRecord(bodyValue);
   if (!body || body.error != null) {
     throw new ProviderFailure("invalid_response", false);
   }
-  if (body.status !== "completed" || body.incomplete_details != null) {
-    throw new ProviderFailure("incomplete", false);
+  if (body.status === "incomplete" || body.incomplete_details != null) {
+    // Truncated outputs are worth one retry: transient provider conditions
+    // can cut a response short even when the token budget is sufficient.
+    throw new ProviderFailure("incomplete", true);
+  }
+  if (body.status !== "completed") {
+    throw new ProviderFailure("invalid_response", false);
   }
   if (containsRefusal(body)) {
     throw new ProviderFailure("refusal", false);
@@ -433,10 +536,32 @@ function validateProviderOutput(
     throw new ProviderFailure("empty_output", false);
   }
   const parsed = parseStructured(raw);
-  if (!parsed.explanationPlain.trim()) {
-    throw new ProviderFailure("empty_output", false);
+  if (!parsed || !hasCompleteModeOutput(parsed, mode)) {
+    throw new ProviderFailure("invalid_response", false);
   }
   return parsed;
+}
+
+function hasCompleteModeOutput(
+  output: ParsedExplainOutput,
+  mode: ExplainMode
+): boolean {
+  const values = output as Record<string, unknown>;
+  for (const field of fieldsForMode(mode)) {
+    if (field === "projectGuidance") continue;
+    const value = values[field];
+    if (typeof value !== "string" || !value.trim()) return false;
+  }
+
+  const guidance = output.projectGuidance;
+  return Boolean(
+    guidance?.summary.trim() &&
+      guidance.priority.trim() &&
+      guidance.whyItMatters.trim() &&
+      guidance.recommendedSteps.length > 0 &&
+      Array.isArray(guidance.readerNotes) &&
+      guidance.verificationSteps.length > 0
+  );
 }
 
 export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> {
@@ -447,9 +572,10 @@ export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> 
     throw new AiUnavailableError();
   }
 
+  const mode = input.mode ?? "issue";
   const snippet = input.htmlSnippet?.slice(0, 2048) ?? "";
   const prompt = [
-    `Mode: ${input.mode ?? "issue"}`,
+    `Mode: ${mode}`,
     `Target framework: ${input.framework ?? "React / Next.js"}`,
     `Rule: ${input.ruleId}`,
     `WCAG tags: ${input.wcagTags.join(", ") || "none"}`,
@@ -464,16 +590,25 @@ export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> 
     "- Write projectGuidance for a mixed audience: client/product reader first, developer action second.",
     "- Put raw code only in codeFixExample/reactFix; keep projectGuidance concise, scannable, and outcome-focused.",
     "- Make recommendedSteps and verificationSteps specific to the selected scan's top issues, pages, and root-cause groups.",
+    mode === "test"
+      ? "- Put the requested test checklist into projectGuidance.verificationSteps as concrete, executable checks."
+      : null,
     "",
-    "Return a JSON object with: explanationPlain, remediationSummary, codeFixExample, verification, clientFriendlyExplanation, reactFix, and projectGuidance { summary, priority, whyItMatters, recommendedSteps, readerNotes, verificationSteps }.",
+    `Return a JSON object with: ${fieldsForMode(mode)
+      .map((field) =>
+        field === "projectGuidance"
+          ? "projectGuidance { summary, priority, whyItMatters, recommendedSteps, readerNotes, verificationSteps }"
+          : field
+      )
+      .join(", ")}.`,
   ]
     .filter(Boolean)
     .join("\n");
 
   try {
-    const body = await requestOpenAi(key, model, prompt);
+    const output = await requestOpenAi(key, model, prompt, mode);
     return {
-      ...validateProviderOutput(body),
+      ...output,
       modelProvider: "openai",
       model,
     };
@@ -491,7 +626,10 @@ export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> 
       return mockExplanation(input);
     }
     console.error("[ai] explainIssue failed", failure);
-    throw new AiUnavailableError(USER_SAFE_FAILURE_MESSAGE);
+    if (err instanceof ProviderFailure) {
+      throw new AiRequestError(aiErrorCodeFromFailure(err), err.retryAfterMs);
+    }
+    throw new AiRequestError("ai_provider_error");
   }
 }
 

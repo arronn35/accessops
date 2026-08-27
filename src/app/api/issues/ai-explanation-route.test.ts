@@ -9,6 +9,7 @@ const {
   getIssueMock,
   getPrivacySettingsMock,
   getScanJobMock,
+  saveAiExplanationMock,
 } = vi.hoisted(() => ({
   requireSessionMock: vi.fn(),
   checkRateLimitMock: vi.fn(),
@@ -18,6 +19,7 @@ const {
   getIssueMock: vi.fn(),
   getPrivacySettingsMock: vi.fn(),
   getScanJobMock: vi.fn(),
+  saveAiExplanationMock: vi.fn(),
 }));
 
 vi.mock("@/lib/api/context", () => {
@@ -61,7 +63,18 @@ vi.mock("@/lib/entitlements", () => ({
 
 vi.mock("@/lib/ai/explain", () => {
   class AiUnavailableError extends Error {}
+  class AiRequestError extends Error {
+    name = "AiRequestError";
+
+    constructor(
+      public readonly code: string,
+      public readonly retryAfterMs?: number
+    ) {
+      super(code);
+    }
+  }
   return {
+    AiRequestError,
     AiUnavailableError,
     explainIssue: explainIssueMock,
   };
@@ -72,9 +85,11 @@ vi.mock("@/lib/data/firestore", () => ({
   getIssue: getIssueMock,
   getPrivacySettings: getPrivacySettingsMock,
   getScanJob: getScanJobMock,
+  saveAiExplanation: saveAiExplanationMock,
 }));
 
 import { POST } from "./[id]/ai-explanation/route";
+import { AiRequestError } from "@/lib/ai/explain";
 
 const params = { params: Promise.resolve({ id: "issue-1" }) };
 
@@ -132,6 +147,9 @@ beforeEach(() => {
     codeFixExample: "<button aria-label=\"Save\"></button>",
     verification: "Re-run the scan.",
     modelProvider: "mock",
+  });
+  saveAiExplanationMock.mockResolvedValue({
+    createdAt: new Date("2026-08-26T12:00:00.000Z"),
   });
   auditMock.mockResolvedValue(undefined);
 });
@@ -300,6 +318,47 @@ describe("POST /api/issues/[id]/ai-explanation", () => {
           /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/
         ),
       },
+    });
+    expect(saveAiExplanationMock).toHaveBeenCalledWith("ws-1", {
+      scanJobId: "scan-1",
+      issueId: "issue-1",
+      framework: "react",
+      mode: "issue",
+      createdBy: "user-1",
+      payload: expect.objectContaining({ modelProvider: "mock" }),
+    });
+    await expect(res.json()).resolves.toMatchObject({
+      explanation: { createdAt: "2026-08-26T12:00:00.000Z" },
+      aiExplanation: { createdAt: "2026-08-26T12:00:00.000Z" },
+    });
+  });
+
+  it.each([
+    ["ai_timeout", 504],
+    ["ai_refused", 502],
+    ["ai_incomplete", 502],
+    ["ai_bad_response", 502],
+    ["ai_provider_error", 502],
+  ] as const)("maps %s provider failures to HTTP %i", async (code, status) => {
+    explainIssueMock.mockRejectedValue(new AiRequestError(code));
+
+    const res = await POST(request(validBody), params);
+
+    expect(res.status).toBe(status);
+    await expect(res.json()).resolves.toMatchObject({ error: code });
+    expect(saveAiExplanationMock).not.toHaveBeenCalled();
+  });
+
+  it("maps provider rate limits with retry guidance", async () => {
+    explainIssueMock.mockRejectedValue(new AiRequestError("ai_rate_limited", 2_000));
+
+    const res = await POST(request(validBody), params);
+
+    expect(res.status).toBe(429);
+    expect(res.headers.get("retry-after")).toBe("2");
+    await expect(res.json()).resolves.toMatchObject({
+      error: "ai_rate_limited",
+      retryAfterSeconds: 2,
     });
   });
 });

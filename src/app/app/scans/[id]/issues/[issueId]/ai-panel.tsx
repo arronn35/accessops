@@ -7,6 +7,7 @@ import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { CodeDiffBlock } from "@/components/ai/CodeDiffBlock";
+import { aiErrorToView, type AiErrorView } from "@/lib/ai/error-messages";
 
 interface InitialAi {
   explanationPlain: string;
@@ -32,10 +33,10 @@ export function AiExplanationPanel({
   htmlSnippet: string | null;
 }) {
   const [current, setCurrent] = useState(initial);
-  const [framework, setFramework] = useState<string>("react");
+  const [framework, setFramework] = useState<string>(initial?.framework || "react");
   const [outputAcknowledged, setOutputAcknowledged] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<AiErrorView | null>(null);
 
   async function generate() {
     if (!outputAcknowledged || !aiEnabled) return;
@@ -47,24 +48,17 @@ export function AiExplanationPanel({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ scanJobId: scanId, framework, consentChecked: true }),
       });
+      const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        if (body.error === "ai_disabled" || body.error === "ai_processing_disabled") {
-          setError(
-            "AI processing is disabled. Enable it in Privacy & Compliance Center."
-          );
-        } else if (body.error === "ai_disabled_for_scan") {
-          setError("AI explanations were turned off when this scan was started.");
-        } else if (body.error === "ai_unavailable") {
-          setError(
-            "AI integration is not configured for this deployment. Contact your workspace administrator."
-          );
-        } else {
-          setError(body.message ?? "Could not generate explanation.");
-        }
+        setError(
+          aiErrorToView(
+            typeof body.error === "string" ? body.error : "",
+            typeof body.retryAfterSeconds === "number" ? body.retryAfterSeconds : undefined
+          )
+        );
         return;
       }
-      const { aiExplanation } = await res.json();
+      const { aiExplanation } = body;
       setCurrent({
         explanationPlain: aiExplanation.explanationPlain,
         remediationSummary: aiExplanation.remediationSummary ?? null,
@@ -74,8 +68,8 @@ export function AiExplanationPanel({
         modelProvider: aiExplanation.modelProvider,
         createdAt: aiExplanation.createdAt,
       });
-    } catch (err) {
-      setError((err as Error).message);
+    } catch {
+      setError(aiErrorToView("network_error"));
     } finally {
       setLoading(false);
     }
@@ -145,8 +139,16 @@ export function AiExplanationPanel({
       </div>
 
       {error && (
-        <AlertCallout tone="danger" className="mb-3">
-          {error}
+        <AlertCallout tone="danger" title={error.title} className="mb-3">
+          {error.message}
+          {typeof error.action === "object" && (
+            <>
+              {" "}
+              <Link href={error.action.href} className="underline font-medium">
+                {error.action.label}
+              </Link>
+            </>
+          )}
         </AlertCallout>
       )}
 
@@ -225,11 +227,15 @@ function AiFixCard({
           {ai.codeFixExample && (
             <FixSection label="Remediation patch draft">
               <CodeDiffBlock
-                before={{
-                  label: "Failing HTML snippet",
-                  language: ai.framework === "react" ? "tsx" : "html",
-                  code: htmlSnippet || "",
-                }}
+                before={
+                  htmlSnippet
+                    ? {
+                        label: "Failing HTML snippet",
+                        language: ai.framework === "react" ? "tsx" : "html",
+                        code: htmlSnippet,
+                      }
+                    : undefined
+                }
                 after={{
                   label: `Suggested Fix${ai.framework ? ` (${ai.framework})` : ""}`,
                   language: ai.framework === "react" ? "tsx" : "html",

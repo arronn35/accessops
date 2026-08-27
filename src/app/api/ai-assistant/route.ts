@@ -1,7 +1,8 @@
 import { z } from "zod";
 import { apiError, ApiError, rateLimitError, requireSession } from "@/lib/api/context";
 import { checkRateLimit } from "@/lib/api/rate-limit";
-import { explainIssue, AiUnavailableError } from "@/lib/ai/explain";
+import { explainIssue, AiRequestError, AiUnavailableError } from "@/lib/ai/explain";
+import { aiRequestErrorResponse } from "@/lib/ai/error-messages";
 import { buildAiScanContext } from "@/lib/ai/scan-context";
 import type { AccessibilityIssue, IssueGroup, ScanPage } from "@/lib/data/types";
 import {
@@ -11,6 +12,7 @@ import {
   listIssueGroups,
   listIssues,
   listScanPages,
+  saveAssistantResult,
 } from "@/lib/data/firestore";
 import { roleHasPermission } from "@/lib/entitlements";
 
@@ -58,6 +60,16 @@ export async function POST(req: Request) {
       projectContext: buildAiScanContext({ scan, issues, pages, groups }),
     });
 
+    const primaryIssueSnippet = primaryIssue?.htmlSnippet ?? null;
+    const stored = await saveAssistantResult(ctx.workspaceId, {
+      scanJobId: scan.id,
+      preset: parsed.data.preset,
+      framework: parsed.data.framework,
+      primaryIssueSnippet,
+      createdBy: ctx.userId,
+      payload: result,
+    });
+
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
@@ -66,10 +78,21 @@ export async function POST(req: Request) {
       resourceId: scan.id,
       metadata: { preset: parsed.data.preset, model: result.model ?? null, scanJobId: scan.id },
     });
-    return Response.json({ result });
+    return Response.json({
+      result: {
+        ...result,
+        preset: stored.preset,
+        framework: stored.framework,
+        primaryIssueSnippet: stored.primaryIssueSnippet,
+        createdAt: stored.createdAt.toISOString(),
+      },
+    });
   } catch (err) {
     if (err instanceof AiUnavailableError) {
       return Response.json({ error: "ai_unavailable", message: err.message }, { status: 503 });
+    }
+    if (err instanceof AiRequestError) {
+      return aiRequestErrorResponse(err);
     }
     return apiError(err);
   }

@@ -16,13 +16,13 @@ export function CodeDiffBlock({
   after,
   className,
 }: {
-  before: Omit<CodeBlock, "tone">;
+  before?: Omit<CodeBlock, "tone">;
   after: Omit<CodeBlock, "tone">;
   className?: string;
 }) {
   return (
-    <div className={cn("grid gap-3 md:grid-cols-2", className)}>
-      <CodePanel block={{ ...before, tone: "before" }} />
+    <div className={cn("grid gap-3", before && "md:grid-cols-2", className)}>
+      {before && <CodePanel block={{ ...before, tone: "before" }} />}
       <CodePanel block={{ ...after, tone: "after" }} />
     </div>
   );

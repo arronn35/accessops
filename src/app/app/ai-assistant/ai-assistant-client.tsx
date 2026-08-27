@@ -1,12 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useMemo, useState } from "react";
 import {
+  CheckCircle2,
   Code2,
   FileText,
   FlaskConical,
-  Globe,
-  ListChecks,
+  Loader2,
   MessageCircle,
   PlusCircle,
   Send,
@@ -14,13 +15,14 @@ import {
   Sparkles,
   X,
 } from "lucide-react";
-import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { CodeDiffBlock } from "@/components/ai/CodeDiffBlock";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { aiErrorToView, type AiErrorView } from "@/lib/ai/error-messages";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
-import { cn } from "@/lib/utils";
+import { cn, formatRelative } from "@/lib/utils";
 
 export interface AssistantScan {
   id: string;
@@ -32,26 +34,7 @@ export interface AssistantScan {
   storeScreenshots: boolean;
 }
 
-const PRESETS = [
-  { id: "react", label: "Generate React fix", icon: Code2 },
-  { id: "html", label: "Generate HTML / CSS fix", icon: Code2 },
-  { id: "shopify", label: "Generate Shopify Liquid fix", icon: Code2 },
-  { id: "wordpress", label: "WordPress guidance", icon: FileText },
-  { id: "test", label: "Generate test checklist", icon: FlaskConical },
-  { id: "explain", label: "Explain issue in plain language", icon: MessageCircle },
-  { id: "client", label: "Draft client-friendly explanation", icon: MessageCircle },
-] as const;
-
-const FRAMEWORKS = [
-  { id: "react", label: "React / Next.js" },
-  { id: "html", label: "HTML / CSS" },
-  { id: "shopify", label: "Shopify Liquid" },
-  { id: "wordpress", label: "WordPress" },
-  { id: "webflow", label: "Webflow" },
-  { id: "framer", label: "Framer" },
-];
-
-interface AiResult {
+export interface AssistantResult {
   explanationPlain: string;
   remediationSummary?: string;
   codeFixExample?: string;
@@ -68,44 +51,71 @@ interface AiResult {
   };
   modelProvider?: string;
   model?: string;
+  preset?: string;
+  framework?: string;
+  /** Failing HTML of the targeted issue, returned for the diff "before" panel. */
+  primaryIssueSnippet?: string | null;
+  createdAt?: string;
 }
+
+const PRESETS = [
+  { id: "react", label: "Generate React fix", icon: Code2 },
+  { id: "html", label: "Generate HTML / CSS fix", icon: Code2 },
+  { id: "shopify", label: "Generate Shopify Liquid fix", icon: Code2 },
+  { id: "wordpress", label: "WordPress guidance", icon: FileText },
+  { id: "test", label: "Generate test checklist", icon: FlaskConical },
+  { id: "explain", label: "Explain issue in plain language", icon: MessageCircle },
+  { id: "client", label: "Draft client-friendly explanation", icon: MessageCircle },
+] as const;
+
+type PresetId = (typeof PRESETS)[number]["id"];
+
+const FRAMEWORKS = [
+  { id: "react", label: "React / Next.js" },
+  { id: "html", label: "HTML / CSS" },
+  { id: "shopify", label: "Shopify Liquid" },
+  { id: "wordpress", label: "WordPress" },
+  { id: "webflow", label: "Webflow" },
+  { id: "framer", label: "Framer" },
+];
 
 export function AiAssistantClient({
   scans,
   workspaceName,
+  initialResults,
 }: {
   scans: AssistantScan[];
   workspaceName: string;
+  initialResults: Record<string, AssistantResult>;
 }) {
   const [framework, setFramework] = useState("react");
   const [prompt, setPrompt] = useState("");
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]["id"]>("react");
+  const [preset, setPreset] = useState<PresetId>("react");
   const [selectedScanId, setSelectedScanId] = useState(scans[0]?.id ?? "");
   const [manualIssueDraft, setManualIssueDraft] = useState("");
   const [manualIssues, setManualIssues] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<AiResult | null>(null);
+  const [error, setError] = useState<AiErrorView | null>(null);
+  const [resultsByScan, setResultsByScan] = useState<Record<string, AssistantResult>>(
+    () => initialResults ?? {}
+  );
 
   const selectedScan = useMemo(
     () => scans.find((scan) => scan.id === selectedScanId) ?? scans[0] ?? null,
     [scans, selectedScanId]
   );
-
-  const canGenerate = Boolean(selectedScan && (prompt.trim() || manualIssues.length > 0));
-  const assistantPrompt = buildAssistantPrompt(prompt, manualIssues);
+  const result = selectedScan ? resultsByScan[selectedScan.id] ?? null : null;
+  const canGenerate = Boolean(selectedScan) && !busy;
 
   function addManualIssue() {
     const issue = manualIssueDraft.trim();
     if (!issue) return;
     setManualIssues((current) => [...current, issue]);
     setManualIssueDraft("");
-    setResult(null);
   }
 
   function removeManualIssue(indexToRemove: number) {
     setManualIssues((current) => current.filter((_, index) => index !== indexToRemove));
-    setResult(null);
   }
 
   async function generate() {
@@ -117,7 +127,7 @@ export function AiAssistantClient({
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          prompt: assistantPrompt,
+          prompt: buildAssistantPrompt(prompt, manualIssues, preset),
           framework,
           preset,
           scanJobId: selectedScan.id,
@@ -125,20 +135,33 @@ export function AiAssistantClient({
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setError(data.message || data.error || "Could not generate analysis.");
+        setError(
+          aiErrorToView(
+            typeof data.error === "string" ? data.error : "",
+            typeof data.retryAfterSeconds === "number" ? data.retryAfterSeconds : undefined
+          )
+        );
         return;
       }
-      setResult(data.result);
-    } catch (err) {
-      setError((err as Error).message ?? "Network error");
+      const generated = data.result as AssistantResult;
+      setResultsByScan((current) => ({
+        ...current,
+        [selectedScan.id]: {
+          ...generated,
+          framework: generated.framework ?? framework,
+          preset: generated.preset ?? preset,
+        },
+      }));
+    } catch {
+      setError(aiErrorToView("network_error"));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="px-4 lg:px-8 py-8 max-w-[1400px]">
-      <header className="mb-6">
+    <div className="px-4 lg:px-8 py-8 max-w-[1100px] space-y-6">
+      <header>
         <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1 flex items-center gap-2">
           <Sparkles className="size-3.5 text-purple-600" aria-hidden /> AI Fix Assistant
         </p>
@@ -151,12 +174,7 @@ export function AiAssistantClient({
         </p>
       </header>
 
-      <AlertCallout
-        tone="warning"
-        icon={ShieldAlert}
-        title="What this assistant will not do"
-        className="mb-6"
-      >
+      <AlertCallout tone="warning" icon={ShieldAlert} title="What this assistant will not do">
         <ul className="mt-2 space-y-1 list-disc list-inside marker:text-amber-500">
           <li>It will not claim your site is compliant with any law or standard.</li>
           <li>It will not issue or imply certification.</li>
@@ -165,9 +183,14 @@ export function AiAssistantClient({
         </ul>
       </AlertCallout>
 
-      <Card className="mb-6">
+      {/* Step 1 — scope */}
+      <Card>
         <CardHeader>
-          <CardTitle className="text-sm">Past scans</CardTitle>
+          <CardTitle className="text-sm">1 · Select a scan</CardTitle>
+          <CardDescription>
+            Every answer is grounded in the selected scan&apos;s findings, pages, and root-cause
+            groups.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           {scans.length === 0 ? (
@@ -176,520 +199,388 @@ export function AiAssistantClient({
               the assistant for project-specific fixes.
             </AlertCallout>
           ) : (
-            <div className="flex gap-2 overflow-x-auto pb-1">
-              {scans.map((scan) => {
-                const active = selectedScan?.id === scan.id;
-                return (
-                  <button
-                    key={scan.id}
-                    type="button"
-                    onClick={() => {
-                      setSelectedScanId(scan.id);
-                      setResult(null);
-                    }}
-                    aria-pressed={active}
-                    className={cn(
-                      "min-w-[220px] rounded-md px-3 py-2 text-left ring-1 transition-colors",
-                      active
-                        ? "bg-navy-900 text-paper ring-navy-900"
-                        : "bg-paper text-ink-700 ring-line hover:bg-canvas-2"
-                    )}
-                  >
-                    <span className="block truncate text-sm font-semibold">
-                      {scan.projectId || hostFromUrl(scan.baseUrl)}
-                    </span>
-                    <span className={cn("mt-0.5 block truncate text-xs", active ? "text-paper/75" : "text-ink-500")}>
-                      {hostFromUrl(scan.baseUrl)} · {scan.pagesScanned} page(s)
-                    </span>
-                    <span className={cn("mt-1 block font-mono text-[10px]", active ? "text-paper/65" : "text-ink-500")}>
-                      {scan.id.slice(0, 12)}
-                    </span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-      <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
-        <div className="space-y-5 min-w-0">
-          {error && (
-            <AlertCallout tone="danger" title="AI request failed">
-              {error}
-            </AlertCallout>
-          )}
-
-          <AiSuggestionBlock title="Reviewable code fix">
-            <ReviewableCodeFixPreview
-              framework={framework}
-              manualIssueDraft={manualIssueDraft}
-              manualIssues={manualIssues}
-              selectedScan={selectedScan}
-              result={result}
-              onDraftChange={setManualIssueDraft}
-              onAddIssue={addManualIssue}
-              onRemoveIssue={removeManualIssue}
-            />
-          </AiSuggestionBlock>
-
-          {result && (
-            <AiSuggestionBlock title="Project guidance">
-              <ProjectGuidanceView result={result} selectedScan={selectedScan} />
-            </AiSuggestionBlock>
-          )}
-
-          {result && (
-            <AiSuggestionBlock title="Generated patch example">
-              <CodeDiffBlock
-                before={{
-                  label: "Before",
-                  language: framework === "react" ? "tsx" : "html",
-                  code: "// Use the selected scan context and manual issues to target the failing component.",
-                }}
-                after={{
-                  label: "After",
-                  language: framework === "react" ? "tsx" : "html",
-                  code: result.reactFix || result.codeFixExample || result.remediationSummary || "",
-                }}
-              />
-              {result.verification && (
-                <p className="mt-3 text-xs text-ink-600 leading-relaxed whitespace-pre-wrap">
-                  {result.verification}
-                </p>
-              )}
-              {result.model && (
-                <p className="mt-3 text-[11px] text-ink-500">
-                  Generated with {result.modelProvider ?? "AI"} / {result.model}
-                </p>
-              )}
-            </AiSuggestionBlock>
-          )}
-
-          <Card>
-            <CardContent className="pt-5">
-              <label htmlFor="ai-prompt" className="block text-sm font-medium text-ink-700 mb-2">
-                Ask the assistant
-              </label>
-              <textarea
-                id="ai-prompt"
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                rows={3}
-                placeholder="e.g. Generate a Next.js diff for the unlabeled icon buttons in this scan"
-                className="w-full rounded-md bg-paper px-3.5 py-2.5 text-sm text-ink-900 ring-1 ring-line shadow-[var(--shadow-soft)] placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition"
-              />
-              <div className="flex flex-wrap items-center justify-between gap-3 mt-3">
-                <div className="flex flex-wrap gap-1.5">
-                  {FRAMEWORKS.map((f) => (
+            <>
+              <div className="flex gap-2 overflow-x-auto pb-1">
+                {scans.map((scan) => {
+                  const active = selectedScan?.id === scan.id;
+                  return (
                     <button
-                      key={f.id}
+                      key={scan.id}
                       type="button"
-                      onClick={() => setFramework(f.id)}
-                      aria-pressed={framework === f.id}
+                      onClick={() => {
+                        setSelectedScanId(scan.id);
+                        setError(null);
+                      }}
+                      aria-pressed={active}
                       className={cn(
-                        "px-2.5 py-1 rounded-full text-xs font-medium ring-1 transition-colors",
-                        framework === f.id
+                        "min-w-[220px] rounded-md px-3 py-2 text-left ring-1 transition-colors",
+                        active
                           ? "bg-navy-900 text-paper ring-navy-900"
                           : "bg-paper text-ink-700 ring-line hover:bg-canvas-2"
                       )}
                     >
-                      {f.label}
+                      <span className="block truncate text-sm font-semibold">
+                        {scan.projectId || hostFromUrl(scan.baseUrl)}
+                      </span>
+                      <span className={cn("mt-0.5 block truncate text-xs", active ? "text-paper/75" : "text-ink-500")}>
+                        {hostFromUrl(scan.baseUrl)} · {scan.pagesScanned} page(s)
+                      </span>
+                      <span className={cn("mt-1 block font-mono text-[10px]", active ? "text-paper/65" : "text-ink-500")}>
+                        {scan.id.slice(0, 12)}
+                        {resultsByScan[scan.id] ? " · plan saved" : ""}
+                      </span>
                     </button>
-                  ))}
+                  );
+                })}
+              </div>
+              {selectedScan && (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  <Badge tone={selectedScan.aiRemediationEnabled ? "ai" : "neutral"} size="sm">
+                    {selectedScan.aiRemediationEnabled ? "AI on" : "AI off at scan"}
+                  </Badge>
+                  <Badge tone="success" size="sm">Privacy mode</Badge>
+                  <Badge tone={selectedScan.storeScreenshots ? "info" : "neutral"} size="sm">
+                    {selectedScan.storeScreenshots ? "Screenshots stored" : "Screenshots off"}
+                  </Badge>
                 </div>
+              )}
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Step 2 — configure & generate */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm">2 · Configure and generate</CardTitle>
+          <CardDescription>
+            Pick an action and a target framework. Adding a prompt or manual findings is optional
+            but makes the plan more specific.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div>
+            <p className="text-xs font-medium text-ink-700 mb-1.5">Action</p>
+            <ul className="flex flex-wrap gap-1.5">
+              {PRESETS.map((p) => {
+                const Icon = p.icon;
+                const active = preset === p.id;
+                return (
+                  <li key={p.id}>
+                    <button
+                      type="button"
+                      onClick={() => setPreset(p.id)}
+                      aria-pressed={active}
+                      className={cn(
+                        "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium ring-1 transition-colors",
+                        active
+                          ? "bg-purple-600 text-paper ring-purple-600"
+                          : "bg-paper text-ink-700 ring-line hover:bg-canvas-2"
+                      )}
+                    >
+                      <Icon className="size-3.5" aria-hidden />
+                      <span>{p.label}</span>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+
+          <div>
+            <p className="text-xs font-medium text-ink-700 mb-1.5">Target framework</p>
+            <div className="flex flex-wrap gap-1.5">
+              {FRAMEWORKS.map((f) => (
+                <button
+                  key={f.id}
+                  type="button"
+                  onClick={() => setFramework(f.id)}
+                  aria-pressed={framework === f.id}
+                  className={cn(
+                    "px-2.5 py-1 rounded-full text-xs font-medium ring-1 transition-colors",
+                    framework === f.id
+                      ? "bg-navy-900 text-paper ring-navy-900"
+                      : "bg-paper text-ink-700 ring-line hover:bg-canvas-2"
+                  )}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label htmlFor="ai-prompt" className="block text-xs font-medium text-ink-700 mb-1.5">
+              Ask the assistant <span className="text-ink-500 font-normal">(optional)</span>
+            </label>
+            <textarea
+              id="ai-prompt"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              rows={3}
+              placeholder="e.g. Generate a Next.js diff for the unlabeled icon buttons in this scan"
+              className="w-full rounded-md bg-paper px-3.5 py-2.5 text-sm text-ink-900 ring-1 ring-line shadow-[var(--shadow-soft)] placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition"
+            />
+          </div>
+
+          <details className="rounded-md ring-1 ring-line bg-canvas-2 px-3 py-2.5">
+            <summary className="cursor-pointer select-none text-xs font-medium text-ink-700">
+              Target specific findings (optional)
+              {manualIssues.length > 0 ? ` · ${manualIssues.length} added` : ""}
+            </summary>
+            <div className="mt-3 space-y-2">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <textarea
+                  value={manualIssueDraft}
+                  onChange={(event) => setManualIssueDraft(event.target.value)}
+                  rows={2}
+                  placeholder="Example: Header icon buttons have no accessible names on mobile."
+                  className="min-h-[72px] w-full rounded-md bg-paper px-3 py-2 text-sm text-ink-900 ring-1 ring-line placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+                />
+                <button
+                  type="button"
+                  onClick={addManualIssue}
+                  disabled={!manualIssueDraft.trim()}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-navy-900 px-3 text-sm font-medium text-paper hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-50 sm:self-end"
+                >
+                  <PlusCircle className="size-4" aria-hidden />
+                  Add issue
+                </button>
+              </div>
+              {manualIssues.length > 0 && (
+                <ul className="space-y-2">
+                  {manualIssues.map((issue, index) => (
+                    <li
+                      key={`${issue}-${index}`}
+                      className="flex items-start justify-between gap-3 rounded-md bg-blue-50 px-3 py-2 ring-1 ring-blue-100"
+                    >
+                      <span className="text-xs leading-5 text-ink-900">{issue}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeManualIssue(index)}
+                        className="rounded p-1 text-blue-700 hover:bg-paper"
+                        aria-label={`Remove manual issue ${index + 1}`}
+                      >
+                        <X className="size-3.5" aria-hidden />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </details>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            <p className="text-[11px] text-ink-500 leading-relaxed max-w-md">
+              {COMPLIANCE_COPY.AI_DISCLOSURE}
+            </p>
+            <button
+              type="button"
+              onClick={() => void generate()}
+              disabled={!canGenerate}
+              className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-purple-500 text-paper text-sm font-medium hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {busy ? (
+                <Loader2 className="size-4 animate-spin" aria-hidden />
+              ) : (
+                <Send className="size-4" aria-hidden />
+              )}
+              {busy ? "Generating…" : "Generate remediation plan"}
+            </button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Step 3 — result */}
+      <div aria-live="polite" className="space-y-6">
+        {error && (
+          <AlertCallout
+            tone="danger"
+            title={error.title}
+            action={
+              error.action === "retry" ? (
                 <button
                   type="button"
                   onClick={() => void generate()}
-                  disabled={busy || !canGenerate}
-                  className="inline-flex items-center gap-2 h-10 px-4 rounded-md bg-purple-500 text-paper text-sm font-medium hover:bg-purple-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                  disabled={!canGenerate}
+                  className="inline-flex h-8 items-center rounded-md bg-paper px-3 text-xs font-medium text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 disabled:opacity-50"
                 >
-                  <Send className="size-4" aria-hidden /> {busy ? "Generating..." : "Generate"}
+                  Try again
                 </button>
-              </div>
-              <p className="text-[11px] text-ink-500 mt-3 leading-relaxed">
-                {COMPLIANCE_COPY.AI_DISCLOSURE}
-              </p>
-            </CardContent>
-          </Card>
-        </div>
-
-        <aside className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm">Preset actions</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <ul className="space-y-1.5">
-                {PRESETS.map((p) => {
-                  const Icon = p.icon;
-                  const active = preset === p.id;
-                  return (
-                    <li key={p.id}>
-                      <button
-                        type="button"
-                        onClick={() => setPreset(p.id)}
-                        aria-pressed={active}
-                        className={cn(
-                          "w-full flex items-center gap-2.5 text-left px-3 py-2 rounded-md text-sm min-h-[40px] transition-colors",
-                          active
-                            ? "bg-purple-50 text-purple-900 ring-1 ring-purple-200"
-                            : "hover:bg-canvas-2 text-ink-700"
-                        )}
-                      >
-                        <Icon className="size-4 text-purple-600 shrink-0" aria-hidden />
-                        <span>{p.label}</span>
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-sm flex items-center gap-2">
-                <Globe className="size-4 text-ink-500" aria-hidden /> Scope
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {selectedScan ? (
-                <>
-                  <p className="text-xs text-ink-700">
-                    Scan <span className="font-mono font-medium text-ink-900">{selectedScan.id}</span>
-                  </p>
-                  <p className="text-xs text-ink-500 mt-1">{selectedScan.baseUrl}</p>
-                  <div className="mt-3 flex flex-wrap gap-1.5">
-                    <Badge tone={selectedScan.aiRemediationEnabled ? "ai" : "neutral"} size="sm">
-                      {selectedScan.aiRemediationEnabled ? "AI on" : "AI off at scan"}
-                    </Badge>
-                    <Badge tone="success" size="sm">Privacy mode</Badge>
-                    <Badge tone={selectedScan.storeScreenshots ? "info" : "neutral"} size="sm">
-                      {selectedScan.storeScreenshots ? "Screenshots stored" : "Screenshots off"}
-                    </Badge>
-                  </div>
-                </>
-              ) : (
-                <p className="text-xs text-ink-600">Select a completed scan to set project scope.</p>
-              )}
-            </CardContent>
-          </Card>
-        </aside>
-      </div>
-    </div>
-  );
-}
-
-function ReviewableCodeFixPreview({
-  framework,
-  manualIssueDraft,
-  manualIssues,
-  selectedScan,
-  result,
-  onDraftChange,
-  onAddIssue,
-  onRemoveIssue,
-}: {
-  framework: string;
-  manualIssueDraft: string;
-  manualIssues: string[];
-  selectedScan: AssistantScan | null;
-  result: AiResult | null;
-  onDraftChange: (value: string) => void;
-  onAddIssue: () => void;
-  onRemoveIssue: (index: number) => void;
-}) {
-  const frameworkName = frameworkLabel(framework);
-  const commandPreview = buildFixCommandPreview({
-    framework,
-    manualIssues,
-    selectedScan,
-    result,
-  });
-  const patchPreview =
-    result?.reactFix || result?.codeFixExample || result?.remediationSummary || starterPatchForFramework(framework);
-
-  return (
-    <div className="space-y-4">
-      <div className="rounded-md bg-paper p-3 ring-1 ring-line">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <p className="text-sm font-semibold text-ink-900">Manual issue queue</p>
-            <p className="mt-1 text-xs text-ink-600">
-              Add the exact problems you want the assistant to target. These entries are sent with
-              the selected scan context.
-            </p>
-          </div>
-          <Badge tone="info" size="sm">
-            {frameworkName}
-          </Badge>
-        </div>
-
-        <div className="mt-3 grid gap-2 sm:grid-cols-[1fr_auto]">
-          <textarea
-            value={manualIssueDraft}
-            onChange={(event) => onDraftChange(event.target.value)}
-            rows={2}
-            placeholder="Example: Header icon buttons have no accessible names on mobile."
-            className="min-h-[72px] w-full rounded-md bg-canvas-2 px-3 py-2 text-sm text-ink-900 ring-1 ring-line placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
-          />
-          <button
-            type="button"
-            onClick={onAddIssue}
-            disabled={!manualIssueDraft.trim()}
-            className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-navy-900 px-3 text-sm font-medium text-paper hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-50 sm:self-end"
+              ) : typeof error.action === "object" ? (
+                <Link
+                  href={error.action.href}
+                  className="inline-flex h-8 items-center rounded-md bg-paper px-3 text-xs font-medium text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
+                >
+                  {error.action.label}
+                </Link>
+              ) : undefined
+            }
           >
-            <PlusCircle className="size-4" aria-hidden />
-            Add issue
-          </button>
-        </div>
+            {error.message}
+          </AlertCallout>
+        )}
 
-        {manualIssues.length > 0 ? (
-          <ul className="mt-3 space-y-2">
-            {manualIssues.map((issue, index) => (
-              <li
-                key={`${issue}-${index}`}
-                className="flex items-start justify-between gap-3 rounded-md bg-blue-50 px-3 py-2 ring-1 ring-blue-100"
-              >
-                <span className="font-mono text-xs leading-5 text-ink-900">
-                  issue_{String(index + 1).padStart(2, "0")}: {issue}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onRemoveIssue(index)}
-                  className="rounded p-1 text-blue-700 hover:bg-paper"
-                  aria-label={`Remove manual issue ${index + 1}`}
-                >
-                  <X className="size-3.5" aria-hidden />
-                </button>
-              </li>
-            ))}
-          </ul>
+        {result ? (
+          <RemediationPlan result={result} scan={selectedScan} />
         ) : (
-          <p className="mt-3 rounded-md bg-canvas-2 px-3 py-2 text-xs text-ink-600">
-            No manual issues added yet. The preview below will use the selected scan and a starter
-            remediation command.
-          </p>
+          !error && (
+            <Card>
+              <CardContent className="pt-6 pb-6 text-center">
+                <p className="text-sm text-ink-700">
+                  No remediation plan yet. Select a scan above and press{" "}
+                  <strong className="font-semibold text-ink-900">Generate remediation plan</strong>{" "}
+                  — the assistant will return a summary, prioritized steps, a reviewable code fix,
+                  and a verification plan.
+                </p>
+              </CardContent>
+            </Card>
+          )
         )}
       </div>
-
-      <GuidanceCodeList label="fix_command_preview" items={commandPreview} tone="violet" />
-
-      <CodeDiffBlock
-        before={{
-          label: "Problem input",
-          language: "text",
-          code:
-            manualIssues.length > 0
-              ? manualIssues.map((issue, index) => `issue_${index + 1}: ${issue}`).join("\n")
-              : "Add a manual issue above or generate from the selected scan.",
-        }}
-        after={{
-          label: result ? "AI patch preview" : "Starter fix pattern",
-          language: framework === "react" ? "tsx" : "html",
-          code: patchPreview,
-        }}
-      />
     </div>
   );
 }
 
-function ProjectGuidanceView({
+function RemediationPlan({
   result,
-  selectedScan,
+  scan,
 }: {
-  result: AiResult;
-  selectedScan: AssistantScan | null;
+  result: AssistantResult;
+  scan: AssistantScan | null;
 }) {
   const guidance = result.projectGuidance;
   const summary = guidance?.summary || result.clientFriendlyExplanation || result.explanationPlain;
   const recommendedSteps = guidance?.recommendedSteps.filter(Boolean) ?? [];
   const verificationSteps = guidance?.verificationSteps.filter(Boolean) ?? [];
   const readerNotes = guidance?.readerNotes.filter(Boolean) ?? [];
+  const fixCode = result.reactFix || result.codeFixExample || "";
+  const frameworkLabel = result.framework ?? "";
+  const language = /react|next/i.test(frameworkLabel) ? "tsx" : "html";
+  const verificationItems =
+    verificationSteps.length > 0
+      ? verificationSteps
+      : result.verification
+      ? [result.verification]
+      : [];
 
   return (
-    <div className="space-y-4">
-      {selectedScan && (
-        <GuidanceCodeCard
-          label="selected_scan"
-          tone="slate"
-          value={[
-            `project: ${selectedScan.projectId || hostFromUrl(selectedScan.baseUrl)}`,
-            `url: ${selectedScan.baseUrl}`,
-            `pages_scanned: ${selectedScan.pagesScanned}`,
-            `scan_id: ${selectedScan.id}`,
-          ].join("\n")}
-        />
-      )}
+    <AiSuggestionBlock title="Remediation plan">
+      <div className="space-y-6">
+        <p className="text-xs text-ink-500">
+          {scan && (
+            <>
+              Based on scan <span className="font-mono text-ink-700">{scan.id}</span> (
+              {hostFromUrl(scan.baseUrl)}, {scan.pagesScanned} page(s)) ·{" "}
+            </>
+          )}
+          {result.createdAt ? `Generated ${formatRelative(result.createdAt)}` : "Generated just now"}
+          {result.model ? ` · ${result.modelProvider ?? "AI"} / ${result.model}` : ""}
+        </p>
 
-      <div className="grid gap-3 md:grid-cols-2">
-        <GuidanceCodeCard label="summary" tone="blue" value={summary} />
+        <PlanSection title="Summary">
+          <p className="whitespace-pre-wrap">{summary}</p>
+        </PlanSection>
+
         {guidance?.priority && (
-          <GuidanceCodeCard label="priority" tone="amber" value={guidance.priority} />
+          <PlanSection title="Priority">
+            <p className="whitespace-pre-wrap">{guidance.priority}</p>
+          </PlanSection>
+        )}
+
+        {guidance?.whyItMatters && (
+          <PlanSection title="Why it matters">
+            <p className="whitespace-pre-wrap">{guidance.whyItMatters}</p>
+          </PlanSection>
+        )}
+
+        {result.remediationSummary && (
+          <PlanSection title="Recommended fix">
+            <p className="whitespace-pre-wrap">{result.remediationSummary}</p>
+          </PlanSection>
+        )}
+
+        {recommendedSteps.length > 0 && (
+          <PlanSection title={`Recommended steps (${recommendedSteps.length})`}>
+            <ol className="list-decimal pl-5 space-y-1.5">
+              {recommendedSteps.map((step) => (
+                <li key={step} className="whitespace-pre-wrap">
+                  {step}
+                </li>
+              ))}
+            </ol>
+          </PlanSection>
+        )}
+
+        {fixCode && (
+          <PlanSection title="Code fix — review before applying">
+            <CodeDiffBlock
+              before={
+                result.primaryIssueSnippet
+                  ? {
+                      label: "Failing snippet from this scan",
+                      language,
+                      code: result.primaryIssueSnippet,
+                    }
+                  : undefined
+              }
+              after={{
+                label: `Suggested fix${frameworkLabel ? ` (${frameworkLabel})` : ""}`,
+                language,
+                code: fixCode,
+              }}
+            />
+          </PlanSection>
+        )}
+
+        {verificationItems.length > 0 && (
+          <PlanSection title="Verification plan">
+            <ul className="space-y-1.5">
+              {verificationItems.map((item) => (
+                <li key={item} className="flex items-start gap-2">
+                  <CheckCircle2 className="size-4 shrink-0 mt-0.5 text-green-600" aria-hidden />
+                  <span className="whitespace-pre-wrap">{item}</span>
+                </li>
+              ))}
+            </ul>
+          </PlanSection>
+        )}
+
+        {result.clientFriendlyExplanation && result.clientFriendlyExplanation !== summary && (
+          <PlanSection title="Client-friendly explanation">
+            <p className="whitespace-pre-wrap">{result.clientFriendlyExplanation}</p>
+          </PlanSection>
+        )}
+
+        {readerNotes.length > 0 && (
+          <PlanSection title="Review notes">
+            <ul className="list-disc pl-5 space-y-1 text-xs text-ink-500">
+              {readerNotes.map((note) => (
+                <li key={note} className="whitespace-pre-wrap">
+                  {note}
+                </li>
+              ))}
+            </ul>
+          </PlanSection>
         )}
       </div>
-
-      {guidance?.whyItMatters && (
-        <GuidanceCodeCard
-          label="why_it_matters"
-          tone="green"
-          value={guidance.whyItMatters}
-        />
-      )}
-
-      {recommendedSteps.length > 0 && (
-        <GuidanceCodeList
-          label="recommended_steps"
-          items={recommendedSteps}
-          tone="violet"
-        />
-      )}
-
-      {verificationSteps.length > 0 ? (
-        <GuidanceCodeList
-          label="verification_plan"
-          items={verificationSteps}
-          tone="green"
-        />
-      ) : result.verification ? (
-        <GuidanceCodeList
-          label="verification_plan"
-          items={[result.verification]}
-          tone="green"
-        />
-      ) : null}
-
-      {readerNotes.length > 0 && (
-        <GuidanceCodeList label="reader_notes" items={readerNotes} tone="slate" />
-      )}
-    </div>
+    </AiSuggestionBlock>
   );
 }
 
-function GuidanceCodeCard({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: string;
-  tone: GuidanceTone;
-}) {
-  const styles = guidanceToneStyles[tone];
+function PlanSection({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className={cn("overflow-hidden rounded-md ring-1", styles.shell)}>
-      <header className={cn("flex items-center justify-between gap-3 border-b px-3 py-2", styles.header)}>
-        <span className={cn("font-mono text-[11px] font-semibold uppercase tracking-wider", styles.label)}>
-          {label}
-        </span>
-        <span className={cn("rounded px-1.5 py-0.5 font-mono text-[10px]", styles.badge)}>
-          text
-        </span>
-      </header>
-      <pre className={cn("whitespace-pre-wrap break-words px-3 py-3 font-mono text-xs leading-6", styles.body)}>
-        <code>{value}</code>
-      </pre>
+    <section>
+      <h4 className="text-xs font-semibold uppercase tracking-wider text-ink-500 mb-1.5">
+        {title}
+      </h4>
+      <div className="text-sm text-ink-700 leading-relaxed">{children}</div>
     </section>
   );
 }
 
-function GuidanceCodeList({
-  label,
-  items,
-  tone,
-}: {
-  label: string;
-  items: string[];
-  tone: GuidanceTone;
-}) {
-  const styles = guidanceToneStyles[tone];
-  return (
-    <section className={cn("overflow-hidden rounded-md ring-1", styles.shell)}>
-      <header className={cn("flex items-center justify-between gap-3 border-b px-3 py-2", styles.header)}>
-        <span className={cn("flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-wider", styles.label)}>
-          <ListChecks className="size-3.5" aria-hidden />
-          {label}
-        </span>
-        <span className={cn("rounded px-1.5 py-0.5 font-mono text-[10px]", styles.badge)}>
-          array[{items.length}]
-        </span>
-      </header>
-      <ol className={cn("space-y-2 px-3 py-3", styles.body)}>
-        {items.map((item, index) => {
-          const itemNumber = String(index + 1).padStart(2, "0");
-          return (
-            <li key={`${label}-${item}`} className="grid grid-cols-[2rem_1fr] gap-2">
-              <span className={cn("font-mono text-xs leading-6", styles.line)}>
-                {itemNumber}
-              </span>
-              <code className="whitespace-pre-wrap break-words font-mono text-xs leading-6 text-ink-900">
-                {item}
-              </code>
-            </li>
-          );
-        })}
-      </ol>
-    </section>
-  );
-}
-
-type GuidanceTone = "slate" | "blue" | "amber" | "green" | "violet";
-
-const guidanceToneStyles: Record<
-  GuidanceTone,
-  {
-    shell: string;
-    header: string;
-    label: string;
-    badge: string;
-    body: string;
-    line: string;
-  }
-> = {
-  slate: {
-    shell: "bg-slate-50 ring-slate-200",
-    header: "border-slate-200 bg-slate-100/80",
-    label: "text-slate-700",
-    badge: "bg-paper text-slate-600 ring-1 ring-slate-200",
-    body: "bg-paper text-slate-900",
-    line: "text-slate-500",
-  },
-  blue: {
-    shell: "bg-blue-50 ring-blue-100",
-    header: "border-blue-100 bg-blue-50",
-    label: "text-blue-700",
-    badge: "bg-paper text-blue-700 ring-1 ring-blue-100",
-    body: "bg-paper text-ink-900",
-    line: "text-blue-500",
-  },
-  amber: {
-    shell: "bg-amber-50 ring-amber-100",
-    header: "border-amber-100 bg-amber-50",
-    label: "text-amber-700",
-    badge: "bg-paper text-amber-700 ring-1 ring-amber-100",
-    body: "bg-paper text-ink-900",
-    line: "text-amber-600",
-  },
-  green: {
-    shell: "bg-green-50 ring-green-100",
-    header: "border-green-100 bg-green-50",
-    label: "text-green-700",
-    badge: "bg-paper text-green-700 ring-1 ring-green-100",
-    body: "bg-paper text-ink-900",
-    line: "text-green-600",
-  },
-  violet: {
-    shell: "bg-purple-50 ring-purple-100",
-    header: "border-purple-100 bg-purple-50",
-    label: "text-purple-700",
-    badge: "bg-paper text-purple-700 ring-1 ring-purple-100",
-    body: "bg-paper text-ink-900",
-    line: "text-purple-600",
-  },
-};
-
-function buildAssistantPrompt(prompt: string, manualIssues: string[]): string {
+function buildAssistantPrompt(prompt: string, manualIssues: string[], preset: PresetId): string {
+  const presetLabel = PRESETS.find((p) => p.id === preset)?.label ?? "Generate guidance";
   const trimmedPrompt = prompt.trim();
   const manualBlock = manualIssues.length
     ? [
@@ -699,86 +590,12 @@ function buildAssistantPrompt(prompt: string, manualIssues: string[]): string {
       ].join("\n")
     : "";
 
-  return [trimmedPrompt || "Generate a reviewable code fix preview for the selected scan.", manualBlock]
+  return [
+    trimmedPrompt || `${presetLabel} for the selected scan.`,
+    manualBlock,
+  ]
     .filter(Boolean)
     .join("\n\n");
-}
-
-function frameworkLabel(framework: string): string {
-  return FRAMEWORKS.find((item) => item.id === framework)?.label ?? framework;
-}
-
-function buildFixCommandPreview({
-  framework,
-  manualIssues,
-  selectedScan,
-  result,
-}: {
-  framework: string;
-  manualIssues: string[];
-  selectedScan: AssistantScan | null;
-  result: AiResult | null;
-}): string[] {
-  const scanFlag = selectedScan ? `--scan ${selectedScan.id}` : "--scan <selected-scan-id>";
-  const frameworkFlag = `--framework "${frameworkLabel(framework)}"`;
-  const issueSource =
-    manualIssues.length > 0
-      ? manualIssues
-      : ["Use selected scan findings as the issue source."];
-
-  return [
-    `scope ${scanFlag} ${frameworkFlag}`,
-    ...issueSource.map(
-      (issue, index) =>
-        `fix issue_${String(index + 1).padStart(2, "0")} --target "${issue}" --output reviewable-patch`
-    ),
-    result
-      ? "preview generated_patch --compare before-after --review-required"
-      : "preview starter_patch --compare before-after --review-required",
-    `verify ${scanFlag} --keyboard --screen-reader-spot-check --rerun-scan`,
-  ];
-}
-
-function starterPatchForFramework(framework: string): string {
-  if (framework === "react") {
-    return [
-      'type AccessibleIconButtonProps = {',
-      "  label: string;",
-      "  onClick: () => void;",
-      "  icon: React.ReactNode;",
-      "};",
-      "",
-      "export function AccessibleIconButton({ label, onClick, icon }: AccessibleIconButtonProps) {",
-      "  return (",
-      "    <button type=\"button\" aria-label={label} onClick={onClick}>",
-      "      <span aria-hidden=\"true\">{icon}</span>",
-      "    </button>",
-      "  );",
-      "}",
-    ].join("\n");
-  }
-
-  if (framework === "shopify") {
-    return [
-      "<button type=\"button\" aria-label=\"Open cart\">",
-      "  {% render 'icon-cart' %}",
-      "</button>",
-    ].join("\n");
-  }
-
-  if (framework === "wordpress") {
-    return [
-      "<button type=\"button\" aria-label=\"Open menu\">",
-      "  <span aria-hidden=\"true\" class=\"icon-menu\"></span>",
-      "</button>",
-    ].join("\n");
-  }
-
-  return [
-    "<button type=\"button\" aria-label=\"Open menu\">",
-    "  <svg aria-hidden=\"true\" focusable=\"false\"></svg>",
-    "</button>",
-  ].join("\n");
 }
 
 function hostFromUrl(url: string): string {

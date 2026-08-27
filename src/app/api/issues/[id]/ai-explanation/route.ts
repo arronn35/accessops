@@ -2,8 +2,15 @@ import { z } from "zod";
 import { apiError, ApiError, rateLimitError, requireSession } from "@/lib/api/context";
 import { checkRateLimit } from "@/lib/api/rate-limit";
 import { roleHasPermission } from "@/lib/entitlements";
-import { explainIssue, AiUnavailableError } from "@/lib/ai/explain";
-import { audit, getIssue, getPrivacySettings, getScanJob } from "@/lib/data/firestore";
+import { explainIssue, AiRequestError, AiUnavailableError } from "@/lib/ai/explain";
+import { aiRequestErrorResponse } from "@/lib/ai/error-messages";
+import {
+  audit,
+  getIssue,
+  getPrivacySettings,
+  getScanJob,
+  saveAiExplanation,
+} from "@/lib/data/firestore";
 
 const BodySchema = z
   .object({
@@ -67,6 +74,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       mode: input.mode,
       userPrompt: input.prompt,
     });
+    const stored = await saveAiExplanation(ctx.workspaceId, {
+      scanJobId: scan.id,
+      issueId: id,
+      framework: input.framework,
+      mode: input.mode,
+      createdBy: ctx.userId,
+      payload: explanation,
+    });
     await audit({
       userId: ctx.userId,
       workspaceId: ctx.workspaceId,
@@ -83,12 +98,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     const payload = {
       ...explanation,
       framework: input.framework,
-      createdAt: new Date().toISOString(),
+      createdAt: stored.createdAt.toISOString(),
     };
     return Response.json({ explanation: payload, aiExplanation: payload });
   } catch (err) {
     if (err instanceof AiUnavailableError) {
       return Response.json({ error: "ai_unavailable", message: err.message }, { status: 503 });
+    }
+    if (err instanceof AiRequestError) {
+      return aiRequestErrorResponse(err);
     }
     return apiError(err);
   }

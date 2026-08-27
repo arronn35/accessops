@@ -397,6 +397,60 @@ export interface RemediationTask {
 export type MonitorFrequency = "daily" | "every_3_days" | "weekly";
 export type MonitorStatus = "active" | "paused";
 
+/** Structured payload produced by the AI pipeline (see `lib/ai/explain.ts`). */
+export interface AiGeneratedPayload {
+  explanationPlain: string;
+  remediationSummary?: string;
+  codeFixExample?: string;
+  verification?: string;
+  clientFriendlyExplanation?: string;
+  reactFix?: string;
+  projectGuidance?: {
+    summary: string;
+    priority: string;
+    whyItMatters: string;
+    recommendedSteps: string[];
+    readerNotes: string[];
+    verificationSteps: string[];
+  };
+  modelProvider: "openai" | "mock";
+  model?: string;
+}
+
+/**
+ * Persisted AI explanation for one issue + framework pair, stored at
+ * `workspaces/{ws}/aiExplanations/{issueId}_{framework}`. The deterministic
+ * doc id means "Regenerate" overwrites instead of accumulating history, and
+ * the issue detail page can render the last result without a new paid call.
+ */
+export interface AiExplanationRecord extends AiGeneratedPayload {
+  id: string;
+  workspaceId: string;
+  scanJobId: string;
+  issueId: string;
+  framework: string;
+  mode: string;
+  createdBy: string;
+  createdAt: Date;
+}
+
+/**
+ * Latest AI Assistant result for one scan, stored at
+ * `workspaces/{ws}/aiAssistantResults/{scanJobId}`. Only the most recent
+ * generation per scan is kept; custom prompts always regenerate live.
+ */
+export interface AiAssistantResultRecord extends AiGeneratedPayload {
+  id: string;
+  workspaceId: string;
+  scanJobId: string;
+  preset: string;
+  framework: string;
+  /** Snippet of the issue the fix targets, for the diff "before" panel. */
+  primaryIssueSnippet: string | null;
+  createdBy: string;
+  createdAt: Date;
+}
+
 /**
  * A continuous-monitoring schedule (Layer 2). The scheduler queries active
  * monitors whose `nextRunAt` is due and enqueues a normal scan job for each,

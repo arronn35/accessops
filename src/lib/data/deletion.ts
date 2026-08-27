@@ -53,6 +53,8 @@ export interface DeletionCounts extends Record<string, number> {
   reports: number;
   reportShares: number;
   remediationTasks: number;
+  aiExplanations: number;
+  aiAssistantResults: number;
 }
 
 function emptyCounts(): DeletionCounts {
@@ -67,6 +69,8 @@ function emptyCounts(): DeletionCounts {
     reports: 0,
     reportShares: 0,
     remediationTasks: 0,
+    aiExplanations: 0,
+    aiAssistantResults: 0,
   };
 }
 
@@ -141,6 +145,18 @@ export async function deleteScanCompletely(
       .where("scanJobId", "==", scanId)
   );
 
+  // Persisted AI output tied to this scan.
+  counts.aiExplanations += await deleteQueryDocs(
+    workspaceRef(workspaceId)
+      .collection("aiExplanations")
+      .where("scanJobId", "==", scanId)
+  );
+  counts.aiAssistantResults += await deleteQueryDocs(
+    workspaceRef(workspaceId)
+      .collection("aiAssistantResults")
+      .where("scanJobId", "==", scanId)
+  );
+
   await scanRef.delete();
   counts.scans = 1;
   return counts;
@@ -180,7 +196,9 @@ async function cancelActiveScans(workspaceId: string): Promise<void> {
   await batch.commit();
 }
 
-async function deleteWorkspaceScanData(workspaceId: string): Promise<DeletionCounts> {
+export async function deleteWorkspaceScanData(
+  workspaceId: string
+): Promise<DeletionCounts> {
   const counts = emptyCounts();
 
   await cancelActiveScans(workspaceId);
@@ -229,6 +247,16 @@ async function deleteWorkspaceScanData(workspaceId: string): Promise<DeletionCou
   // query `!= null`, so filter in memory.
   counts.remediationTasks += await deleteScanLinkedRemediationTasks(workspaceId);
 
+  // Sweep orphaned or legacy AI rows too. Per-scan deletion removes the
+  // normally linked records, but workspace deletion must still complete if a
+  // scan was deleted by an older code path or an in-flight writer left residue.
+  counts.aiExplanations += await deleteQueryDocs(
+    workspaceRef(workspaceId).collection("aiExplanations")
+  );
+  counts.aiAssistantResults += await deleteQueryDocs(
+    workspaceRef(workspaceId).collection("aiAssistantResults")
+  );
+
   return counts;
 }
 
@@ -249,13 +277,23 @@ async function deleteScanLinkedRemediationTasks(workspaceId: string): Promise<nu
 
 /** True when every scan-data collection for the workspace is empty. */
 async function verifyWorkspaceScanDataDeleted(workspaceId: string): Promise<boolean> {
-  const [scans, evidence, reports, taskRefs] = await Promise.all([
-    countQuery(workspaceRef(workspaceId).collection("scans")),
-    countQuery(db().collection("visualEvidence").where("workspaceId", "==", workspaceId)),
-    countQuery(workspaceRef(workspaceId).collection("reports")),
-    listScanLinkedRemediationTaskRefs(workspaceId),
-  ]);
-  return scans === 0 && evidence === 0 && reports === 0 && taskRefs.length === 0;
+  const [scans, evidence, reports, taskRefs, aiExplanations, aiAssistantResults] =
+    await Promise.all([
+      countQuery(workspaceRef(workspaceId).collection("scans")),
+      countQuery(db().collection("visualEvidence").where("workspaceId", "==", workspaceId)),
+      countQuery(workspaceRef(workspaceId).collection("reports")),
+      listScanLinkedRemediationTaskRefs(workspaceId),
+      countQuery(workspaceRef(workspaceId).collection("aiExplanations")),
+      countQuery(workspaceRef(workspaceId).collection("aiAssistantResults")),
+    ]);
+  return (
+    scans === 0 &&
+    evidence === 0 &&
+    reports === 0 &&
+    taskRefs.length === 0 &&
+    aiExplanations === 0 &&
+    aiAssistantResults === 0
+  );
 }
 
 export async function createDataDeletionJob(input: {
