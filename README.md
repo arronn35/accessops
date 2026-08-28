@@ -348,11 +348,25 @@ tests at the time of writing.
   same-origin and SSRF protections as single/multi scans, store source
   metadata on the scan job, and are processed by the browser worker when
   Redis is configured.
-- **PDF export is worker-rendered to R2 when configured.** Set the four
-  `S3_*` env vars on the worker (and `REDIS_URL` for the queue) and the
-  web app enqueues a Playwright-rendered PDF, uploads to R2, and
-  redirects to a signed URL. Without S3 or Redis the export route falls
-  back to the original print-HTML path so the product still works.
+- **HTML, CSV, and PDF exports all work with no extra infrastructure.**
+  All three are rendered synchronously from the same `ReportInput`
+  (`src/lib/reports/load.ts`). The PDF is produced with `pdf-lib`
+  (`src/lib/reports/pdf.ts`) — pure JS, no Chromium, no object storage —
+  so `GET /api/reports/:id/export?format=pdf` returns a real
+  `application/pdf` download on any deployment. The worker job in
+  `worker/report-pdf.ts` still pre-bakes a copy to R2 when the four
+  `S3_*` vars and `REDIS_URL` are set, but exports no longer depend on
+  it.
+- **The AI Assistant compiles a scan into a downloadable `.md` brief.**
+  `/app/ai-assistant` groups completed scans by site, loads that site's
+  findings, and `POST /api/ai-assistant/brief` has Claude act as a
+  coding-research and remediation-planning specialist over them
+  (`src/lib/ai/assistant.ts`). Output is Markdown, framed with scan
+  metadata and the standard disclaimers, and downloaded as a file.
+  Gated on `privacy_settings.ai_processing_enabled` plus an explicit
+  consent checkbox, rate-limited at 20/hour/workspace, and 503s rather
+  than returning mock text when `ANTHROPIC_API_KEY` is absent (unless
+  `AI_MOCK_ENABLED=true`).
 - **No GitHub PR integration** yet. On the roadmap.
 - **Authenticated staging scans not supported** yet. The privacy guard
   intentionally blocks login flows.

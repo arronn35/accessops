@@ -171,7 +171,7 @@ async function captureOne(args: {
 
   let image: Buffer | null = null;
   let clip = box;
-  let redactions = visualEvidenceRedactionEnabled()
+  const redactions = visualEvidenceRedactionEnabled()
     ? await collectSensitiveRects(page, {
         x: 0,
         y: 0,

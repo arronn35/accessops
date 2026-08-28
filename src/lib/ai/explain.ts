@@ -14,6 +14,11 @@
  */
 import Anthropic from "@anthropic-ai/sdk";
 import { aiMockEnabled } from "@/lib/config";
+import {
+  AI_REVIEW_FOOTER,
+  COMPLIANCE_RULES,
+  sanitizeAiOutput,
+} from "@/lib/ai/guardrails";
 
 /** Thrown when AI is requested but not configured (and mock is disabled). */
 export class AiUnavailableError extends Error {
@@ -27,26 +32,13 @@ const SYSTEM_PROMPT = `You are an accessibility engineer assistant for AccessOps
 
 You explain accessibility issues, who they affect, and how to fix them.
 
-Forbidden:
-- Claiming a website is or will be "compliant" with any law or standard
-- Claiming WCAG, ADA, EAA, Section 508, or EN 301 549 compliance
-- Issuing or implying certification
-- Recommending accessibility overlay widgets as a substitute for real fixes
-- Saying "fully compliant", "100% compliant", "certified", or "legally compliant"
+${COMPLIANCE_RULES}
 
-Always end with: "AI-generated suggestion. Review before implementation."
+Always end with: "${AI_REVIEW_FOOTER}"
 
 Be concrete. Show before/after code when relevant. Keep explanations under
 180 words. Use plain language a non-technical stakeholder could read,
 followed by a developer-targeted fix.`;
-
-const FORBIDDEN_PHRASES = [
-  /fully[\s-]?compliant/gi,
-  /100%[\s-]?compliant/gi,
-  /legally[\s-]?compliant/gi,
-  /guaranteed[\s-]?compliance/gi,
-  /\bcertified\b/gi,
-];
 
 export interface ExplainInput {
   ruleId: string;
@@ -64,18 +56,10 @@ export interface ExplainOutput {
   modelProvider: "anthropic" | "mock";
 }
 
-function sanitize(text: string): string {
-  let out = text;
-  for (const re of FORBIDDEN_PHRASES) {
-    out = out.replace(re, "[removed]");
-  }
-  return out.trim();
-}
-
 function mockExplanation(input: ExplainInput): ExplainOutput {
   const fw = input.framework ?? "HTML";
   return {
-    explanationPlain: `This page has a "${input.help}" issue (axe rule \`${input.ruleId}\`). ${input.description} Without this fix, users relying on assistive technology may be unable to perceive, operate, or understand this part of the interface.\n\nAI-generated suggestion. Review before implementation.`,
+    explanationPlain: `This page has a "${input.help}" issue (axe rule \`${input.ruleId}\`). ${input.description} Without this fix, users relying on assistive technology may be unable to perceive, operate, or understand this part of the interface.\n\n${AI_REVIEW_FOOTER}`,
     remediationSummary: `In ${fw}, address the failing element identified by the rule and verify with a screen reader pass.`,
     codeFixExample: `<!-- Apply the appropriate ARIA attribute, label, or contrast adjustment per axe-core's helpUrl -->`,
     modelProvider: "mock",
@@ -100,14 +84,14 @@ export async function explainIssue(input: ExplainInput): Promise<ExplainOutput> 
       messages: [
         {
           role: "user",
-          content: `Explain this accessibility finding.\n\nRule: ${input.ruleId}\nWCAG tags: ${input.wcagTags.join(", ")}\nDescription: ${input.description}\nHelp: ${input.help}\nTarget framework: ${input.framework ?? "HTML/CSS"}\nHTML snippet (truncated):\n${snippet}\n\nRespond with:\n1) Plain-language explanation (max 90 words).\n2) Who is affected (1-2 sentences).\n3) Concrete code fix in the target framework.\n\nEnd with the mandatory "AI-generated suggestion. Review before implementation." line.`,
+          content: `Explain this accessibility finding.\n\nRule: ${input.ruleId}\nWCAG tags: ${input.wcagTags.join(", ")}\nDescription: ${input.description}\nHelp: ${input.help}\nTarget framework: ${input.framework ?? "HTML/CSS"}\nHTML snippet (truncated):\n${snippet}\n\nRespond with:\n1) Plain-language explanation (max 90 words).\n2) Who is affected (1-2 sentences).\n3) Concrete code fix in the target framework.\n\nEnd with the mandatory "${AI_REVIEW_FOOTER}" line.`,
         },
       ],
     });
 
     const textBlock = response.content.find((b) => b.type === "text");
     const raw = textBlock && "text" in textBlock ? textBlock.text : "";
-    const cleaned = sanitize(raw);
+    const cleaned = sanitizeAiOutput(raw);
 
     return {
       explanationPlain: cleaned,

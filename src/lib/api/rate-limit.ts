@@ -49,6 +49,9 @@ export const limiters = {
   scanCreate: makeLimiter("rl:scan_create", 5, "1 m"),
   // 60 AI explanation requests per hour per workspace (cost guard).
   aiExplain: makeLimiter("rl:ai_explain", 60, "1 h"),
+  // AI Assistant briefs cover a whole scan, so each call is far more
+  // expensive than a single-issue explanation — a tighter cap.
+  aiAssistant: makeLimiter("rl:ai_assistant", 20, "1 h"),
   // 30 report exports per hour.
   reportExport: makeLimiter("rl:report_export", 30, "1 h"),
   // Evidence images may contain sensitive customer page content.

@@ -32,7 +32,7 @@ const SECTIONS = [
 
 const FORMATS = [
   { id: "html", label: "HTML", icon: FileBarChart2 },
-  { id: "pdf", label: "PDF (browser print)", icon: FileText },
+  { id: "pdf", label: "PDF", icon: FileText },
   { id: "csv", label: "CSV (issues only)", icon: Download },
 ] as const;
 
@@ -214,8 +214,14 @@ export default function ReportBuilderPage() {
               </div>
               {format === "pdf" && (
                 <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-                  We render an HTML report and trigger the browser&apos;s print-to-PDF dialog —
-                  no server-side PDF binary, no file storage costs. Click <em>Print</em> in the new tab.
+                  A paginated, print-ready PDF is generated on the server and downloads
+                  straight away — same sections as the HTML report, including the disclaimer.
+                </p>
+              )}
+              {format === "csv" && (
+                <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+                  One row per finding (rule, severity, WCAG tags, page URL, help text), ready
+                  for a spreadsheet or an issue tracker import.
                 </p>
               )}
             </CardContent>
