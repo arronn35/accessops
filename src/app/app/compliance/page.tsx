@@ -6,7 +6,7 @@ import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/com
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { PrivacyToggle } from "./privacy-toggle";
 import { DeleteAllScansButton, ExportWorkspaceButton } from "./delete-actions";
 import { RegionHostingCard } from "./region-hosting-card";
@@ -49,12 +49,12 @@ const LEGAL_PAGES = [
 const SUBPROCESSORS = [
   { name: "Vercel", purpose: "Application hosting and API", region: "US/global" },
   { name: "Firebase", purpose: "Authentication and Firestore workspace storage", region: "Configured project region" },
-  { name: "Google Cloud Run", purpose: "Browser scan worker (Playwright + axe-core); page content processed transiently", region: "EU (europe-west1)" },
+  { name: "Google Cloud Run", purpose: "Browser scan worker (Playwright + axe-core); page content processed transiently", region: "Configured worker region" },
   { name: "OpenAI API", purpose: "GPT explanations and remediation suggestions when enabled", region: "US" },
 ];
 
 export default async function CompliancePage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("manage_privacy");
   const aiOn = !!ctx.privacy?.aiProcessingEnabled;
   const screenshotsOn = !!ctx.privacy?.screenshotStorageEnabled;
   const visualEvidenceOn = !!ctx.privacy?.visualEvidenceEnabled;
@@ -188,9 +188,9 @@ export default async function CompliancePage() {
         <Card>
           <CardContent className="pt-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
-              <h3 className="text-sm font-semibold text-ink-900">Accessibility Statement & verified badge</h3>
+              <h3 className="text-sm font-semibold text-ink-900">Accessibility statement &amp; work-record badge</h3>
               <p className="text-xs text-ink-600 mt-1 leading-relaxed max-w-[550px]">
-                Generate a legally compliant (WCAG 2.2 AA) Accessibility Statement based on your latest scan and manual review results, and obtain a verified badge to display in your website footer.
+                Draft a transparent accessibility statement from your latest automated scan and guided manual-review progress. Publish a badge that links to this work record; it is not certification or a legal-compliance determination.
               </p>
             </div>
             <Link

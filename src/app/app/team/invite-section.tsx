@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Mail, Trash2 } from "lucide-react";
 import { sendInviteEmail } from "@/lib/firebase/invite-email";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface Invitation {
   id: string;
@@ -55,6 +56,12 @@ export function InviteSection({
   const [info, setInfo] = useState<string | null>(null);
   const [invites, setInvites] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this section re-renders on every keystroke/invite, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree
+  // entirely.
+  const { t } = useLanguage();
 
   useEffect(() => {
     let cancelled = false;
@@ -139,17 +146,16 @@ export function InviteSection({
 
   if (!canInvite) {
     return (
-      <p className="text-xs text-ink-500">
-        Ask a workspace owner or admin to send invitations.
+      <p className="text-xs text-ink-500" data-i18n-skip>
+        {t("Ask a workspace owner or admin to send invitations.")}
       </p>
     );
   }
 
   if (roleOptions.length === 0) {
     return (
-      <p className="text-xs text-ink-500">
-        The current plan ({planName}) is single-seat. Upgrade to invite
-        teammates.
+      <p className="text-xs text-ink-500" data-i18n-skip>
+        {t("The current plan (")}{planName}{t(") is single-seat. Upgrade to invite teammates.")}
       </p>
     );
   }
@@ -157,11 +163,10 @@ export function InviteSection({
   const outOfSeats = seatsRemaining <= 0;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-5" data-i18n-skip>
       {outOfSeats && (
         <div className="rounded-md border border-amber-200 bg-amber-50 text-amber-900 text-xs p-3">
-          You&apos;ve used all {memberLimit} seat(s) on the {planName} plan.
-          Upgrade your plan to invite more teammates.
+          {t("You've used all")} {memberLimit} {t("seat(s) on the")} {planName} {t("plan. Upgrade your plan to invite more teammates.")}
         </div>
       )}
       <form
@@ -173,7 +178,7 @@ export function InviteSection({
             htmlFor="invite-email"
             className="block text-xs font-semibold text-ink-700 mb-1"
           >
-            Email address
+            {t("Email address")}
           </label>
           <input
             id="invite-email"
@@ -181,7 +186,7 @@ export function InviteSection({
             required
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="teammate@example.com"
+            placeholder={t("teammate@example.com")}
             className="w-full h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm"
           />
         </div>
@@ -190,7 +195,7 @@ export function InviteSection({
             htmlFor="invite-role"
             className="block text-xs font-semibold text-ink-700 mb-1"
           >
-            Role
+            {t("Role")}
           </label>
           <select
             id="invite-role"
@@ -200,7 +205,7 @@ export function InviteSection({
           >
             {roleOptions.map((o) => (
               <option key={o.value} value={o.value}>
-                {o.label}
+                {t(o.label)}
               </option>
             ))}
           </select>
@@ -211,13 +216,13 @@ export function InviteSection({
           className="inline-flex items-center gap-1.5 h-10 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 disabled:opacity-50"
         >
           <Mail className="size-4" aria-hidden />
-          {busy ? "Sending…" : "Send invite"}
+          {busy ? t("Sending…") : t("Send invite")}
         </button>
       </form>
 
       {error && (
         <div className="rounded-md border border-rose-200 bg-rose-50 text-rose-900 text-xs p-3">
-          {error}
+          {t(error)}
         </div>
       )}
       {info && (
@@ -228,12 +233,12 @@ export function InviteSection({
 
       <div>
         <h3 className="text-xs font-semibold uppercase tracking-wider text-ink-500 mb-2">
-          Pending invitations
+          {t("Pending invitations")}
         </h3>
         {loading ? (
-          <p className="text-xs text-ink-500">Loading…</p>
+          <p className="text-xs text-ink-500">{t("Loading…")}</p>
         ) : invites.length === 0 ? (
-          <p className="text-xs text-ink-500">No pending invitations.</p>
+          <p className="text-xs text-ink-500">{t("No pending invitations.")}</p>
         ) : (
           <ul className="space-y-2">
             {invites.map((inv) => (
@@ -257,7 +262,7 @@ export function InviteSection({
                   aria-label={`Revoke invite for ${inv.email}`}
                 >
                   <Trash2 className="size-3.5" aria-hidden />
-                  Revoke
+                  {t("Revoke")}
                 </button>
               </li>
             ))}

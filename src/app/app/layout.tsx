@@ -18,7 +18,7 @@ export default async function AppLayout({ children }: { children: ReactNode }) {
   }
 
   return (
-    <div className="flex min-h-screen w-full">
+    <div className="safe-area-x flex min-h-dvh w-full bg-canvas">
       <AccountLocaleSync locale={ctx.user.locale} />
       <SideNav />
       <div className="flex-1 flex flex-col min-w-0">

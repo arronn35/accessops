@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
 import { WcagBadge } from "@/components/scan/WcagBadge";
 import { HumanReviewBanner } from "@/components/compliance/HumanReviewBanner";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { getIssue, getLatestAiExplanationForIssue, getScanJob, getVisualEvidenceForIssue, listScanPages } from "@/lib/data/firestore";
 import { AiExplanationPanel } from "./ai-panel";
 import { IssueActions } from "./issue-actions";
@@ -22,7 +22,7 @@ export default async function IssueDetailPage({
   params: Promise<{ id: string; issueId: string }>;
 }) {
   const { id, issueId } = await params;
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
   const [scan, issue, pages, evidence] = await Promise.all([
     getScanJob(ctx.workspace.id, id),
     getIssue(ctx.workspace.id, id, issueId),

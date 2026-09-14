@@ -16,6 +16,7 @@ import type {
 } from "./types";
 import { staticExpertHeuristics } from "./expert-heuristics";
 import { resolveScanSourcePlan, sameOriginCanonicalUrl } from "./sources";
+import { ResponseTooLargeError, readBoundedText } from "./fetch-bounded";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 8_000;
 const MAX_HTML_BYTES = 1_500_000;
@@ -336,8 +337,10 @@ async function fetchHtmlSafely(
       }
 
       const contentType = res.headers.get("content-type");
-      const html = contentType?.includes("html") ? await res.text() : "";
+      // Error statuses carry no analyzable body — cancel the stream without
+      // reading so a huge error page can never become an allocation.
       if (res.status >= 400) {
+        await res.body?.cancel()?.catch(() => {});
         return {
           url: res.url || current,
           statusCode: res.status,
@@ -345,6 +348,23 @@ async function fetchHtmlSafely(
           html: "",
           errorMessage: `http_${res.status}`,
         };
+      }
+      let html = "";
+      if (contentType?.includes("html")) {
+        try {
+          html = await readBoundedText(res, MAX_HTML_BYTES);
+        } catch (err) {
+          if (err instanceof ResponseTooLargeError) {
+            return {
+              url: res.url || current,
+              statusCode: res.status,
+              contentType,
+              html: "",
+              errorMessage: "response_too_large",
+            };
+          }
+          throw err;
+        }
       }
       if (html && looksLikeBotChallenge(html)) {
         return {

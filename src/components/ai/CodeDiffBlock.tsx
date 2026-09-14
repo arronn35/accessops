@@ -3,6 +3,7 @@
 import { Copy, Check } from "lucide-react";
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface CodeBlock {
   label: string;
@@ -21,7 +22,7 @@ export function CodeDiffBlock({
   className?: string;
 }) {
   return (
-    <div className={cn("grid gap-3", before && "md:grid-cols-2", className)}>
+    <div className={cn("grid gap-3", before && "md:grid-cols-2", className)} data-i18n-skip>
       {before && <CodePanel block={{ ...before, tone: "before" }} />}
       <CodePanel block={{ ...after, tone: "after" }} />
     </div>
@@ -30,6 +31,11 @@ export function CodeDiffBlock({
 
 function CodePanel({ block }: { block: CodeBlock }) {
   const [copied, setCopied] = useState(false);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this panel re-renders on every copy, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
   const isAfter = block.tone === "after";
 
   const handleCopy = () => {
@@ -41,6 +47,7 @@ function CodePanel({ block }: { block: CodeBlock }) {
 
   return (
     <div
+      data-i18n-skip
       className={cn(
         "rounded-md overflow-hidden ring-1",
         isAfter ? "ring-green-50 bg-green-50/30" : "ring-rose-50 bg-rose-50/30"
@@ -60,15 +67,15 @@ function CodePanel({ block }: { block: CodeBlock }) {
             )}
             aria-hidden
           />
-          {block.label}
+          {t(block.label)}
         </span>
         <button
           onClick={handleCopy}
           className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium hover:bg-paper/60"
-          aria-label={`Copy ${block.label}`}
+          aria-label={`${t("Copy")} ${block.label}`}
         >
           {copied ? <Check className="size-3" aria-hidden /> : <Copy className="size-3" aria-hidden />}
-          {copied ? "Copied" : "Copy"}
+          {copied ? t("Copied") : t("Copy")}
         </button>
       </header>
       <pre className="px-3 py-3 text-xs leading-relaxed font-mono text-ink-900 overflow-x-auto bg-paper">

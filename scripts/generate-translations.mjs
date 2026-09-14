@@ -9,7 +9,13 @@ dotenv.config({ path: ".env.local", quiet: true });
 const apiKey = process.env.OPENAI_API_KEY;
 if (!apiKey) throw new Error("OPENAI_API_KEY is required");
 
-const ROOTS = ["src/app", "src/components"];
+// src/lib/marketing holds runtime UI copy (plan names, CTAs, cadences) that
+// renders inside src/app + src/components. Past audits found those strings
+// untranslated because only .tsx under app/components was scanned.
+// src/lib/microcopy (COMPLIANCE_COPY) and src/lib/onboarding (PERSONAS) are
+// member-expression sources for the same reason — include them so a regen
+// never drops keys the extractor can't see from JSX alone.
+const ROOTS = ["src/app", "src/components", "src/lib/marketing", "src/lib/microcopy", "src/lib/onboarding"];
 const OUTPUT = "src/lib/i18n/translations.tr.json";
 const CACHE = "/private/tmp/accessops-i18n-translations.json";
 const MODEL = process.env.OPENAI_MODEL || "gpt-5.3-codex";
@@ -26,7 +32,13 @@ function walk(directory, files = []) {
   for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
     const target = path.join(directory, entry.name);
     if (entry.isDirectory()) walk(target, files);
-    else if (entry.name.endsWith(".tsx")) files.push(target);
+    else if (
+      entry.name.endsWith(".tsx") ||
+      (entry.name.endsWith(".ts") &&
+        !entry.name.endsWith(".test.ts") &&
+        !entry.name.endsWith(".d.ts"))
+    )
+      files.push(target);
   }
   return files;
 }

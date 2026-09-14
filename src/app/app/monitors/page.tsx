@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { Activity, Sparkles } from "lucide-react";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { listMonitors } from "@/lib/data/firestore";
 import { monitorCapsForPlan, normalizePlan } from "@/lib/entitlements";
 import { MonitorsManager, type MonitorRow } from "./monitors-manager";
@@ -16,7 +16,7 @@ function toIso(value: Date | string | null | undefined): string | null {
 }
 
 export default async function MonitorsPage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
   const plan = normalizePlan(ctx.workspace.plan);
   const caps = monitorCapsForPlan(plan);
   const monitors = await listMonitors(ctx.workspace.id);

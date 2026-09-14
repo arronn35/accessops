@@ -49,6 +49,9 @@ export interface DeletionCounts extends Record<string, number> {
   issues: number;
   groups: number;
   summaries: number;
+  manualReviews: number;
+  failedOperations: number;
+  retryRequired: number;
   visualEvidence: number;
   reports: number;
   reportShares: number;
@@ -65,6 +68,9 @@ function emptyCounts(): DeletionCounts {
     issues: 0,
     groups: 0,
     summaries: 0,
+    manualReviews: 0,
+    failedOperations: 0,
+    retryRequired: 0,
     visualEvidence: 0,
     reports: 0,
     reportShares: 0,
@@ -75,7 +81,7 @@ function emptyCounts(): DeletionCounts {
 }
 
 /** Repeatedly query + batch-delete until the query returns nothing. */
-async function deleteQueryDocs(query: Query): Promise<number> {
+async function deleteQueryDocs(query: Query, onProgress?: (deleted: number) => void): Promise<number> {
   let deleted = 0;
   for (;;) {
     const snap = await query.limit(DELETE_CHUNK_SIZE).get();
@@ -84,6 +90,7 @@ async function deleteQueryDocs(query: Query): Promise<number> {
     for (const doc of snap.docs) batch.delete(doc.ref);
     await batch.commit();
     deleted += snap.size;
+    onProgress?.(deleted);
     if (snap.size < DELETE_CHUNK_SIZE) return deleted;
   }
 }
@@ -91,6 +98,13 @@ async function deleteQueryDocs(query: Query): Promise<number> {
 async function countQuery(query: Query): Promise<number> {
   const snap = await query.count().get();
   return snap.data().count;
+}
+
+export class DataDeletionError extends Error {
+  constructor(error: unknown, public readonly deletedCounts: DeletionCounts) {
+    super(error instanceof Error ? error.message : "data_deletion_failed");
+    this.name = "DataDeletionError";
+  }
 }
 
 /**
@@ -105,61 +119,75 @@ export async function deleteScanCompletely(
   scanId: string
 ): Promise<DeletionCounts> {
   const counts = emptyCounts();
-  const scanRef = workspaceRef(workspaceId).collection("scans").doc(scanId);
+  try {
+    const scanRef = workspaceRef(workspaceId).collection("scans").doc(scanId);
 
-  counts.pageJobs = await deleteQueryDocs(scanRef.collection("pageJobs"));
-  counts.pages = await deleteQueryDocs(scanRef.collection("pages"));
-  counts.issues = await deleteQueryDocs(scanRef.collection("issues"));
-  counts.groups = await deleteQueryDocs(scanRef.collection("groups"));
-  counts.summaries = await deleteQueryDocs(scanRef.collection("meta"));
-  counts.visualEvidence = await deleteQueryDocs(
-    db()
-      .collection("visualEvidence")
-      .where("workspaceId", "==", workspaceId)
-      .where("scanJobId", "==", scanId)
-  );
+    // Fence review transactions before deleting children. Never create a missing
+    // parent: retries must also work for legacy orphaned subcollections.
+    const parentExisted = await db().runTransaction(async (tx) => {
+      const snap = await tx.get(scanRef);
+      if (snap.exists) tx.set(scanRef, { deletionStartedAt: now(), status: "failed", claimedBy: null }, { merge: true });
+      return snap.exists;
+    });
+    counts.manualReviews = await deleteQueryDocs(scanRef.collection("manualReviews"), (deleted) => { counts.manualReviews = deleted; });
+    counts.pageJobs = await deleteQueryDocs(scanRef.collection("pageJobs"));
+    counts.pages = await deleteQueryDocs(scanRef.collection("pages"));
+    counts.issues = await deleteQueryDocs(scanRef.collection("issues"));
+    counts.groups = await deleteQueryDocs(scanRef.collection("groups"));
+    counts.summaries = await deleteQueryDocs(scanRef.collection("meta"));
+    counts.visualEvidence = await deleteQueryDocs(
+      db()
+        .collection("visualEvidence")
+        .where("workspaceId", "==", workspaceId)
+        .where("scanJobId", "==", scanId)
+    );
 
-  // Reports built from this scan, revoking public shares first.
-  const reports = await workspaceRef(workspaceId)
-    .collection("reports")
-    .where("scanJobId", "==", scanId)
-    .get();
-  if (!reports.empty) {
-    const batch = db().batch();
-    for (const doc of reports.docs) {
-      const report = readDoc<Report>(doc.id, doc.data());
-      if (report?.publicShareToken) {
-        batch.delete(db().collection("publicReportShares").doc(report.publicShareToken));
-        counts.reportShares += 1;
+    // Reports built from this scan, revoking public shares first.
+    const reportQuery = workspaceRef(workspaceId).collection("reports").where("scanJobId", "==", scanId);
+    for (;;) {
+      // Each report can consume two writes (report + public share).
+      const reports = await reportQuery.limit(Math.floor(DELETE_CHUNK_SIZE / 2)).get();
+      if (reports.empty) break;
+      const batch = db().batch();
+      for (const doc of reports.docs) {
+        const report = readDoc<Report>(doc.id, doc.data());
+        if (report?.publicShareToken) {
+          batch.delete(db().collection("publicReportShares").doc(report.publicShareToken));
+          counts.reportShares += 1;
+        }
+        batch.delete(doc.ref);
       }
-      batch.delete(doc.ref);
-      counts.reports += 1;
+      await batch.commit();
+      counts.reports += reports.size;
     }
-    await batch.commit();
+
+    // Remediation tasks generated from this scan.
+    counts.remediationTasks += await deleteQueryDocs(
+      workspaceRef(workspaceId)
+        .collection("remediationTasks")
+        .where("scanJobId", "==", scanId)
+    );
+
+    // Persisted AI output tied to this scan.
+    counts.aiExplanations += await deleteQueryDocs(
+      workspaceRef(workspaceId)
+        .collection("aiExplanations")
+        .where("scanJobId", "==", scanId)
+    );
+    counts.aiAssistantResults += await deleteQueryDocs(
+      workspaceRef(workspaceId)
+        .collection("aiAssistantResults")
+        .where("scanJobId", "==", scanId)
+    );
+
+    await scanRef.delete();
+    counts.scans = parentExisted ? 1 : 0;
+    return counts;
+  } catch (error) {
+    counts.failedOperations += 1;
+    counts.retryRequired += 1;
+    throw new DataDeletionError(error, counts);
   }
-
-  // Remediation tasks generated from this scan.
-  counts.remediationTasks += await deleteQueryDocs(
-    workspaceRef(workspaceId)
-      .collection("remediationTasks")
-      .where("scanJobId", "==", scanId)
-  );
-
-  // Persisted AI output tied to this scan.
-  counts.aiExplanations += await deleteQueryDocs(
-    workspaceRef(workspaceId)
-      .collection("aiExplanations")
-      .where("scanJobId", "==", scanId)
-  );
-  counts.aiAssistantResults += await deleteQueryDocs(
-    workspaceRef(workspaceId)
-      .collection("aiAssistantResults")
-      .where("scanJobId", "==", scanId)
-  );
-
-  await scanRef.delete();
-  counts.scans = 1;
-  return counts;
 }
 
 function addCounts(into: DeletionCounts, from: Partial<DeletionCounts>): void {
@@ -179,21 +207,17 @@ async function cancelActiveScans(workspaceId: string): Promise<void> {
     .get();
   if (snap.empty) return;
   const at = now();
-  const batch = db().batch();
-  for (const doc of snap.docs) {
-    batch.set(
-      doc.ref,
-      {
-        status: "failed",
-        progressStep: "failed",
-        completedAt: at,
-        errorMessage: "workspace_scan_data_deleted",
-        updatedAt: at,
-      },
-      { merge: true }
-    );
+  for (let offset = 0; offset < snap.docs.length; offset += DELETE_CHUNK_SIZE) {
+    const batch = db().batch();
+    for (const doc of snap.docs.slice(offset, offset + DELETE_CHUNK_SIZE)) {
+      batch.set(doc.ref, {
+        status: "failed", claimedBy: null, deletionStartedAt: at,
+        progressStep: "failed", completedAt: at,
+        errorMessage: "workspace_scan_data_deleted", updatedAt: at,
+      }, { merge: true });
+    }
+    await batch.commit();
   }
-  await batch.commit();
 }
 
 export async function deleteWorkspaceScanData(
@@ -201,63 +225,76 @@ export async function deleteWorkspaceScanData(
 ): Promise<DeletionCounts> {
   const counts = emptyCounts();
 
-  await cancelActiveScans(workspaceId);
+  try {
+    await cancelActiveScans(workspaceId);
 
-  // Scans + per-scan artifacts.
-  for (;;) {
-    const snap = await workspaceRef(workspaceId)
-      .collection("scans")
-      .limit(DELETE_CHUNK_SIZE)
-      .select(FieldPath.documentId())
-      .get();
-    if (snap.empty) break;
-    for (const doc of snap.docs) {
-      addCounts(counts, await deleteScanCompletely(workspaceId, doc.id));
-    }
-  }
-
-  // Visual evidence not tied to a still-existing scan (orphans, legacy rows).
-  counts.visualEvidence += await deleteQueryDocs(
-    db().collection("visualEvidence").where("workspaceId", "==", workspaceId)
-  );
-
-  // Reports, revoking public shares first so tokens stop resolving.
-  for (;;) {
-    const snap = await workspaceRef(workspaceId)
-      .collection("reports")
-      .limit(DELETE_CHUNK_SIZE)
-      .get();
-    if (snap.empty) break;
-    const batch = db().batch();
-    for (const doc of snap.docs) {
-      const report = readDoc<Report>(doc.id, doc.data());
-      if (report?.publicShareToken) {
-        batch.delete(db().collection("publicReportShares").doc(report.publicShareToken));
-        counts.reportShares += 1;
+    // Scans + per-scan artifacts.
+    for (;;) {
+      const snap = await workspaceRef(workspaceId)
+        .collection("scans")
+        .limit(DELETE_CHUNK_SIZE)
+        .select(FieldPath.documentId())
+        .get();
+      if (snap.empty) break;
+      for (const doc of snap.docs) {
+        addCounts(counts, await deleteScanCompletely(workspaceId, doc.id));
       }
-      batch.delete(doc.ref);
-      counts.reports += 1;
     }
-    await batch.commit();
-    if (snap.size < DELETE_CHUNK_SIZE) break;
+
+    // listDocuments includes missing scan documents that still have children.
+    // A normal query would silently miss these legacy orphaned reviews.
+    const orphanParents = await workspaceRef(workspaceId).collection("scans").listDocuments();
+    for (const ref of orphanParents) {
+      addCounts(counts, await deleteScanCompletely(workspaceId, ref.id));
+    }
+
+    // Visual evidence not tied to a still-existing scan (orphans, legacy rows).
+    counts.visualEvidence += await deleteQueryDocs(
+      db().collection("visualEvidence").where("workspaceId", "==", workspaceId)
+    );
+
+    // Reports, revoking public shares first so tokens stop resolving.
+    for (;;) {
+      const snap = await workspaceRef(workspaceId)
+        .collection("reports")
+        .limit(Math.floor(DELETE_CHUNK_SIZE / 2))
+        .get();
+      if (snap.empty) break;
+      const batch = db().batch();
+      for (const doc of snap.docs) {
+        const report = readDoc<Report>(doc.id, doc.data());
+        if (report?.publicShareToken) {
+          batch.delete(db().collection("publicReportShares").doc(report.publicShareToken));
+          counts.reportShares += 1;
+        }
+        batch.delete(doc.ref);
+        counts.reports += 1;
+      }
+      await batch.commit();
+
+    }
+
+    // Remediation tasks generated from scans. Manually created tasks
+    // (scanJobId == null) carry no scan content and are kept. Firestore cannot
+    // query `!= null`, so filter in memory.
+    counts.remediationTasks += await deleteScanLinkedRemediationTasks(workspaceId);
+
+    // Sweep orphaned or legacy AI rows too. Per-scan deletion removes the
+    // normally linked records, but workspace deletion must still complete if a
+    // scan was deleted by an older code path or an in-flight writer left residue.
+    counts.aiExplanations += await deleteQueryDocs(
+      workspaceRef(workspaceId).collection("aiExplanations")
+    );
+    counts.aiAssistantResults += await deleteQueryDocs(
+      workspaceRef(workspaceId).collection("aiAssistantResults")
+    );
+
+    return counts;
+  } catch (error) {
+    if (error instanceof DataDeletionError) addCounts(counts, error.deletedCounts);
+    else { counts.failedOperations += 1; counts.retryRequired += 1; }
+    throw new DataDeletionError(error, counts);
   }
-
-  // Remediation tasks generated from scans. Manually created tasks
-  // (scanJobId == null) carry no scan content and are kept. Firestore cannot
-  // query `!= null`, so filter in memory.
-  counts.remediationTasks += await deleteScanLinkedRemediationTasks(workspaceId);
-
-  // Sweep orphaned or legacy AI rows too. Per-scan deletion removes the
-  // normally linked records, but workspace deletion must still complete if a
-  // scan was deleted by an older code path or an in-flight writer left residue.
-  counts.aiExplanations += await deleteQueryDocs(
-    workspaceRef(workspaceId).collection("aiExplanations")
-  );
-  counts.aiAssistantResults += await deleteQueryDocs(
-    workspaceRef(workspaceId).collection("aiAssistantResults")
-  );
-
-  return counts;
 }
 
 async function listScanLinkedRemediationTaskRefs(workspaceId: string) {
@@ -286,6 +323,10 @@ async function verifyWorkspaceScanDataDeleted(workspaceId: string): Promise<bool
       countQuery(workspaceRef(workspaceId).collection("aiExplanations")),
       countQuery(workspaceRef(workspaceId).collection("aiAssistantResults")),
     ]);
+  const scanRefs = await workspaceRef(workspaceId).collection("scans").listDocuments();
+  for (const ref of scanRefs) {
+    if (await countQuery(ref.collection("manualReviews")) > 0) return false;
+  }
   return (
     scans === 0 &&
     evidence === 0 &&
@@ -492,6 +533,7 @@ export async function runDataDeletionJob(job: DataDeletionJob): Promise<DataDele
     });
     return (await getDataDeletionJob(job.workspaceId, job.id))!;
   } catch (err) {
+    if (err instanceof DataDeletionError) addCounts(counts, err.deletedCounts);
     const at = now();
     await ref.set(
       {
@@ -511,6 +553,9 @@ export interface RetentionSweepResult {
   workspacesProcessed: number;
   scansDeleted: number;
   evidenceDeleted: number;
+  manualReviewsDeleted: number;
+  failedScans: number;
+  retryScanIds: string[];
 }
 
 /**
@@ -522,6 +567,9 @@ export async function purgeExpiredScanData(): Promise<RetentionSweepResult> {
     workspacesProcessed: 0,
     scansDeleted: 0,
     evidenceDeleted: 0,
+    manualReviewsDeleted: 0,
+    failedScans: 0,
+    retryScanIds: [],
   };
 
   const workspaces = await db().collection("workspaces").select(FieldPath.documentId()).get();
@@ -542,9 +590,16 @@ export async function purgeExpiredScanData(): Promise<RetentionSweepResult> {
 
     let scansDeleted = 0;
     for (const scanDoc of expired.docs) {
-      const counts = await deleteScanCompletely(workspaceId, scanDoc.id);
-      scansDeleted += counts.scans;
-      result.evidenceDeleted += counts.visualEvidence;
+      try {
+        const counts = await deleteScanCompletely(workspaceId, scanDoc.id);
+        scansDeleted += counts.scans;
+        result.evidenceDeleted += counts.visualEvidence;
+        result.manualReviewsDeleted += counts.manualReviews;
+      } catch (error) {
+        if (error instanceof DataDeletionError) result.manualReviewsDeleted += error.deletedCounts.manualReviews;
+        result.failedScans += 1;
+        result.retryScanIds.push(`${workspaceId}/${scanDoc.id}`);
+      }
     }
     result.scansDeleted += scansDeleted;
 

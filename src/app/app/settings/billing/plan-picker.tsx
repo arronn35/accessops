@@ -3,6 +3,7 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 const PLANS = [
   { id: "free", name: "Free", price: "€0" },
@@ -31,11 +32,17 @@ export function PlanPicker({
   const [error, setError] = useState<string | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this picker re-renders on every plan select, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree
+  // entirely.
+  const { t } = useLanguage();
 
   if (!canManage) {
     return (
-      <p className="text-sm text-ink-600">
-        Only workspace owners or admins can change the plan.
+      <p className="text-sm text-ink-600" data-i18n-skip>
+        {t("Only workspace owners or admins can change the plan.")}
       </p>
     );
   }
@@ -110,10 +117,10 @@ export function PlanPicker({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4" data-i18n-skip>
       {error && (
         <div className="rounded-md border border-rose-200 bg-rose-50 text-rose-900 text-sm p-3">
-          {error}
+          {t(error)}
         </div>
       )}
       {info && (
@@ -125,11 +132,11 @@ export function PlanPicker({
       <div className="rounded-lg ring-1 ring-line bg-paper p-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-sm font-semibold text-ink-900">Switch plan</h2>
+            <h2 className="text-sm font-semibold text-ink-900">{t("Switch plan")}</h2>
             <p className="text-xs text-ink-600 mt-1">
               {billingEnabled
-                ? "Choose a paid plan to open secure checkout, or drop to Free."
-                : "Pick a plan to apply its limits and permissions to this workspace."}
+                ? t("Choose a paid plan to open secure checkout, or drop to Free.")
+                : t("Pick a plan to apply its limits and permissions to this workspace.")}
             </p>
           </div>
           {billingEnabled && hasSubscription && (
@@ -139,7 +146,7 @@ export function PlanPicker({
               disabled={busy !== null}
               onClick={openPortal}
             >
-              {busy === "portal" ? "Opening…" : "Manage subscription"}
+              {busy === "portal" ? t("Opening…") : t("Manage subscription")}
             </Button>
           )}
         </div>
@@ -177,7 +184,7 @@ export function PlanPicker({
                   disabled={isCurrent || busy !== null || pending}
                   onClick={() => choosePlan(p.id)}
                 >
-                  {label}
+                  {t(label)}
                 </Button>
               </li>
             );

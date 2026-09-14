@@ -4,6 +4,7 @@ const {
   requireSessionMock,
   roleHasPermissionMock,
   polarConfiguredMock,
+  directPlanSelectEnabledMock,
   getWorkspaceMock,
   updateWorkspaceMock,
   auditMock,
@@ -11,6 +12,7 @@ const {
   requireSessionMock: vi.fn(),
   roleHasPermissionMock: vi.fn(),
   polarConfiguredMock: vi.fn(),
+  directPlanSelectEnabledMock: vi.fn(),
   getWorkspaceMock: vi.fn(),
   updateWorkspaceMock: vi.fn(),
   auditMock: vi.fn(),
@@ -56,6 +58,10 @@ vi.mock("@/lib/billing/polar", () => ({
   polarConfigured: polarConfiguredMock,
 }));
 
+vi.mock("@/lib/config", () => ({
+  directPlanSelectEnabled: directPlanSelectEnabledMock,
+}));
+
 import { POST } from "./route";
 
 function request(plan: string): Request {
@@ -74,6 +80,8 @@ beforeEach(() => {
   });
   roleHasPermissionMock.mockReset().mockReturnValue(true);
   polarConfiguredMock.mockReset().mockReturnValue(true);
+  // Default to a local/demo build; production cases opt in explicitly.
+  directPlanSelectEnabledMock.mockReset().mockReturnValue(true);
   getWorkspaceMock.mockReset().mockResolvedValue({ id: "ws-1", plan: "free" });
   updateWorkspaceMock.mockReset().mockResolvedValue(undefined);
   auditMock.mockReset().mockResolvedValue(undefined);
@@ -112,5 +120,39 @@ describe("POST /api/plan/select", () => {
 
     expect(res.status).toBe(200);
     expect(updateWorkspaceMock).toHaveBeenCalledWith("ws-1", { plan: "starter" });
+  });
+
+  it("refuses a paid tier when billing is unconfigured and direct select is off", async () => {
+    // Production with no POLAR_ACCESS_TOKEN: the old code wrote the plan
+    // straight through, handing out a free enterprise upgrade.
+    polarConfiguredMock.mockReturnValue(false);
+    directPlanSelectEnabledMock.mockReturnValue(false);
+
+    const res = await POST(request("enterprise"));
+
+    expect(res.status).toBe(409);
+    const body = await res.json();
+    expect(body.error).toBe("billing_not_configured");
+    expect(updateWorkspaceMock).not.toHaveBeenCalled();
+  });
+
+  it("still allows a free downgrade when billing is unconfigured", async () => {
+    polarConfiguredMock.mockReturnValue(false);
+    directPlanSelectEnabledMock.mockReturnValue(false);
+
+    const res = await POST(request("free"));
+
+    expect(res.status).toBe(200);
+    expect(updateWorkspaceMock).toHaveBeenCalledWith("ws-1", { plan: "free" });
+  });
+
+  it("prefers the checkout error over the unconfigured error when Polar is set up", async () => {
+    polarConfiguredMock.mockReturnValue(true);
+    directPlanSelectEnabledMock.mockReturnValue(false);
+
+    const res = await POST(request("starter"));
+
+    expect((await res.json()).error).toBe("use_checkout");
+    expect(updateWorkspaceMock).not.toHaveBeenCalled();
   });
 });

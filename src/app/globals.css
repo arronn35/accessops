@@ -82,6 +82,11 @@
 }
 
 html {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100%;
+  overflow-x: hidden;
+  overflow-x: clip;
   text-size-adjust: 100%;
   -webkit-text-size-adjust: 100%;
 }
@@ -90,6 +95,13 @@ html[data-text-size="lg"] { font-size: 115%; }
 html[data-text-size="sm"] { font-size: 90%; }
 
 body {
+  width: 100%;
+  min-width: 320px;
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  overflow-x: hidden;
+  overflow-x: clip;
   background: var(--color-canvas);
   color: var(--color-ink-900);
   font-family: var(--font-sans);
@@ -97,6 +109,22 @@ body {
   -moz-osx-font-smoothing: grayscale;
   line-height: 1.55;
   text-wrap: pretty;
+}
+
+/* `viewport-fit=cover` lets installed iOS/Android experiences use the whole
+   display. These helpers keep interactive chrome clear of notches and home
+   indicators without introducing desktop gutters. */
+.safe-area-x {
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top, 0px);
+}
+
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 /* Display type is tight and heavy; the grotesk carries the layout.

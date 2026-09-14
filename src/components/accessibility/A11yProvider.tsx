@@ -36,10 +36,26 @@ function readPrefs(): StoredPrefs {
 }
 
 export function A11yProvider({ children }: { children: ReactNode }) {
-  // Lazy initial state: localStorage is read only on the client during first render.
-  const [textSize, setTextSizeState] = useState<TextSize>(() => readPrefs().textSize ?? "md");
-  const [contrast, setContrastState] = useState<Contrast>(() => readPrefs().contrast ?? "default");
-  const [motion, setMotionState] = useState<Motion>(() => readPrefs().motion ?? "default");
+  // Static initial state: reading localStorage during render returns {} on
+  // the server but stored prefs on the client, so the first client render
+  // would differ from the SSR HTML (hydration mismatch #418). Stored prefs
+  // are applied in a mount effect instead — one paint with defaults, then
+  // the user's prefs, with no server/client divergence.
+  const [textSize, setTextSizeState] = useState<TextSize>("md");
+  const [contrast, setContrastState] = useState<Contrast>("default");
+  const [motion, setMotionState] = useState<Motion>("default");
+
+  useEffect(() => {
+    const stored = readPrefs();
+    // Mount-only sync from localStorage. A lazy useState initializer would
+    // read storage during the first client render and diverge from the SSR
+    // HTML (hydration mismatch #418); the one cascading render here happens
+    // only when stored prefs differ from defaults.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (stored.textSize) setTextSizeState(stored.textSize);
+    if (stored.contrast) setContrastState(stored.contrast);
+    if (stored.motion) setMotionState(stored.motion);
+  }, []);
 
   // Sync to <html> data attributes + persist. Effect only writes to external systems.
   useEffect(() => {

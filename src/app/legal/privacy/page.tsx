@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/privacy"),
   title: "Privacy Policy — Percevia AI",
   description: "How maitrico Percevia AI processes your data.",
 };
@@ -77,6 +79,14 @@ export default function PrivacyPolicyPage() {
           processing is not currently handled; if and when it is reinstated
           we will update this Policy first.
         </li>
+        <li>
+          First-party product analytics events stored in Firestore, such as a
+          marketing page view, completed public check, first completed scan,
+          report export, monitor creation, or completed checkout. Identifiers
+          are pseudonymized before storage. These events do not contain scanned
+          URLs, email addresses, company names, page HTML, selectors, form
+          values, or screenshots.
+        </li>
       </ul>
 
       <h2>Where data is stored</h2>
@@ -98,7 +108,10 @@ export default function PrivacyPolicyPage() {
           To communicate transactional messages through Firebase Auth. We do
           not send marketing emails without your opt-in.
         </li>
-        <li>To improve and secure the Service — diagnostics, incident response.</li>
+        <li>
+          To improve and secure the Service — diagnostics, incident response,
+          and measuring whether users reach core product milestones.
+        </li>
       </ul>
 
       <h2>What we do not do</h2>
@@ -127,6 +140,11 @@ export default function PrivacyPolicyPage() {
         records that have aged out and writes an audit entry. Audit logs
         themselves are retained for at least 12 months. Backups follow our
         database provider&apos;s policy and are encrypted at rest.
+      </p>
+      <p>
+        First-party analytics events are retained for 180 days by default and
+        carry a Firestore TTL field. The deployment may shorten this period
+        through configuration.
       </p>
 
       <h2>Your rights</h2>
@@ -158,9 +176,10 @@ export default function PrivacyPolicyPage() {
 
       <h2>Cookies</h2>
       <p>
-        We use a first-party Firebase session cookie to keep you signed in. No
-        advertising cookies and no third-party tracking cookies are required to
-        use the Service.
+        We use a first-party Firebase session cookie to keep you signed in.
+        First-party analytics use a random identifier kept in browser session
+        storage, not a tracking cookie. No advertising cookies, cross-site
+        tracking, or session-replay tooling are required to use the Service.
       </p>
 
       <h2>Changes</h2>

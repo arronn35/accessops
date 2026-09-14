@@ -23,6 +23,12 @@ export default function sitemap(): MetadataRoute.Sitemap {
       changeFrequency: "monthly",
       priority: 0.7,
     },
+    ...["/solutions/agencies", "/solutions/turkiye", "/sample-report"].map((path) => ({
+      url: `${appUrl}${path}`,
+      lastModified: now,
+      changeFrequency: "monthly" as const,
+      priority: 0.75,
+    })),
     ...[
       "/legal/terms",
       "/legal/privacy",

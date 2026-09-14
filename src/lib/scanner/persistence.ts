@@ -1,3 +1,4 @@
+import { buildComparisonProfile } from "./comparison-profile";
 import { createHash } from "node:crypto";
 import {
   audit,
@@ -32,6 +33,7 @@ import type {
 } from "./types";
 import { calculateScanScore } from "./scoring";
 import { groupIssues, type GroupableIssue } from "./grouping";
+import { recordFirstScanCompleted } from "@/lib/analytics/firestore";
 
 const MAX_FIRESTORE_SCREENSHOT_BYTES = 650_000;
 
@@ -380,6 +382,7 @@ export async function aggregateScan(
     meta.workerId,
     {
       status: "completed",
+      comparisonProfile: buildComparisonProfile(normalized, failedPageUrls),
       phase,
       progressStep: "completed",
       currentStep: phase,
@@ -420,6 +423,12 @@ export async function aggregateScan(
       phase,
       remediationTasksCreated: undefined,
     },
+  });
+
+  await recordFirstScanCompleted({
+    workspaceId,
+    userId: meta.userId,
+    pagesScanned: pagesDone,
   });
 
   return { phase, pagesDone, pagesFailed };
@@ -504,6 +513,8 @@ export async function persistIssueGroups(
       summary: g.summary,
       recommendedFix: g.recommendedFix,
       priority: g.priority,
+      elementKeys: g.elementKeys,
+      fingerprintVersion: g.fingerprintVersion,
     });
     await updateIssueGroupId(workspaceId, scanJobId, g.issueIds, row.id);
   }
@@ -630,6 +641,7 @@ export async function completeScanJob(
     metadata.workerId,
     {
       status: "completed",
+      comparisonProfile: buildComparisonProfile(outcome.pages, summary.failedPageUrls),
       phase,
       progressStep: "completed",
       currentStep: phase,
@@ -671,6 +683,11 @@ export async function completeScanJob(
       engine,
       remediationTasksCreated,
     },
+  });
+  await recordFirstScanCompleted({
+    workspaceId: metadata.workspaceId,
+    userId: metadata.userId,
+    pagesScanned: successfulPages,
   });
   return true;
 }

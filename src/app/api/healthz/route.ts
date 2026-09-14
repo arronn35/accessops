@@ -16,6 +16,18 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Detailed diagnostics are operator-only. The public readiness shape carries
+ * just ok/degraded/service/mode/ts; anything naming internal env vars, raw
+ * dependency errors, or worker timing stays behind INTERNAL_DIAGNOSTICS_TOKEN.
+ * When the token is unset, detailed diagnostics are closed, not open.
+ */
+function isDiagnosticsAuthorized(req: NextRequest): boolean {
+  const expected = process.env.INTERNAL_DIAGNOSTICS_TOKEN;
+  if (!expected) return false;
+  return req.headers.get("x-diagnostics-token") === expected;
+}
+
 async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return Promise.race([
     p,
@@ -27,13 +39,18 @@ async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise
 
 async function checkFirestore(): Promise<{ ok: boolean; detail?: string }> {
   if (!firebaseAdminConfigured()) {
-    return { ok: false, detail: "Firebase Admin environment is not configured" };
+    return { ok: false, detail: "dependency_unavailable" };
   }
   try {
     await withTimeout(firestore().collection("systemUsage").limit(1).get(), 3000, "firestore");
     return { ok: true };
   } catch (err) {
-    return { ok: false, detail: (err as Error).message };
+    // Raw driver messages name collections and SDK internals — log them,
+    // never serialize them to unauthenticated callers.
+    console.error("[healthz] firestore check failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return { ok: false, detail: "dependency_unavailable" };
   }
 }
 
@@ -124,14 +141,28 @@ export async function GET(req: NextRequest) {
   // stale worker marks the service `degraded` (scans queue but don't run)
   // without pulling web instances out of rotation.
   const ok = firestoreCheck.ok;
+  const degraded = ok && (!dispatch.configured || !workerCheck.ok);
+
+  // Public shape: summary only. Missing-env names, raw error detail, and
+  // worker timing stay out of unauthenticated responses.
+  if (!isDiagnosticsAuthorized(req)) {
+    return Response.json(
+      { ok, degraded, service: "percevia-web", mode: "readiness", ts: new Date().toISOString() },
+      { status: ok ? 200 : 503, headers: { "cache-control": "no-store" } }
+    );
+  }
+
   return Response.json(
     {
       ok,
-      degraded: ok && (!dispatch.configured || !workerCheck.ok),
+      degraded,
       service: "percevia-web",
       mode: "readiness",
-      dispatch,
-      checks: { firestore: firestoreCheck, worker: workerCheck },
+      dispatch: { mode: dispatch.mode, configured: dispatch.configured },
+      checks: {
+        firestore: { ok: firestoreCheck.ok },
+        worker: { ok: workerCheck.ok, state: workerCheck.state },
+      },
       ts: new Date().toISOString(),
     },
     { status: ok ? 200 : 503, headers: { "cache-control": "no-store" } }

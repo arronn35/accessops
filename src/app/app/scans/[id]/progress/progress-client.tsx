@@ -24,6 +24,7 @@ import {
   type ScanProgressView,
 } from "@/lib/scanner/progress";
 import type { ScanJob } from "@/lib/data/types";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 const STEPS = [
   { id: "queued", label: "Queued", icon: ScanLine, body: "Preparing the scan job." },
@@ -101,6 +102,11 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
   // heartbeat even when no new snapshot/poll arrives (i.e. the worker died).
   const [nowMs, setNowMs] = useState(() => Date.now());
   const transportRef = useRef<"realtime" | "polling" | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this component re-renders on every tick, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   useEffect(() => {
     const t = setInterval(() => setNowMs(Date.now()), 5_000);
@@ -208,7 +214,7 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
       : STEP_ORDER[state.currentStep ?? state.progressStep ?? "queued"] ?? 1;
 
   return (
-    <div className="px-4 lg:px-8 py-8 max-w-3xl">
+    <div className="px-4 lg:px-8 py-8 max-w-3xl" data-i18n-skip>
       <header className="mb-6">
         <Badge
           tone={
@@ -231,13 +237,13 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
             }
             aria-hidden
           />
-          {state.status === "queued" && "Queued"}
-          {state.status === "running" && "Scan running"}
-          {state.status === "completed" && "Complete"}
-          {state.status === "failed" && "Failed"}
+          {state.status === "queued" && t("Queued")}
+          {state.status === "running" && t("Scan running")}
+          {state.status === "completed" && t("Complete")}
+          {state.status === "failed" && t("Failed")}
         </Badge>
         <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">
-          Scanning {hostFromUrl(initial.baseUrl)}
+          {t("Scanning")} {hostFromUrl(initial.baseUrl)}
         </h1>
         <p className="text-sm text-ink-600 mt-1 flex items-center gap-2 font-mono">
           <Globe className="size-3.5" aria-hidden /> {initial.id}
@@ -245,8 +251,8 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
       </header>
 
       {state.status === "failed" && (
-        <AlertCallout tone="danger" icon={AlertCircle} title="Scan failed" className="mb-5">
-          <p className="mb-2">{humanizeError(state.errorMessage)}</p>
+        <AlertCallout tone="danger" icon={AlertCircle} title={t("Scan failed")} className="mb-5">
+          <p className="mb-2">{t(humanizeError(state.errorMessage))}</p>
           <RetryControls
             scanJobId={initial.id}
             onRetry={(next) => {
@@ -261,26 +267,23 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
         <AlertCallout
           tone="warning"
           icon={AlertCircle}
-          title={state.progressStep === "queue_retry_pending" ? "Scan queued" : "Scan option adjusted"}
+          title={state.progressStep === "queue_retry_pending" ? t("Scan queued") : t("Scan option adjusted")}
           className="mb-5"
         >
-          {humanizeError(state.errorMessage)}
+          {t(humanizeError(state.errorMessage))}
         </AlertCallout>
       )}
 
       {state.status === "queued" && (
-        <AlertCallout tone="info" icon={ScanLine} title="Scan queued" className="mb-5">
-          The scan job is safely queued. The browser scanner worker will pick it up
-          automatically and this page will switch to running when processing starts.
+        <AlertCallout tone="info" icon={ScanLine} title={t("Scan queued")} className="mb-5">
+          {t("The scan job is safely queued. The browser scanner worker will pick it up automatically and this page will switch to running when processing starts.")}
         </AlertCallout>
       )}
 
       {state.status === "running" && heartbeatStale && (
-        <AlertCallout tone="warning" icon={RadioTower} title="Worker heartbeat stale — recovering automatically" className="mb-5">
+        <AlertCallout tone="warning" icon={RadioTower} title={t("Worker heartbeat stale — recovering automatically")} className="mb-5">
           <p className="mb-2">
-            The scanner stopped reporting progress. The system is reclaiming this
-            scan automatically — it will resume shortly, or fail with a clear
-            message if it can&apos;t be recovered. You can also retry now.
+            {t("The scanner stopped reporting progress. The system is reclaiming this scan automatically — it will resume shortly, or fail with a clear message if it can't be recovered. You can also retry now.")}
           </p>
           <RetryControls
             scanJobId={initial.id}
@@ -328,7 +331,7 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
                         !done && !active ? "text-ink-500" : "text-ink-900"
                       }`}
                     >
-                      {s.label}
+                      {t(s.label)}
                       {active && (
                         <span
                           className="ml-2 inline-block size-1.5 rounded-full bg-blue-500 pulse-dot"
@@ -336,15 +339,15 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
                         />
                       )}
                     </p>
-                    <p className="text-xs text-ink-600 mt-0.5 leading-relaxed">{s.body}</p>
+                    <p className="text-xs text-ink-600 mt-0.5 leading-relaxed">{t(s.body)}</p>
                   </div>
                   <span className="text-[11px] uppercase tracking-wider font-semibold shrink-0 mt-2">
-                    {done && <span className="text-green-700">Done</span>}
-                    {failedStep && <span className="text-rose-700">Failed</span>}
-                    {active && <span className="text-blue-700">In progress</span>}
+                    {done && <span className="text-green-700">{t("Done")}</span>}
+                    {failedStep && <span className="text-rose-700">{t("Failed")}</span>}
+                    {active && <span className="text-blue-700">{t("In progress")}</span>}
                     {!done && !active && !failedStep && (
                       <span className="text-ink-400">
-                        {state.status === "failed" ? "Not completed" : "Queued"}
+                        {state.status === "failed" ? t("Not completed") : t("Queued")}
                       </span>
                     )}
                   </span>
@@ -356,10 +359,24 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
           {state.status === "running" && (
             <div className="mt-4 space-y-1">
               <p className="text-xs text-ink-600">
-                {state.pagesDone} scanned
-                {state.pagesFailed > 0 ? `, ${state.pagesFailed} failed` : ""} /{" "}
-                {state.pagesTotal || initial.maxPages} pages processed
-                {state.currentState ? ` · ${state.currentState} viewport` : ""}.
+                {state.pagesDone} {t("scanned")}
+                {state.pagesFailed > 0 ? (
+                  <>
+                    {", "}
+                    {state.pagesFailed} {t("failed")}
+                  </>
+                ) : (
+                  ""
+                )} /{" "}
+                {state.pagesTotal || initial.maxPages} {t("pages processed")}
+                {state.currentState ? (
+                  <>
+                    {" · "}
+                    {state.currentState} {t("viewport")}
+                  </>
+                ) : (
+                  ""
+                )}.
               </p>
               {state.currentUrl && (
                 <p className="text-xs text-ink-500 font-mono truncate" title={state.currentUrl}>
@@ -375,21 +392,23 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
       <div className="mt-5 grid sm:grid-cols-2 gap-3">
         <Card>
           <CardHeader>
-            <CardTitle className="text-sm">What we&apos;re capturing</CardTitle>
-            <CardDescription>Live data scope</CardDescription>
+            <CardTitle className="text-sm">{t("What we're capturing")}</CardTitle>
+            <CardDescription>{t("Live data scope")}</CardDescription>
           </CardHeader>
           <CardContent>
             <ul className="space-y-2 text-xs text-ink-700">
-              <DataItem on label="Page HTML structure (no form values)" />
-              <DataItem on label="Computed accessibility tree" />
-              <DataItem on label="Color contrast samples" />
+              <DataItem t={t} on label="Page HTML structure (no form values)" />
+              <DataItem t={t} on label="Computed accessibility tree" />
+              <DataItem t={t} on label="Color contrast samples" />
               <DataItem
+                t={t}
                 on={initial.includeScreenshots}
                 off={!initial.includeScreenshots}
                 label="Screenshots"
                 hint={initial.includeScreenshots ? "Enabled this scan" : "Off"}
               />
               <DataItem
+                t={t}
                 off
                 label="Cookies & local storage"
                 hint="Never captured"
@@ -407,20 +426,20 @@ export function ProgressClient({ initial }: { initial: ScanJob }) {
           href="/app"
           className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm text-ink-700 hover:bg-canvas-2"
         >
-          Back to dashboard
+          {t("Back to dashboard")}
         </Link>
         {state.status === "completed" && (
           <Link
             href={`/app/scans/${initial.id}`}
             className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800"
           >
-            View results
+            {t("View results")}
           </Link>
         )}
       </div>
 
       <p className="text-xs text-ink-500 mt-6 leading-relaxed">
-        You can leave this page. Queued and completed results persist in your workspace.
+        {t("You can leave this page. Queued and completed results persist in your workspace.")}
       </p>
     </div>
   );
@@ -431,15 +450,17 @@ function DataItem({
   label,
   hint,
   icon,
+  t,
 }: {
   on?: boolean;
   off?: boolean;
   label: string;
   hint?: string;
   icon?: React.ReactNode;
+  t: (message: string) => string;
 }) {
   return (
-    <li className="flex items-center gap-2">
+    <li className="flex items-center gap-2" data-i18n-skip>
       <span
         className={`size-4 rounded inline-flex items-center justify-center ring-1 ${
           on ? "bg-green-50 text-green-700 ring-green-50" : "bg-canvas-2 text-ink-500 ring-line"
@@ -448,8 +469,8 @@ function DataItem({
       >
         {icon ?? (on ? <Check className="size-3" aria-hidden /> : <Camera className="size-3" aria-hidden />)}
       </span>
-      <span className="text-ink-700">{label}</span>
-      {hint && <span className="text-ink-500">· {hint}</span>}
+      <span className="text-ink-700">{t(label)}</span>
+      {hint && <span className="text-ink-500">· {t(hint)}</span>}
     </li>
   );
 }
@@ -471,6 +492,11 @@ function RetryControls({
 }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this component re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   async function retry() {
     setBusy(true);
@@ -509,7 +535,7 @@ function RetryControls({
   }
 
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2" data-i18n-skip>
       <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
@@ -517,16 +543,16 @@ function RetryControls({
           disabled={busy}
           className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md bg-rose-500 text-paper text-xs font-medium hover:bg-rose-700 disabled:opacity-50"
         >
-          {busy ? "Retrying…" : "Retry scan"}
+          {busy ? t("Retrying…") : t("Retry scan")}
         </button>
         <Link
           href="/app/scans/new"
           className="inline-flex items-center gap-1.5 h-9 px-3 rounded-md ring-1 ring-line bg-paper text-xs font-medium text-ink-700 hover:bg-canvas-2"
         >
-          Start a new scan
+          {t("Start a new scan")}
         </Link>
       </div>
-      {err && <p className="text-xs text-rose-700">{err}</p>}
+      {err && <p className="text-xs text-rose-700">{t(err)}</p>}
     </div>
   );
 }

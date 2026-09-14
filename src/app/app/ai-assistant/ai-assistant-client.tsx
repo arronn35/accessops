@@ -22,6 +22,7 @@ import { CodeDiffBlock } from "@/components/ai/CodeDiffBlock";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { aiErrorToView, type AiErrorView } from "@/lib/ai/error-messages";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 import { cn, formatRelative } from "@/lib/utils";
 
 export interface AssistantScan {
@@ -99,6 +100,11 @@ export function AiAssistantClient({
   const [resultsByScan, setResultsByScan] = useState<Record<string, AssistantResult>>(
     () => initialResults ?? {}
   );
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this assistant re-renders on every keystroke/generation, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   const selectedScan = useMemo(
     () => scans.find((scan) => scan.id === selectedScanId) ?? scans[0] ?? null,
@@ -160,43 +166,45 @@ export function AiAssistantClient({
   }
 
   return (
-    <div className="px-4 lg:px-8 py-8 max-w-[1100px] space-y-6">
+    <div data-i18n-skip className="px-4 lg:px-8 py-8 max-w-[1100px] space-y-6">
       <header>
         <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1 flex items-center gap-2">
-          <Sparkles className="size-3.5 text-purple-600" aria-hidden /> AI Fix Assistant
+          <Sparkles className="size-3.5 text-purple-600" aria-hidden /> {t("AI Fix Assistant")}
         </p>
         <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">
-          Generate, explain, and review accessibility fixes
+          {t("Generate, explain, and review accessibility fixes")}
         </h1>
         <p className="text-sm text-ink-600 mt-1 max-w-2xl">
-          Select a past scan, then ask the coding-focused assistant for reviewable remediation
-          diffs and verification steps for that project.
+          {t(
+            "Select a past scan, then ask the coding-focused assistant for reviewable remediation diffs and verification steps for that project."
+          )}
         </p>
       </header>
 
-      <AlertCallout tone="warning" icon={ShieldAlert} title="What this assistant will not do">
+      <AlertCallout tone="warning" icon={ShieldAlert} title={t("What this assistant will not do")}>
         <ul className="mt-2 space-y-1 list-disc list-inside marker:text-amber-500">
-          <li>It will not claim your site is compliant with any law or standard.</li>
-          <li>It will not issue or imply certification.</li>
-          <li>It will not recommend accessibility overlays as a substitute for real fixes.</li>
-          <li>It will not mutate a repository; fixes are generated for developer review.</li>
+          <li>{t("It will not claim your site is compliant with any law or standard.")}</li>
+          <li>{t("It will not issue or imply certification.")}</li>
+          <li>{t("It will not recommend accessibility overlays as a substitute for real fixes.")}</li>
+          <li>{t("It will not mutate a repository; fixes are generated for developer review.")}</li>
         </ul>
       </AlertCallout>
 
       {/* Step 1 — scope */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">1 · Select a scan</CardTitle>
+          <CardTitle className="text-sm">{t("1 · Select a scan")}</CardTitle>
           <CardDescription>
-            Every answer is grounded in the selected scan&apos;s findings, pages, and root-cause
-            groups.
+            {t(
+              "Every answer is grounded in the selected scan's findings, pages, and root-cause groups."
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent>
           {scans.length === 0 ? (
             <AlertCallout tone="info">
-              No completed scans are available in {workspaceName}. Complete a scan before asking
-              the assistant for project-specific fixes.
+              {t("No completed scans are available in")} {workspaceName}.{" "}
+              {t("Complete a scan before asking the assistant for project-specific fixes.")}
             </AlertCallout>
           ) : (
             <>
@@ -223,11 +231,11 @@ export function AiAssistantClient({
                         {scan.projectId || hostFromUrl(scan.baseUrl)}
                       </span>
                       <span className={cn("mt-0.5 block truncate text-xs", active ? "text-paper/75" : "text-ink-500")}>
-                        {hostFromUrl(scan.baseUrl)} · {scan.pagesScanned} page(s)
+                        {hostFromUrl(scan.baseUrl)} · {scan.pagesScanned} {t("page(s)")}
                       </span>
                       <span className={cn("mt-1 block font-mono text-[10px]", active ? "text-paper/65" : "text-ink-500")}>
                         {scan.id.slice(0, 12)}
-                        {resultsByScan[scan.id] ? " · plan saved" : ""}
+                        {resultsByScan[scan.id] ? <> · {t("plan saved")}</> : ""}
                       </span>
                     </button>
                   );
@@ -236,11 +244,11 @@ export function AiAssistantClient({
               {selectedScan && (
                 <div className="mt-3 flex flex-wrap gap-1.5">
                   <Badge tone={selectedScan.aiRemediationEnabled ? "ai" : "neutral"} size="sm">
-                    {selectedScan.aiRemediationEnabled ? "AI on" : "AI off at scan"}
+                    {selectedScan.aiRemediationEnabled ? t("AI on") : t("AI off at scan")}
                   </Badge>
-                  <Badge tone="success" size="sm">Privacy mode</Badge>
+                  <Badge tone="success" size="sm">{t("Privacy mode")}</Badge>
                   <Badge tone={selectedScan.storeScreenshots ? "info" : "neutral"} size="sm">
-                    {selectedScan.storeScreenshots ? "Screenshots stored" : "Screenshots off"}
+                    {selectedScan.storeScreenshots ? t("Screenshots stored") : t("Screenshots off")}
                   </Badge>
                 </div>
               )}
@@ -252,15 +260,16 @@ export function AiAssistantClient({
       {/* Step 2 — configure & generate */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm">2 · Configure and generate</CardTitle>
+          <CardTitle className="text-sm">{t("2 · Configure and generate")}</CardTitle>
           <CardDescription>
-            Pick an action and a target framework. Adding a prompt or manual findings is optional
-            but makes the plan more specific.
+            {t(
+              "Pick an action and a target framework. Adding a prompt or manual findings is optional but makes the plan more specific."
+            )}
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <p className="text-xs font-medium text-ink-700 mb-1.5">Action</p>
+            <p className="text-xs font-medium text-ink-700 mb-1.5">{t("Action")}</p>
             <ul className="flex flex-wrap gap-1.5">
               {PRESETS.map((p) => {
                 const Icon = p.icon;
@@ -279,7 +288,7 @@ export function AiAssistantClient({
                       )}
                     >
                       <Icon className="size-3.5" aria-hidden />
-                      <span>{p.label}</span>
+                      <span>{t(p.label)}</span>
                     </button>
                   </li>
                 );
@@ -288,7 +297,7 @@ export function AiAssistantClient({
           </div>
 
           <div>
-            <p className="text-xs font-medium text-ink-700 mb-1.5">Target framework</p>
+            <p className="text-xs font-medium text-ink-700 mb-1.5">{t("Target framework")}</p>
             <div className="flex flex-wrap gap-1.5">
               {FRAMEWORKS.map((f) => (
                 <button
@@ -303,7 +312,7 @@ export function AiAssistantClient({
                       : "bg-paper text-ink-700 ring-line hover:bg-canvas-2"
                   )}
                 >
-                  {f.label}
+                  {t(f.label)}
                 </button>
               ))}
             </div>
@@ -311,22 +320,22 @@ export function AiAssistantClient({
 
           <div>
             <label htmlFor="ai-prompt" className="block text-xs font-medium text-ink-700 mb-1.5">
-              Ask the assistant <span className="text-ink-500 font-normal">(optional)</span>
+              {t("Ask the assistant")} <span className="text-ink-500 font-normal">{t("(optional)")}</span>
             </label>
             <textarea
               id="ai-prompt"
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               rows={3}
-              placeholder="e.g. Generate a Next.js diff for the unlabeled icon buttons in this scan"
+              placeholder={t("e.g. Generate a Next.js diff for the unlabeled icon buttons in this scan")}
               className="w-full rounded-md bg-paper px-3.5 py-2.5 text-sm text-ink-900 ring-1 ring-line shadow-[var(--shadow-soft)] placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 transition"
             />
           </div>
 
           <details className="rounded-md ring-1 ring-line bg-canvas-2 px-3 py-2.5">
             <summary className="cursor-pointer select-none text-xs font-medium text-ink-700">
-              Target specific findings (optional)
-              {manualIssues.length > 0 ? ` · ${manualIssues.length} added` : ""}
+              {t("Target specific findings (optional)")}
+              {manualIssues.length > 0 ? <> · {manualIssues.length} {t("added")}</> : ""}
             </summary>
             <div className="mt-3 space-y-2">
               <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
@@ -334,7 +343,7 @@ export function AiAssistantClient({
                   value={manualIssueDraft}
                   onChange={(event) => setManualIssueDraft(event.target.value)}
                   rows={2}
-                  placeholder="Example: Header icon buttons have no accessible names on mobile."
+                  placeholder={t("Example: Header icon buttons have no accessible names on mobile.")}
                   className="min-h-[72px] w-full rounded-md bg-paper px-3 py-2 text-sm text-ink-900 ring-1 ring-line placeholder:text-ink-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
                 />
                 <button
@@ -344,7 +353,7 @@ export function AiAssistantClient({
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-navy-900 px-3 text-sm font-medium text-paper hover:bg-navy-800 disabled:cursor-not-allowed disabled:opacity-50 sm:self-end"
                 >
                   <PlusCircle className="size-4" aria-hidden />
-                  Add issue
+                  {t("Add issue")}
                 </button>
               </div>
               {manualIssues.length > 0 && (
@@ -359,7 +368,7 @@ export function AiAssistantClient({
                         type="button"
                         onClick={() => removeManualIssue(index)}
                         className="rounded p-1 text-blue-700 hover:bg-paper"
-                        aria-label={`Remove manual issue ${index + 1}`}
+                        aria-label={`${t("Remove manual issue")} ${index + 1}`}
                       >
                         <X className="size-3.5" aria-hidden />
                       </button>
@@ -372,7 +381,7 @@ export function AiAssistantClient({
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
             <p className="text-[11px] text-ink-500 leading-relaxed max-w-md">
-              {COMPLIANCE_COPY.AI_DISCLOSURE}
+              {t(COMPLIANCE_COPY.AI_DISCLOSURE)}
             </p>
             <button
               type="button"
@@ -385,7 +394,7 @@ export function AiAssistantClient({
               ) : (
                 <Send className="size-4" aria-hidden />
               )}
-              {busy ? "Generating…" : "Generate remediation plan"}
+              {busy ? t("Generating…") : t("Generate remediation plan")}
             </button>
           </div>
         </CardContent>
@@ -396,7 +405,7 @@ export function AiAssistantClient({
         {error && (
           <AlertCallout
             tone="danger"
-            title={error.title}
+            title={t(error.title)}
             action={
               error.action === "retry" ? (
                 <button
@@ -405,33 +414,34 @@ export function AiAssistantClient({
                   disabled={!canGenerate}
                   className="inline-flex h-8 items-center rounded-md bg-paper px-3 text-xs font-medium text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100 disabled:opacity-50"
                 >
-                  Try again
+                  {t("Try again")}
                 </button>
               ) : typeof error.action === "object" ? (
                 <Link
                   href={error.action.href}
                   className="inline-flex h-8 items-center rounded-md bg-paper px-3 text-xs font-medium text-rose-700 ring-1 ring-rose-200 hover:bg-rose-100"
                 >
-                  {error.action.label}
+                  {t(error.action.label)}
                 </Link>
               ) : undefined
             }
           >
-            {error.message}
+            {t(error.message)}
           </AlertCallout>
         )}
 
         {result ? (
-          <RemediationPlan result={result} scan={selectedScan} />
+          <RemediationPlan result={result} scan={selectedScan} t={t} />
         ) : (
           !error && (
             <Card>
               <CardContent className="pt-6 pb-6 text-center">
                 <p className="text-sm text-ink-700">
-                  No remediation plan yet. Select a scan above and press{" "}
-                  <strong className="font-semibold text-ink-900">Generate remediation plan</strong>{" "}
-                  — the assistant will return a summary, prioritized steps, a reviewable code fix,
-                  and a verification plan.
+                  {t("No remediation plan yet. Select a scan above and press")}{" "}
+                  <strong className="font-semibold text-ink-900">{t("Generate remediation plan")}</strong>{" "}
+                  {t(
+                    "— the assistant will return a summary, prioritized steps, a reviewable code fix, and a verification plan."
+                  )}
                 </p>
               </CardContent>
             </Card>
@@ -445,9 +455,11 @@ export function AiAssistantClient({
 function RemediationPlan({
   result,
   scan,
+  t,
 }: {
   result: AssistantResult;
   scan: AssistantScan | null;
+  t: (message: string) => string;
 }) {
   const guidance = result.projectGuidance;
   const summary = guidance?.summary || result.clientFriendlyExplanation || result.explanationPlain;
@@ -465,43 +477,43 @@ function RemediationPlan({
       : [];
 
   return (
-    <AiSuggestionBlock title="Remediation plan">
+    <AiSuggestionBlock title={t("Remediation plan")}>
       <div className="space-y-6">
         <p className="text-xs text-ink-500">
           {scan && (
             <>
-              Based on scan <span className="font-mono text-ink-700">{scan.id}</span> (
-              {hostFromUrl(scan.baseUrl)}, {scan.pagesScanned} page(s)) ·{" "}
+              {t("Based on scan")} <span className="font-mono text-ink-700">{scan.id}</span> (
+              {hostFromUrl(scan.baseUrl)}, {scan.pagesScanned} {t("page(s)")}) ·{" "}
             </>
           )}
-          {result.createdAt ? `Generated ${formatRelative(result.createdAt)}` : "Generated just now"}
+          {result.createdAt ? `${t("Generated")} ${formatRelative(result.createdAt)}` : t("Generated just now")}
           {result.model ? ` · ${result.modelProvider ?? "AI"} / ${result.model}` : ""}
         </p>
 
-        <PlanSection title="Summary">
+        <PlanSection title={t("Summary")}>
           <p className="whitespace-pre-wrap">{summary}</p>
         </PlanSection>
 
         {guidance?.priority && (
-          <PlanSection title="Priority">
+          <PlanSection title={t("Priority")}>
             <p className="whitespace-pre-wrap">{guidance.priority}</p>
           </PlanSection>
         )}
 
         {guidance?.whyItMatters && (
-          <PlanSection title="Why it matters">
+          <PlanSection title={t("Why it matters")}>
             <p className="whitespace-pre-wrap">{guidance.whyItMatters}</p>
           </PlanSection>
         )}
 
         {result.remediationSummary && (
-          <PlanSection title="Recommended fix">
+          <PlanSection title={t("Recommended fix")}>
             <p className="whitespace-pre-wrap">{result.remediationSummary}</p>
           </PlanSection>
         )}
 
         {recommendedSteps.length > 0 && (
-          <PlanSection title={`Recommended steps (${recommendedSteps.length})`}>
+          <PlanSection title={`${t("Recommended steps")} (${recommendedSteps.length})`}>
             <ol className="list-decimal pl-5 space-y-1.5">
               {recommendedSteps.map((step) => (
                 <li key={step} className="whitespace-pre-wrap">
@@ -513,19 +525,19 @@ function RemediationPlan({
         )}
 
         {fixCode && (
-          <PlanSection title="Code fix — review before applying">
+          <PlanSection title={t("Code fix — review before applying")}>
             <CodeDiffBlock
               before={
                 result.primaryIssueSnippet
                   ? {
-                      label: "Failing snippet from this scan",
+                      label: t("Failing snippet from this scan"),
                       language,
                       code: result.primaryIssueSnippet,
                     }
                   : undefined
               }
               after={{
-                label: `Suggested fix${frameworkLabel ? ` (${frameworkLabel})` : ""}`,
+                label: `${t("Suggested fix")}${frameworkLabel ? ` (${frameworkLabel})` : ""}`,
                 language,
                 code: fixCode,
               }}
@@ -534,7 +546,7 @@ function RemediationPlan({
         )}
 
         {verificationItems.length > 0 && (
-          <PlanSection title="Verification plan">
+          <PlanSection title={t("Verification plan")}>
             <ul className="space-y-1.5">
               {verificationItems.map((item) => (
                 <li key={item} className="flex items-start gap-2">
@@ -547,13 +559,13 @@ function RemediationPlan({
         )}
 
         {result.clientFriendlyExplanation && result.clientFriendlyExplanation !== summary && (
-          <PlanSection title="Client-friendly explanation">
+          <PlanSection title={t("Client-friendly explanation")}>
             <p className="whitespace-pre-wrap">{result.clientFriendlyExplanation}</p>
           </PlanSection>
         )}
 
         {readerNotes.length > 0 && (
-          <PlanSection title="Review notes">
+          <PlanSection title={t("Review notes")}>
             <ul className="list-disc pl-5 space-y-1 text-xs text-ink-500">
               {readerNotes.map((note) => (
                 <li key={note} className="whitespace-pre-wrap">

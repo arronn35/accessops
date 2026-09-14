@@ -1,8 +1,10 @@
 import { validateFinalUrl, validateUrl } from "./url-validation";
+import { ResponseTooLargeError, readBoundedText } from "./fetch-bounded";
 
 const MAX_SITEMAP_BYTES = 2_000_000;
 const SITEMAP_TIMEOUT_MS = 8_000;
 const MAX_SITEMAP_DEPTH = 2;
+const MAX_SITEMAP_REDIRECTS = 5;
 
 export interface ScanSourceConfig {
   baseUrl: string;
@@ -185,25 +187,47 @@ async function discoverRobotsSitemaps(origin: string): Promise<string[]> {
 }
 
 async function fetchText(url: string, expectedOrigin: string): Promise<string> {
-  await validateFinalUrl(url, expectedOrigin);
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SITEMAP_TIMEOUT_MS);
-  try {
-    const res = await fetch(url, {
-      redirect: "follow",
-      signal: controller.signal,
-      headers: {
-        "user-agent": "PerceviaAI/1.0 sitemap scanner",
-        accept: "application/xml,text/xml,text/plain,*/*",
-      },
-    });
-    await validateFinalUrl(res.url || url, expectedOrigin);
-    if (!res.ok) return "";
-    const text = await res.text();
-    return text.slice(0, MAX_SITEMAP_BYTES);
-  } finally {
-    clearTimeout(timeout);
+  // Manual redirects: every hop is validated BEFORE the next fetch so a
+  // public URL can never pull the follow-up request onto a private target.
+  // `redirect: "follow"` would issue the private request first and only
+  // validate afterwards.
+  let current = url;
+  for (let i = 0; i <= MAX_SITEMAP_REDIRECTS; i++) {
+    await validateFinalUrl(current, expectedOrigin);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), SITEMAP_TIMEOUT_MS);
+    try {
+      const res = await fetch(current, {
+        redirect: "manual",
+        signal: controller.signal,
+        headers: {
+          "user-agent": "PerceviaAI/1.0 sitemap scanner",
+          accept: "application/xml,text/xml,text/plain,*/*",
+        },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) return "";
+        await res.body?.cancel()?.catch(() => {});
+        current = new URL(location, current).toString();
+        continue;
+      }
+      await validateFinalUrl(res.url || current, expectedOrigin);
+      if (!res.ok) {
+        await res.body?.cancel()?.catch(() => {});
+        return "";
+      }
+      try {
+        return await readBoundedText(res, MAX_SITEMAP_BYTES);
+      } catch (err) {
+        if (err instanceof ResponseTooLargeError) return "";
+        throw err;
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
   }
+  return "";
 }
 
 function extractSitemapLocations(xml: string, parentTag: "url" | "sitemap"): string[] {

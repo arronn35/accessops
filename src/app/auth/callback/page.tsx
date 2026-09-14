@@ -1,11 +1,14 @@
 import { Suspense } from "react";
+import { NOINDEX } from "@/lib/seo/canonical";
+import { sanitizeCallback } from "@/lib/auth/callback-url";
 import { redirect } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { verifySessionCookie } from "@/lib/auth/session";
 import { FirebaseCallbackClient } from "./firebase-callback-client";
 
-export const metadata = { title: "Signing you in — Percevia AI" };
+export const metadata = {
+  ...NOINDEX, title: "Signing you in — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function CallbackPage({
@@ -51,7 +54,3 @@ function CallbackFallback() {
   );
 }
 
-function sanitizeCallback(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/app";
-  return value;
-}

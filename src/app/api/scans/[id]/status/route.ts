@@ -1,5 +1,5 @@
 import { NextRequest } from "next/server";
-import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { apiError, ApiError, requirePermission } from "@/lib/api/context";
 import { getScanJob } from "@/lib/data/firestore";
 import { isScanWorkerHeartbeatStale } from "@/lib/data/scan-lifecycle";
 
@@ -10,7 +10,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("view_scans");
     const { id } = await params;
     const job = await getScanJob(ctx.workspaceId, id);
     if (!job) throw new ApiError(404, "not_found");

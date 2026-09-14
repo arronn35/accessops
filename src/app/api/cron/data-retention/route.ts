@@ -1,5 +1,6 @@
 import { purgeExpiredScanData } from "@/lib/data/deletion";
 import { firebaseAdminConfigured } from "@/lib/firebase/admin";
+import { internalRequestAuthorized } from "@/lib/api/internal-auth";
 import { captureException } from "@/lib/observability";
 
 export const dynamic = "force-dynamic";
@@ -11,17 +12,16 @@ export const maxDuration = 300;
  * workspace's `scanDataRetentionDays` to old scans and purges visual
  * evidence past its `expiresAt`.
  *
- * When CRON_SECRET is set, Vercel sends it as a bearer token; reject
- * everything else so the sweep cannot be triggered publicly.
+ * Auth: see `@/lib/api/internal-auth`. Vercel Cron only sends the
+ * CRON_SECRET bearer token; a Google OIDC token is accepted too when this
+ * route is also driven by Cloud Scheduler.
  */
-function authorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+async function authorized(req: Request): Promise<boolean> {
+  return internalRequestAuthorized(req);
 }
 
 export async function GET(req: Request) {
-  if (!authorized(req)) {
+  if (!(await authorized(req))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   if (!firebaseAdminConfigured()) {
@@ -32,7 +32,7 @@ export async function GET(req: Request) {
   }
   try {
     const result = await purgeExpiredScanData();
-    return Response.json({ ok: true, ...result });
+    return Response.json({ ok: !result.failedScans, ...result }, { status: result.failedScans ? 500 : 200 });
   } catch (err) {
     void captureException(err, { scope: "cron.data-retention" });
     return Response.json({ ok: false, error: "retention_sweep_failed" }, { status: 500 });

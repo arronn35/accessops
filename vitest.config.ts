@@ -21,6 +21,10 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": fileURLToPath(new URL("./src", import.meta.url)),
+      // `server-only` throws outside Next's server bundling, which makes
+      // server modules un-importable in unit tests. Tests run in node, i.e.
+      // always "server", so stub it out.
+      "server-only": fileURLToPath(new URL("./tests/stubs/server-only.ts", import.meta.url)),
     },
   },
 });

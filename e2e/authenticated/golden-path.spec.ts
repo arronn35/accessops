@@ -31,8 +31,8 @@ test.describe("authenticated golden path", () => {
     await expect(page.getByRole("button", { name: /Delete/i }).first()).toBeVisible();
   });
 
-  test("signing out clears the session", async ({ page, request }) => {
-    const res = await request.delete("/api/auth/session");
+  test("signing out clears the session", async ({ page }) => {
+    const res = await page.request.delete("/api/auth/session");
     expect(res.ok()).toBe(true);
     await page.goto("/app");
     await expect(page).toHaveURL(/auth\/sign-in/);
@@ -53,10 +53,26 @@ test.describe("scan-to-report journey (needs staging worker + fixture site)", ()
     await page.locator("input[type=checkbox]").first().check();
     await page.getByRole("button", { name: /start|scan/i }).last().click();
 
+    // Capture the immutable scan id, then assert the stored engine result.
+    // A static fallback or a stray "completed" label must not satisfy this test.
     // Progress page: queued → running → … → completed, then results render.
     await expect(page).toHaveURL(/\/app\/scans\//, { timeout: 15_000 });
-    await expect(page.getByText(/completed/i).first()).toBeVisible({
-      timeout: 4 * 60_000,
-    });
+    const scanId = new URL(page.url()).pathname.split("/")[3];
+    expect(scanId).toBeTruthy();
+    await expect.poll(async () => {
+      const response = await page.request.get(`/api/scans/${scanId}`);
+      if (!response.ok()) return response.status();
+      return (await response.json()).scan.status;
+    }, { timeout: 4 * 60_000, intervals: [1000, 2000, 5000] }).toBe("completed");
+    const scanResponse = await page.request.get(`/api/scans/${scanId}`);
+    const result = await scanResponse.json();
+    expect(result.scan.comparisonProfile.completeMetadata).toBe(true);
+    expect(result.scan.comparisonProfile.engineVersions.join(" ")).toContain("playwright-axe");
+    expect(result.scoreSummary).toBeTruthy();
+    await page.goto(`/app/scans/${scanId}`);
+    await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
+    // Remove only the scan created by this test.
+    const deleted = await page.request.delete(`/api/scans/${scanId}`);
+    expect(deleted.ok()).toBe(true);
   });
 });

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { sanitizeCallback } from "@/lib/auth/callback-url";
 import {
   clearSessionCookie,
   createFirebaseSessionCookie,
@@ -6,6 +7,8 @@ import {
 } from "@/lib/auth/session";
 import { firebaseAdminAuth } from "@/lib/firebase/admin";
 import { ensureUserAndWorkspace } from "@/lib/data/firestore";
+import { recordAnalyticsEvent } from "@/lib/analytics/firestore";
+import { afterResponse } from "@/lib/server/after-response";
 
 const SessionSchema = z.object({
   idToken: z.string().min(20),
@@ -19,9 +22,16 @@ export async function POST(req: Request) {
       return Response.json({ error: "invalid_input" }, { status: 400 });
     }
     const decoded = await firebaseAdminAuth().verifyIdToken(parsed.data.idToken);
-    await ensureUserAndWorkspace(decoded);
+    const ctx = await ensureUserAndWorkspace(decoded);
     const sessionCookie = await createFirebaseSessionCookie(parsed.data.idToken);
     await setSessionCookie(sessionCookie);
+    afterResponse(() => recordAnalyticsEvent(
+      {
+        event: ctx.isNewUser ? "signup_completed" : "login_completed",
+        properties: { provider: "firebase" },
+      },
+      { source: "server", userId: decoded.uid, workspaceId: ctx.workspace.id }
+    ));
     return Response.json({ ok: true, redirectTo: sanitizeCallback(parsed.data.callbackUrl) });
   } catch (err) {
     return Response.json(
@@ -36,7 +46,3 @@ export async function DELETE() {
   return Response.json({ ok: true });
 }
 
-function sanitizeCallback(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/app";
-  return value;
-}

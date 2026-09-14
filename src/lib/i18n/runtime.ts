@@ -9,6 +9,19 @@ export function normalizeMessage(value: string): string {
 export function translateWithCatalog(
   value: string,
   locale: Locale,
+  catalog: TranslationCatalog | null,
+  vars?: Record<string, string | number>
+): string {
+  const translated = translateBase(value, locale, catalog);
+  if (!vars) return translated;
+  return translated.replace(/\{(\w+)\}/g, (match, name: string) =>
+    name in vars ? String(vars[name]) : match
+  );
+}
+
+function translateBase(
+  value: string,
+  locale: Locale,
   catalog: TranslationCatalog | null
 ): string {
   if (locale === "en" || !value || !catalog) return value;

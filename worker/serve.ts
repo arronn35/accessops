@@ -1,3 +1,4 @@
+import { releaseManifest } from "@/lib/release/manifest";
 /**
  * Percevia AI scan worker — HTTP "serve" mode for scale-to-zero Cloud Run.
  *
@@ -52,6 +53,7 @@ import { processPageJob } from "./process-page-job";
 import { getBrowserManager } from "./browser-manager";
 import { scanContextPool } from "@/lib/scanner/context-pool";
 import { claimMissBackoffMs } from "./claim-backoff";
+import { secretsMatch } from "@/lib/api/internal-auth";
 
 function durationFromEnv(name: string, fallback: number, minimum: number): number {
   const value = Number(process.env[name] ?? fallback);
@@ -334,7 +336,8 @@ function readBody(req: IncomingMessage, limitBytes = 64 * 1024): Promise<string>
 
 async function handleProcess(req: IncomingMessage): Promise<{ status: number; body: unknown }> {
   const secret = process.env.INTERNAL_WORKER_SECRET;
-  if (!secret || req.headers["x-internal-worker-secret"] !== secret) {
+  const provided = req.headers["x-internal-worker-secret"];
+  if (!secret || typeof provided !== "string" || !secretsMatch(provided, secret)) {
     return { status: 401, body: { ok: false, error: "unauthorized" } };
   }
   if (browserUnhealthy) {
@@ -393,6 +396,7 @@ function startServer(): Server {
         JSON.stringify({
           ok,
           service: "percevia-scan-worker",
+          release: releaseManifest(),
           mode: "serve",
           workerId: WORKER_ID,
           processing,

@@ -2,9 +2,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   requireSessionMock,
+  requirePermissionMock,
   getScanJobMock,
 } = vi.hoisted(() => ({
   requireSessionMock: vi.fn(),
+  requirePermissionMock: vi.fn(),
   getScanJobMock: vi.fn(),
 }));
 
@@ -21,6 +23,7 @@ vi.mock("@/lib/api/context", () => {
   return {
     ApiError,
     requireSession: requireSessionMock,
+    requirePermission: requirePermissionMock,
     apiError: (err: unknown) => {
       if (err instanceof ApiError) {
         return Response.json(
@@ -87,6 +90,9 @@ function params() {
 
 beforeEach(() => {
   requireSessionMock.mockReset().mockResolvedValue(ctx);
+  // The route gates on view_scans; role enforcement itself is covered by
+  // src/lib/api/route-permissions.test.ts and the issues-route role matrix.
+  requirePermissionMock.mockReset().mockResolvedValue(ctx);
   getScanJobMock.mockReset();
 });
 

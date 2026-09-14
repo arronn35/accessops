@@ -69,6 +69,8 @@ const group: IssueGroup = {
   id: "group-1",
   scanJobId: "scan-1",
   rootCauseKey: "button-name",
+  elementKeys: ["violation:wcag:button-name:button"],
+  fingerprintVersion: 2,
   ruleId: "button-name",
   title: "Buttons missing names",
   severity: "critical",

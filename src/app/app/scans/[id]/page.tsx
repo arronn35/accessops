@@ -14,12 +14,14 @@ import { EmptyState } from "@/components/empty/EmptyState";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { HumanReviewBanner } from "@/components/compliance/HumanReviewBanner";
 import { ManualReviewChecklist } from "@/components/compliance/ManualReviewChecklist";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
+import { roleHasPermission } from "@/lib/entitlements";
 import {
   getScanJob,
   getScanSummary,
   listIssueGroups,
   listIssues,
+  listManualReviews,
   listPageJobs,
   listScanPages,
 } from "@/lib/data/firestore";
@@ -56,7 +58,7 @@ export default async function ScanResultsPage({
 }) {
   const { id } = await params;
   const filters = parseFindingFilters(await searchParams);
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
 
   const scan = await getScanJob(ctx.workspace.id, id);
 
@@ -65,12 +67,13 @@ export default async function ScanResultsPage({
     redirect(`/app/scans/${id}/progress`);
   }
 
-  const [issues, pages, summary, groups, pageJobs] = await Promise.all([
+  const [issues, pages, summary, groups, pageJobs, manualReviews] = await Promise.all([
     listIssues(ctx.workspace.id, scan.id),
     listScanPages(ctx.workspace.id, scan.id),
     getScanSummary(ctx.workspace.id, scan.id),
     listIssueGroups(ctx.workspace.id, scan.id),
     scan.usePageJobs ? listPageJobs(ctx.workspace.id, scan.id) : Promise.resolve([]),
+    listManualReviews(ctx.workspace.id, scan.id),
   ]);
   const failedPageJobs = pageJobs.filter((job) => job.status === "failed");
   const failedStoredPageUrls = pages
@@ -283,10 +286,6 @@ export default async function ScanResultsPage({
                 <span>{formatScanEngine(scanProfile)}</span>
                 {summary && (
                   <>
-                    <span className="text-ink-300">·</span>
-                    <span>
-                      Grade <strong className="text-ink-900 font-semibold">{summary.grade}</strong>
-                    </span>
                     <span className="text-ink-300">·</span>
                     <span>
                       Risk <strong className="text-ink-900 font-semibold">{summary.riskLevel}</strong>
@@ -548,7 +547,19 @@ export default async function ScanResultsPage({
 
         <aside className="space-y-5">
           <HumanReviewBanner />
-          <ManualReviewChecklist scanId={scan.id} />
+          <ManualReviewChecklist
+            scanId={scan.id}
+            initialReviews={manualReviews.map((r) => ({
+              checkId: r.checkId,
+              status: r.status,
+              notes: r.notes,
+              reviewerName: r.reviewerName,
+              reviewerEmail: r.reviewerEmail,
+              revision: r.revision,
+              updatedAt: r.updatedAt.toISOString(),
+            }))}
+            canRecord={roleHasPermission(ctx.member.role, "manage_manual_review")}
+          />
           <NoGuaranteeBanner variant="default" />
 
           <Card>
@@ -583,7 +594,7 @@ export default async function ScanResultsPage({
                 )}
               </dl>
               <p className="text-[11px] text-ink-500 leading-relaxed mt-3 pt-3 border-t border-line/60">
-                Automated checks detect roughly 30–50% of accessibility issues.
+                Automated checks cannot detect every accessibility issue.
                 Human review is still required — see the checklist on each finding.
               </p>
             </CardContent>

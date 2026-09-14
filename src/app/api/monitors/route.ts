@@ -3,6 +3,8 @@ import { apiError, ApiError, requirePermission } from "@/lib/api/context";
 import { validateUrl, UrlValidationFailed } from "@/lib/scanner/url-validation";
 import { monitorCapsForPlan, normalizePlan } from "@/lib/entitlements";
 import { computeNextRunAt } from "@/lib/monitors/schedule";
+import { recordAnalyticsEvent } from "@/lib/analytics/firestore";
+import { afterResponse } from "@/lib/server/after-response";
 import {
   audit,
   countMonitors,
@@ -145,6 +147,11 @@ export async function POST(req: Request) {
       resourceId: monitor.id,
       metadata: { targetUrl, frequency, fromScanId: input.fromScanId ?? null },
     });
+
+    afterResponse(() => recordAnalyticsEvent(
+      { event: "monitor_created", properties: { frequency } },
+      { source: "server", userId: ctx.userId, workspaceId: ctx.workspaceId }
+    ));
 
     return Response.json({ monitor }, { status: 201 });
   } catch (err) {

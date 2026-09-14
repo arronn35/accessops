@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { isAdminEmail, memberLimitForPlan, scanCapsForPlan } from "@/lib/entitlements";
 import { polarConfigured } from "@/lib/billing/polar";
 import { PlanPicker } from "./plan-picker";
@@ -16,7 +16,7 @@ const PLAN_LABEL: Record<string, string> = {
 };
 
 export default async function BillingPage() {
-  const { workspace, member, user } = await getCurrentWorkspaceOrRedirect();
+  const { workspace, member, user } = await requirePagePermission("manage_billing");
   const canManage = member.role === "owner" || member.role === "admin";
   const isTesterAdmin = isAdminEmail(user.email);
   const caps = scanCapsForPlan(workspace.plan);

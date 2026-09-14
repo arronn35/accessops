@@ -10,7 +10,7 @@ import { AiSuggestionBlock } from "@/components/ai/AiSuggestionBlock";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { ScanLine } from "lucide-react";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { getScanSummary, listIssues, listScans } from "@/lib/data/firestore";
 import type { ScanSummary } from "@/lib/data/types";
 import { formatRelative } from "@/lib/utils";
@@ -19,7 +19,7 @@ export const metadata = { title: "Dashboard — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function DashboardPage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
 
   const recentScans = await listScans(ctx.workspace.id, 5);
 
@@ -195,7 +195,7 @@ export default async function DashboardPage() {
                   </li>
                   <li className="flex gap-2">
                     <span className="size-1.5 rounded-full bg-amber-500 mt-1.5 shrink-0" aria-hidden />
-                    Automated scanning catches ~30–50% of accessibility issues. Human review remains required.
+                    Automated scanning cannot detect every accessibility issue. Human review remains required.
                   </li>
                   <li className="flex gap-2">
                     <span className="size-1.5 rounded-full bg-rose-500 mt-1.5 shrink-0" aria-hidden />

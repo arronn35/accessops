@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/contact"),
   title: "Contact — Percevia AI",
   description: "How to reach maitrico Percevia AI for support, security, and sales.",
 };

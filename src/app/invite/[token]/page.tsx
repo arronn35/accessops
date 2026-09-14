@@ -1,8 +1,11 @@
 import Link from "next/link";
+import { NOINDEX } from "@/lib/seo/canonical";
 import { getInvitationByToken } from "@/lib/data/firestore";
 import { verifySessionCookie } from "@/lib/auth/session";
 import { AcceptInviteButton } from "./accept-client";
 
+// An invitation URL is a credential; it must never appear in a search result.
+export const metadata = { ...NOINDEX, title: "Workspace invitation — Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function InvitePage({ params }: { params: Promise<{ token: string }> }) {

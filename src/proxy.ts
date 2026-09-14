@@ -1,62 +1,109 @@
-/**
- * Next.js Proxy — auth gate for /app/* and protected /api/* routes.
- *
- * IMPORTANT: this file runs in the Edge runtime. It must NOT import
- * Firebase Admin uses Node-only APIs, so the proxy only checks for the
- * HTTP-only session cookie. Route handlers and RSC pages do full verification.
- *
- * The proxy only does a cheap, edge-safe check: is a session cookie
- * present? If not, redirect to sign-in (or 401 for API routes).
- *
- * This is a UX gate, not the security boundary. Every protected page
- * calls `getCurrentWorkspaceOrRedirect()` and every protected API route
- * calls `requireSession()` — both run in the Node runtime and perform
- * real database-backed session validation. A forged or stale cookie gets
- * past this proxy but is rejected there.
- */
 import { NextResponse, type NextRequest } from "next/server";
 
-const PROTECTED_PREFIXES = [
-  "/workspace/setup",
-  "/app",
-  "/api/scans",
-  "/api/issues",
-  "/api/reports",
-  "/api/remediation-tasks",
-  "/api/privacy",
-  "/api/team",
-  "/api/ai-assistant",
-  "/api/workspace",
-  "/api/plan",
+/**
+ * Content-Security-Policy.
+ *
+ * Next 16 renamed the `middleware` file convention to `proxy`; this file is the
+ * documented place to attach a per-request nonce (see
+ * `node_modules/next/dist/docs/01-app/02-guides/content-security-policy.md`).
+ * Next reads the CSP off the *request* headers we set below and stamps the same
+ * nonce onto the framework's own inline bootstrap scripts, so `'strict-dynamic'`
+ * works without allowlisting anything.
+ *
+ * The static headers (nosniff, Referrer-Policy, Permissions-Policy, HSTS) are
+ * in `next.config.ts` instead, because they also apply to `/api/*` and static
+ * assets, which this proxy deliberately skips.
+ *
+ * Known relaxations, deliberate:
+ *   - `style-src 'unsafe-inline'`: next/font injects inline `<style>` blocks and
+ *     a handful of components use React `style={{…}}` attributes. A nonce would
+ *     silently disable `'unsafe-inline'`, so styles get no nonce at all. Style
+ *     injection is a far weaker primitive than script injection.
+ *   - Firebase endpoints in `connect-src` / `frame-src`: the client SDK talks to
+ *     Identity Toolkit, the token service and Firestore directly, and
+ *     `signInWithPopup` runs the OAuth handler on the project's auth domain.
+ *
+ * Set `CSP_REPORT_ONLY=true` to emit `Content-Security-Policy-Report-Only`
+ * instead — use it for one deploy when changing the policy, then turn it off.
+ */
+const FIREBASE_ENDPOINTS = [
+  "https://identitytoolkit.googleapis.com",
+  "https://securetoken.googleapis.com",
+  "https://firestore.googleapis.com",
+  "https://www.googleapis.com",
 ];
 
-const SESSION_COOKIE_NAME =
-  process.env.FIREBASE_SESSION_COOKIE_NAME || "percevia_session";
-const SESSION_COOKIES = [
-  SESSION_COOKIE_NAME,
-  `__Secure-${SESSION_COOKIE_NAME}`,
-];
+function authDomainOrigin(): string | null {
+  const domain = process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN;
+  return domain ? `https://${domain}` : null;
+}
 
-export function proxy(req: NextRequest) {
-  const { pathname } = req.nextUrl;
+function buildCsp(nonce: string, isDev: boolean): string {
+  const authOrigin = authDomainOrigin();
+  const connect = [
+    "'self'",
+    ...FIREBASE_ENDPOINTS,
+    ...(authOrigin ? [authOrigin] : []),
+    // Next's dev server uses a websocket for HMR.
+    ...(isDev ? ["ws:", "http://localhost:*"] : []),
+  ];
+  const frame = ["'self'", ...(authOrigin ? [authOrigin] : [])];
 
-  const isProtected = PROTECTED_PREFIXES.some((p) => pathname.startsWith(p));
-  if (!isProtected) return NextResponse.next();
+  return [
+    "default-src 'self'",
+    isDev
+      ? "script-src 'self' 'unsafe-eval' 'unsafe-inline'"
+      : `script-src 'self' 'nonce-${nonce}' 'strict-dynamic'`,
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob:",
+    "font-src 'self' data:",
+    `connect-src ${connect.join(" ")}`,
+    `frame-src ${frame.join(" ")}`,
+    "worker-src 'self' blob:",
+    "manifest-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'",
+    "upgrade-insecure-requests",
+  ].join("; ");
+}
 
-  const hasSession = SESSION_COOKIES.some((name) => req.cookies.has(name));
-  if (hasSession) return NextResponse.next();
+export function proxy(request: NextRequest) {
+  const nonce = Buffer.from(crypto.randomUUID()).toString("base64");
+  const isDev = process.env.NODE_ENV === "development";
+  const csp = buildCsp(nonce, isDev);
+  const headerName =
+    process.env.CSP_REPORT_ONLY === "true"
+      ? "Content-Security-Policy-Report-Only"
+      : "Content-Security-Policy";
 
-  if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  }
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-nonce", nonce);
+  // Server components cannot read the current URL. Publishing it lets an
+  // auth redirect carry the user's destination through sign-in instead of
+  // dropping them on the dashboard. Prefetches skip this proxy (see the
+  // matcher's `missing` rules), so readers must tolerate the header's absence.
+  requestHeaders.set(
+    "x-pathname",
+    `${request.nextUrl.pathname}${request.nextUrl.search}`
+  );
+  // Next reads this off the request to nonce its own inline scripts.
+  requestHeaders.set("Content-Security-Policy", csp);
 
-  const signInUrl = new URL("/auth/sign-in", req.nextUrl.origin);
-  signInUrl.searchParams.set("callbackUrl", pathname);
-  return NextResponse.redirect(signInUrl);
+  const response = NextResponse.next({ request: { headers: requestHeaders } });
+  response.headers.set(headerName, csp);
+  return response;
 }
 
 export const config = {
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|brand/.*|mock/.*|auth/.*|api/auth/.*).*)",
+    {
+      source: "/((?!api|_next/static|_next/image|favicon.ico).*)",
+      missing: [
+        { type: "header", key: "next-router-prefetch" },
+        { type: "header", key: "purpose", value: "prefetch" },
+      ],
+    },
   ],
 };

@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { sanitizeCallback } from "@/lib/auth/callback-url";
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -15,6 +16,7 @@ import { ArrowRight, Mail } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Input, Label, FieldHint } from "@/components/ui/Input";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 import {
   firebaseClientAuth,
   firebaseClientConfigured,
@@ -34,6 +36,12 @@ export function FirebaseSignInForm() {
   // instead of sending a new one (typical for invitation emails).
   const [pendingLink, setPendingLink] = useState(false);
   const configured = firebaseClientConfigured();
+  // Copy renders through React state (never the DOM-mutating i18n observer):
+  // every keystroke re-renders this form and mutated text nodes throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree.
+  // Error state keeps source English; translation happens at render so a
+  // later language switch still applies.
+  const { t } = useLanguage();
 
   const finishSignIn = useCallback(
     async (idToken: string, nextUrl: string) => {
@@ -144,12 +152,12 @@ export function FirebaseSignInForm() {
   }
 
   return (
-    <div className="min-h-screen bg-canvas-2 flex flex-col">
+    <div className="min-h-screen bg-canvas-2 flex flex-col" data-i18n-skip>
       <header className="bg-paper border-b border-rule">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/"><Logo variant="site" /></Link>
           <Link href="/" className="text-xs text-ink-600 hover:text-ink-900">
-            Back home
+            {t("Back home")}
           </Link>
         </div>
       </header>
@@ -160,33 +168,33 @@ export function FirebaseSignInForm() {
         className="flex-1 max-w-md w-full mx-auto px-4 lg:px-8 py-12 focus:outline-none"
       >
         <h1 className="text-2xl font-semibold text-ink-900 tracking-tight">
-          Sign in to Percevia AI
+          {t("Sign in to Percevia AI")}
         </h1>
         <p className="text-sm text-ink-600 mt-2">
-          Use a Firebase email link or continue with GitHub. No password to manage.
+          {t("Use a Firebase email link or continue with GitHub. No password to manage.")}
         </p>
 
         {!configured && (
-          <AlertCallout tone="warning" title="Firebase auth is not configured" className="mt-5">
-            Add the NEXT_PUBLIC_FIREBASE_* variables for this deployment.
+          <AlertCallout tone="warning" title={t("Firebase auth is not configured")} className="mt-5">
+            {t("Add the NEXT_PUBLIC_FIREBASE_* variables for this deployment.")}
           </AlertCallout>
         )}
 
         {error && (
-          <AlertCallout tone="danger" title="Sign-in failed" className="mt-5">
-            {error}
+          <AlertCallout tone="danger" title={t("Sign-in failed")} className="mt-5">
+            {t(error)}
           </AlertCallout>
         )}
 
         {status === "sent" && (
-          <AlertCallout tone="success" title="Check your email" className="mt-5">
-            We sent a Firebase sign-in link to {email}.
+          <AlertCallout tone="success" title={t("Check your email")} className="mt-5">
+            {t("We sent a Firebase sign-in link to")} {email}.
           </AlertCallout>
         )}
 
         <form onSubmit={sendEmailLink} className="mt-6 space-y-4 bg-paper border border-rule p-6">
           <div>
-            <Label htmlFor="email" required>Email address</Label>
+            <Label htmlFor="email" required>{t("Email address")}</Label>
             <Input
               id="email"
               name="email"
@@ -199,7 +207,7 @@ export function FirebaseSignInForm() {
               disabled={!configured || status === "sending" || status === "signing-in"}
             />
             <FieldHint>
-              We&apos;ll send a one-time Firebase sign-in link.
+              {t("We'll send a one-time Firebase sign-in link.")}
             </FieldHint>
           </div>
           <button
@@ -210,17 +218,17 @@ export function FirebaseSignInForm() {
             <Mail className="size-4" aria-hidden />
             {pendingLink
               ? status === "signing-in"
-                ? "Signing in..."
-                : "Finish sign-in"
+                ? t("Signing in...")
+                : t("Finish sign-in")
               : status === "sending"
-              ? "Sending..."
-              : "Email me a sign-in link"}
+              ? t("Sending...")
+              : t("Email me a sign-in link")}
           </button>
         </form>
 
         <div className="flex items-center gap-3 my-6">
           <span className="flex-1 h-px bg-line" aria-hidden />
-          <span className="text-xs text-ink-500 uppercase tracking-wider">or</span>
+          <span className="text-xs text-ink-500 uppercase tracking-wider">{t("or")}</span>
           <span className="flex-1 h-px bg-line" aria-hidden />
         </div>
         <button
@@ -229,25 +237,21 @@ export function FirebaseSignInForm() {
           disabled={!configured || status === "signing-in"}
           className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 border border-rule bg-paper text-sm font-medium text-ink-900 hover:bg-canvas-2 disabled:opacity-60"
         >
-          {status === "signing-in" ? "Signing in..." : "Continue with GitHub"}
+          {status === "signing-in" ? t("Signing in...") : t("Continue with GitHub")}
           <ArrowRight className="size-4" aria-hidden />
         </button>
 
         <p className="text-xs text-ink-500 mt-6 leading-relaxed">
-          By signing in you agree to our{" "}
-          <Link href="/legal/terms" className="underline">Terms</Link> and{" "}
-          <Link href="/legal/privacy" className="underline">Privacy Policy</Link>, and
-          acknowledge that Percevia AI does not guarantee legal compliance.
+          {t("By signing in you agree to our")}{" "}
+          <Link href="/legal/terms" className="underline">{t("Terms")}</Link> {t("and")}{" "}
+          <Link href="/legal/privacy" className="underline">{t("Privacy Policy")}</Link>
+          {t(", and acknowledge that Percevia AI does not guarantee legal compliance.")}
         </p>
       </main>
     </div>
   );
 }
 
-function sanitizeCallback(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/app";
-  return value;
-}
 
 function firebaseError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);

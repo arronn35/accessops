@@ -15,6 +15,7 @@ import {
 import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { Input, Label } from "@/components/ui/Input";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 import type { MonitorFrequency, MonitorStatus } from "@/lib/data/types";
 
 export interface MonitorRow {
@@ -63,6 +64,11 @@ export function MonitorsManager({
   const [adding, setAdding] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this manager re-renders on every add/toggle/delete, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   const atCap = monitors.length >= maxMonitors;
 
@@ -113,7 +119,7 @@ export function MonitorsManager({
   }
 
   async function remove(m: MonitorRow) {
-    if (!confirm(`Stop monitoring ${m.name}? This can't be undone.`)) return;
+    if (!confirm(`${t("Stop monitoring")} ${m.name}? ${t("This can't be undone.")}`)) return;
     setBusyId(m.id);
     setError(null);
     try {
@@ -130,7 +136,7 @@ export function MonitorsManager({
   }
 
   return (
-    <div className="space-y-6">
+    <div data-i18n-skip className="space-y-6">
       {/* Add monitor */}
       <form
         onSubmit={addMonitor}
@@ -138,7 +144,7 @@ export function MonitorsManager({
       >
         <div className="flex flex-col sm:flex-row gap-3 sm:items-end">
           <div className="flex-1">
-            <Label htmlFor="monitor-url">Website URL</Label>
+            <Label htmlFor="monitor-url">{t("Website URL")}</Label>
             <Input
               id="monitor-url"
               type="url"
@@ -150,7 +156,7 @@ export function MonitorsManager({
             />
           </div>
           <div className="sm:w-44">
-            <Label htmlFor="monitor-frequency">Frequency</Label>
+            <Label htmlFor="monitor-frequency">{t("Frequency")}</Label>
             <select
               id="monitor-frequency"
               value={frequency}
@@ -160,7 +166,7 @@ export function MonitorsManager({
             >
               {allowedFrequencies.map((f) => (
                 <option key={f} value={f}>
-                  {FREQUENCY_LABEL[f]}
+                  {t(FREQUENCY_LABEL[f])}
                 </option>
               ))}
             </select>
@@ -171,24 +177,34 @@ export function MonitorsManager({
             ) : (
               <Plus className="size-4" aria-hidden />
             )}
-            Add monitor
+            {t("Add monitor")}
           </Button>
         </div>
         <p className="text-xs text-ink-500">
-          {atCap
-            ? `You've reached your plan's limit of ${maxMonitors} monitor${maxMonitors === 1 ? "" : "s"}.`
-            : `${monitors.length} of ${maxMonitors} monitors used. Monitoring re-scans the site automatically and alerts you to new critical issues or score drops.`}
+          {atCap ? (
+            <>
+              {t("You've reached your plan's limit of")} {maxMonitors}{" "}
+              {t(maxMonitors === 1 ? "monitor." : "monitors.")}
+            </>
+          ) : (
+            <>
+              {monitors.length} {t("of")} {maxMonitors} {t("monitors used.")}{" "}
+              {t(
+                "Monitoring re-scans the site automatically and alerts you to new critical issues or score drops."
+              )}
+            </>
+          )}
         </p>
-        {error && <p className="text-sm text-rose-600">{error}</p>}
+        {error && <p className="text-sm text-rose-600">{t(error)}</p>}
       </form>
 
       {/* List */}
       {monitors.length === 0 ? (
         <div className="rounded-lg ring-1 ring-line bg-canvas-2 p-8 text-center">
           <Activity className="size-6 text-ink-400 mx-auto mb-2" aria-hidden />
-          <p className="text-sm font-medium text-ink-800">No monitors yet</p>
+          <p className="text-sm font-medium text-ink-800">{t("No monitors yet")}</p>
           <p className="text-sm text-ink-600 mt-1">
-            Add a URL above, or open a completed scan and choose “Monitor this site”.
+            {t("Add a URL above, or open a completed scan and choose “Monitor this site”.")}
           </p>
         </div>
       ) : (
@@ -203,17 +219,21 @@ export function MonitorsManager({
                   <Globe className="size-4 text-ink-400 shrink-0" aria-hidden />
                   <span className="font-medium text-ink-900 truncate">{m.name}</span>
                   <Badge tone={m.status === "active" ? "success" : "neutral"}>
-                    {m.status === "active" ? "Active" : "Paused"}
+                    {m.status === "active" ? t("Active") : t("Paused")}
                   </Badge>
-                  <Badge tone="info">{FREQUENCY_LABEL[m.frequency]}</Badge>
+                  <Badge tone="info">{t(FREQUENCY_LABEL[m.frequency])}</Badge>
                 </div>
                 <p className="text-xs text-ink-500 mt-1 truncate">
                   {m.targetUrl}
                 </p>
                 <p className="text-xs text-ink-500 mt-0.5">
-                  {m.status === "active"
-                    ? `Next run ${formatWhen(m.nextRunAt)}`
-                    : "Paused"}
+                  {m.status === "active" ? (
+                    <>
+                      {t("Next run")} {formatWhen(m.nextRunAt)}
+                    </>
+                  ) : (
+                    t("Paused")
+                  )}
                   {m.lastScanId && (
                     <>
                       {" · "}
@@ -221,7 +241,7 @@ export function MonitorsManager({
                         href={`/app/scans/${m.lastScanId}`}
                         className="text-blue-600 hover:underline"
                       >
-                        Latest scan
+                        {t("Latest scan")}
                       </Link>
                     </>
                   )}
@@ -233,7 +253,7 @@ export function MonitorsManager({
                   size="sm"
                   onClick={() => toggleStatus(m)}
                   disabled={busyId === m.id}
-                  aria-label={m.status === "active" ? "Pause monitor" : "Resume monitor"}
+                  aria-label={m.status === "active" ? t("Pause monitor") : t("Resume monitor")}
                 >
                   {busyId === m.id ? (
                     <Loader2 className="size-4 animate-spin" aria-hidden />
@@ -242,14 +262,14 @@ export function MonitorsManager({
                   ) : (
                     <Play className="size-4" aria-hidden />
                   )}
-                  {m.status === "active" ? "Pause" : "Resume"}
+                  {m.status === "active" ? t("Pause") : t("Resume")}
                 </Button>
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => remove(m)}
                   disabled={busyId === m.id}
-                  aria-label="Delete monitor"
+                  aria-label={t("Delete monitor")}
                   className="text-rose-600 hover:bg-rose-50"
                 >
                   <Trash2 className="size-4" aria-hidden />

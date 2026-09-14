@@ -11,7 +11,7 @@
  * comparing different sites is meaningless and we reject it with 422.
  */
 import { NextRequest } from "next/server";
-import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { apiError, ApiError, requirePermission } from "@/lib/api/context";
 import { resolveComparison, ComparisonError } from "@/lib/server/compare";
 
 export async function GET(
@@ -19,7 +19,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("view_scans");
     const { id } = await params;
     const againstId = req.nextUrl.searchParams.get("against");
 
@@ -38,8 +38,9 @@ export async function GET(
       return Response.json({
         comparable: false,
         reason: result.reason,
-        message:
-          "No earlier completed scan of this URL was found to compare against.",
+        reasons: result.reasons,
+        verificationStatus: result.verificationStatus,
+        before: result.before ? scanRef(result.before) : null,
         after: scanRef(result.after),
       });
     }
@@ -62,6 +63,7 @@ function scanRef(s: {
   createdAt: Date;
   completedAt: Date | null;
   score: unknown;
+  profile: unknown;
 }) {
   return {
     id: s.id,
@@ -70,5 +72,6 @@ function scanRef(s: {
     createdAt: s.createdAt,
     completedAt: s.completedAt,
     score: s.score,
+    comparisonProfile: s.profile,
   };
 }

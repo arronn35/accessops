@@ -1,11 +1,15 @@
 import { MarketingShell } from "@/components/marketing/MarketingShell";
+import { canonical } from "@/lib/seo/canonical";
 import { SectionTag, Aside } from "@/components/marketing/SectionTag";
-import { PLANS, planFeatures } from "@/lib/marketing/plans";
+import { PlanLimitItems } from "@/components/marketing/PlanLimitItems";
+import { PLANS } from "@/lib/marketing/plans";
+import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
 import { verifySessionCookie } from "@/lib/auth/session";
 import { PricingCta } from "./pricing-cta";
 
-export const metadata = { title: "Pricing — maitrico Percevia AI" };
+export const metadata = {
+  ...canonical("/pricing"), title: "Pricing — maitrico Percevia AI" };
 export const dynamic = "force-dynamic";
 
 const H2 =
@@ -22,7 +26,7 @@ const FAQ = [
   },
   {
     q: "Where is scan data stored?",
-    a: "EU (Frankfurt) by default. US and UK regions are available on Team and Enterprise plans.",
+    a: "Workspace data stays in the configured Firebase Firestore project region. Browser scans run in the configured Cloud Run worker region. A saved workspace preference does not move data; region changes are coordinated infrastructure work.",
   },
   {
     q: "Is this an accessibility overlay?",
@@ -57,6 +61,9 @@ export default async function PricingPage() {
           {PLANS.map((p) => {
             const dark = Boolean(p.highlighted);
             const quiet = p.id === "enterprise";
+            // Caps come from the same source the API enforces, passed as
+            // props so the locale-reactive limit lines can never drift.
+            const caps = scanCapsForPlan(p.id as PlanTier);
             return (
               <article
                 key={p.id}
@@ -101,7 +108,8 @@ export default async function PricingPage() {
                     dark ? "border-paper/25 text-paper/85" : "border-line-soft text-ink-700"
                   }`}
                 >
-                  {planFeatures(p).map((f) => (
+                  <PlanLimitItems daily={caps.dailyScanCap} maxPages={caps.maxPagesCap} />
+                  {p.features.map((f) => (
                     <li key={f}>{f}</li>
                   ))}
                 </ul>

@@ -1,7 +1,10 @@
+"use client";
+
 import { ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function NoGuaranteeBanner({
   variant = "default",
@@ -10,9 +13,16 @@ export function NoGuaranteeBanner({
   variant?: "default" | "compact";
   className?: string;
 }) {
+  // Static copy, but this banner often renders inside data-i18n-skip
+  // subtrees (converted stateful forms), where the DOM-mutating observer
+  // never reaches. Rendering through React t() keeps it translated
+  // everywhere without depending on observer coverage.
+  const { t } = useLanguage();
+
   if (variant === "compact") {
     return (
       <div
+        data-i18n-skip
         className={cn(
           "flex items-start gap-2.5 border border-rule border-l-[6px] border-l-rose-600 bg-canvas-2 p-3 text-xs text-ink-700 leading-relaxed",
           className
@@ -20,9 +30,9 @@ export function NoGuaranteeBanner({
       >
         <ShieldCheck className="size-4 shrink-0 text-navy-700 mt-0.5" aria-hidden />
         <p>
-          {COMPLIANCE_COPY.NO_GUARANTEE_SHORT}{" "}
+          {t(COMPLIANCE_COPY.NO_GUARANTEE_SHORT)}{" "}
           <Link href="/app/compliance" className="font-medium text-blue-600 underline-offset-2 hover:underline">
-            Learn more
+            {t("Learn more")}
           </Link>
         </p>
       </div>
@@ -31,6 +41,7 @@ export function NoGuaranteeBanner({
 
   return (
     <div
+      data-i18n-skip
       className={cn(
         "border border-rule border-l-[10px] border-l-rose-600 bg-canvas-2 p-4 flex gap-3 items-start",
         className
@@ -40,15 +51,15 @@ export function NoGuaranteeBanner({
         <ShieldCheck className="size-4" aria-hidden />
       </span>
       <div className="flex-1 min-w-0">
-        <h3 className="text-sm font-semibold text-ink-900">No compliance guarantee</h3>
+        <h3 className="text-sm font-semibold text-ink-900">{t("No compliance guarantee")}</h3>
         <p className="text-xs text-ink-600 mt-1 leading-relaxed">
-          {COMPLIANCE_COPY.NO_GUARANTEE_FULL}
+          {t(COMPLIANCE_COPY.NO_GUARANTEE_FULL)}
         </p>
         <Link
           href="/app/compliance"
           className="inline-flex items-center mt-2 text-xs font-medium text-blue-600 hover:underline"
         >
-          Open Privacy &amp; Compliance Center →
+          {t("Open Privacy & Compliance Center →")}
         </Link>
       </div>
     </div>

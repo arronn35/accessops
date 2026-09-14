@@ -4,11 +4,17 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Trash2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/Button";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function DeleteVisualEvidenceButton({ evidenceId }: { evidenceId: string }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this button re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   function onDelete() {
     setError(null);
@@ -26,7 +32,7 @@ export function DeleteVisualEvidenceButton({ evidenceId }: { evidenceId: string 
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2" data-i18n-skip>
       <Button
         type="button"
         variant="outline"
@@ -39,9 +45,9 @@ export function DeleteVisualEvidenceButton({ evidenceId }: { evidenceId: string 
         ) : (
           <Trash2 className="size-4" aria-hidden />
         )}
-        Delete evidence
+        {t("Delete evidence")}
       </Button>
-      {error && <p className="text-xs text-rose-700">{error}</p>}
+      {error && <p className="text-xs text-rose-700">{t(error)}</p>}
     </div>
   );
 }

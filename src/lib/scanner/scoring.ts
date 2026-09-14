@@ -192,6 +192,16 @@ function clampScore(score: number): number {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+/**
+ * Letter grade for a score.
+ *
+ * Kept in the scan summary for API consumers, but no longer rendered anywhere
+ * in the product. WCAG defines no letter-grade scheme, and W3C warns that
+ * aggregate conformance scores mislead when the method behind them is not
+ * published (see WCAG-EM step 5.d). Surface it again only once the scoring
+ * method — weights, the sqrt(pageCount) normalisation, and what the number
+ * does NOT cover — is published alongside it.
+ */
 function gradeForScore(score: number): ScanScoreSummary["grade"] {
   if (score >= 90) return "A";
   if (score >= 80) return "B";

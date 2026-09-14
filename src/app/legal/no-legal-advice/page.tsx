@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/no-legal-advice"),
   title: "No Legal Advice Disclaimer — Percevia AI",
   description: "maitrico Percevia AI is not a law firm and does not provide legal advice.",
 };

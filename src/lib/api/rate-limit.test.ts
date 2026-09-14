@@ -10,7 +10,7 @@ vi.mock("@/lib/firebase/admin", () => ({
   firestore: firestoreMock,
 }));
 
-import { checkRateLimit, limiters } from "./rate-limit";
+import { anonymousNetworkKey, checkRateLimit, limiters } from "./rate-limit";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -135,5 +135,31 @@ describe("checkRateLimit (Firestore-backed)", () => {
       remaining: 0,
       reason: "backend_unavailable",
     });
+  });
+});
+
+describe("anonymousNetworkKey", () => {
+  const headers = (init: Record<string, string>) => new Headers(init);
+
+  it("ignores User-Agent rotation from the same address", () => {
+    const a = anonymousNetworkKey(
+      headers({ "x-forwarded-for": "203.0.113.20", "user-agent": "one" })
+    );
+    const b = anonymousNetworkKey(
+      headers({ "x-forwarded-for": "203.0.113.20", "user-agent": "two" })
+    );
+    expect(a).toBe(b);
+    expect(a).toMatch(/^[a-f0-9]{32}$/);
+  });
+
+  it("separates different source addresses", () => {
+    const a = anonymousNetworkKey(headers({ "x-forwarded-for": "203.0.113.20" }));
+    const b = anonymousNetworkKey(headers({ "x-forwarded-for": "198.51.100.7" }));
+    expect(a).not.toBe(b);
+  });
+
+  it("never embeds the raw address", () => {
+    const key = anonymousNetworkKey(headers({ "x-forwarded-for": "203.0.113.20" }));
+    expect(key).not.toContain("203.0.113.20");
   });
 });

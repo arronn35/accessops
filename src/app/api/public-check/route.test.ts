@@ -9,9 +9,13 @@ const { checkRateLimitMock, runPublicCheckMock, validateUrlMock } = vi.hoisted(
   })
 );
 
-vi.mock("@/lib/api/rate-limit", () => ({
-  checkRateLimit: checkRateLimitMock,
-}));
+vi.mock("@/lib/api/rate-limit", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api/rate-limit")>();
+  return {
+    ...actual,
+    checkRateLimit: checkRateLimitMock,
+  };
+});
 
 vi.mock("@/lib/scanner/public-check", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/scanner/public-check")>();
@@ -140,8 +144,7 @@ describe("POST /api/public-check", () => {
     expect(runPublicCheckMock).not.toHaveBeenCalled();
   });
 
-  it("enforces the anonymous request budget", async () => {
-    checkRateLimitMock.mockResolvedValue({
+  it("enforces the anonymous request budget", async () => {    checkRateLimitMock.mockResolvedValue({
       ok: false,
       remaining: 0,
       reset: Date.now() + 60_000,
@@ -153,6 +156,15 @@ describe("POST /api/public-check", () => {
     expect(res.status).toBe(429);
     expect(res.headers.get("retry-after")).toBeTruthy();
     expect(runPublicCheckMock).not.toHaveBeenCalled();
+  });
+
+  it("keys the budget on network identity, not User-Agent", async () => {
+    await POST(request({ url: "https://example.org" }, { "user-agent": "agent-a" }));
+    await POST(request({ url: "https://example.org" }, { "user-agent": "agent-b" }));
+
+    const keys = checkRateLimitMock.mock.calls.map((call) => call[1]);
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toBe(keys[1]);
   });
 
   it("rejects oversized bodies before consuming checker capacity", async () => {

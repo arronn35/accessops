@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useState } from "react";
 import {
   Keyboard,
   Ear,
@@ -19,6 +19,7 @@ import {
   Info,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface CheckItem {
   id: string;
@@ -147,53 +148,85 @@ const CHECKS: CheckItem[] = [
   },
 ];
 
-interface CheckState {
-  status: "pending" | "passed" | "failed";
-  notes: string;
+export type ManualCheckStatus = "pending" | "passed" | "failed";
+
+/** Serialisable view of a stored review, as handed down by the server page. */
+export interface ManualReviewSnapshot {
+  checkId: string;
+  status: ManualCheckStatus;
+  notes: string | null;
+  reviewerName: string | null;
+  reviewerEmail: string | null;
+  revision: number;
+  updatedAt: string;
 }
 
-const MANUAL_AUDIT_EVENT = "percevia:manual-audit";
-
-function subscribeToManualAudit(onStoreChange: () => void) {
-  window.addEventListener("storage", onStoreChange);
-  window.addEventListener(MANUAL_AUDIT_EVENT, onStoreChange);
-  return () => {
-    window.removeEventListener("storage", onStoreChange);
-    window.removeEventListener(MANUAL_AUDIT_EVENT, onStoreChange);
-  };
+function byCheckId(reviews: ManualReviewSnapshot[]): Record<string, ManualReviewSnapshot> {
+  return Object.fromEntries(reviews.map((r) => [r.checkId, r]));
 }
 
-function parseAuditState(raw: string | null): Record<string, CheckState> {
-  if (!raw) return {};
-
-  try {
-    return JSON.parse(raw) as Record<string, CheckState>;
-  } catch (error) {
-    console.error("Failed to parse manual audit state", error);
-    return {};
-  }
-}
-
-export function ManualReviewChecklist({ scanId }: { scanId: string }) {
+/**
+ * Guided manual audit.
+ *
+ * Verdicts are stored per workspace + scan + check with the reviewer's identity
+ * and a revision count, so a teammate on another machine sees the same record
+ * and the generated report can cite the actual review. This previously lived in
+ * localStorage, which meant it was invisible to everyone else and gone the
+ * moment the browser was cleared.
+ */
+export function ManualReviewChecklist({
+  scanId,
+  initialReviews,
+  canRecord,
+}: {
+  scanId: string;
+  initialReviews: ManualReviewSnapshot[];
+  canRecord: boolean;
+}) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const storageKey = `percevia_manual_audit_${scanId}`;
-  const serializedAuditState = useSyncExternalStore(
-    subscribeToManualAudit,
-    () => localStorage.getItem(storageKey),
-    () => null
-  );
-  const auditState = useMemo(
-    () => parseAuditState(serializedAuditState),
-    [serializedAuditState]
-  );
+  const [auditState, setAuditState] = useState(() => byCheckId(initialReviews));
+  // Note text is edited locally and persisted on blur; saving per keystroke
+  // would be one write per character.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [savingId, setSavingId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this checklist re-renders on every verdict/note save, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
-  const updateCheck = (id: string, status: "pending" | "passed" | "failed", notes: string) => {
-    const nextState = {
-      ...auditState,
-      [id]: { status, notes },
-    };
-    localStorage.setItem(storageKey, JSON.stringify(nextState));
-    window.dispatchEvent(new Event(MANUAL_AUDIT_EVENT));
+  const noteFor = (id: string) => drafts[id] ?? auditState[id]?.notes ?? "";
+
+  const updateCheck = async (
+    id: string,
+    status: ManualCheckStatus,
+    notes: string
+  ) => {
+    if (!canRecord) return;
+    setSavingId(id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/scans/${scanId}/manual-review`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ checkId: id, status, notes }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      const { review } = (await res.json()) as { review: ManualReviewSnapshot };
+      setAuditState((prev) => ({ ...prev, [id]: review }));
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[id];
+        return next;
+      });
+    } catch {
+      // Nothing was stored, so say so rather than leaving a verdict on screen
+      // that no teammate and no report will ever see.
+      setError("We couldn't save that review. Check your connection and try again.");
+    } finally {
+      setSavingId(null);
+    }
   };
 
   const completedCount = CHECKS.filter(
@@ -216,15 +249,15 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
   };
 
   return (
-    <Card className="ring-1 ring-line shadow-[var(--shadow-card)] overflow-hidden">
+    <Card data-i18n-skip className="ring-1 ring-line shadow-[var(--shadow-card)] overflow-hidden">
       <CardHeader className="pb-4">
         <CardTitle className="flex flex-col gap-3">
           <div className="flex items-center justify-between">
             <span className="flex items-center gap-2 text-sm font-semibold text-ink-900">
-              <ClipboardCheck className="size-4 text-purple-600" aria-hidden /> Guided manual audit
+              <ClipboardCheck className="size-4 text-purple-600" aria-hidden /> {t("Guided manual audit")}
             </span>
             <span className="text-xs font-medium text-ink-500 tabular-nums">
-              {completedCount} / {CHECKS.length} checks done
+              {completedCount} / {CHECKS.length} {t("checks done")}
             </span>
           </div>
           {/* Progress bar */}
@@ -238,12 +271,31 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
       </CardHeader>
       <CardContent className="px-4 pb-5 pt-0">
         <p className="text-xs text-ink-600 mb-4 leading-relaxed">
-          Automated checkers catch 30-50% of violations. Step through this guide to review keyboard, screen reader, and layout behaviors. Progress is saved locally.
+          {t("Automated checkers cannot detect every violation. Step through this guide to review keyboard, screen reader, and layout behaviors. Results are saved to this scan with your name, so teammates see them and the report can cite them.")}
         </p>
+
+        {error && (
+          <p
+            role="alert"
+            className="mb-3 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-xs text-rose-800"
+          >
+            {t(error)}
+          </p>
+        )}
+
+        {!canRecord && (
+          <p className="mb-3 rounded-md border border-line bg-canvas-2 px-3 py-2 text-xs text-ink-600">
+            {t("Your role can read these results but not record them.")}
+          </p>
+        )}
 
         <ul className="space-y-2.5">
           {CHECKS.map((c) => {
-            const currentItem = auditState[c.id] || { status: "pending", notes: "" };
+            const stored = auditState[c.id];
+            const currentItem = {
+              status: (stored?.status ?? "pending") as ManualCheckStatus,
+              notes: noteFor(c.id),
+            };
             const isExpanded = expandedId === c.id;
 
             return (
@@ -264,11 +316,11 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
                     {renderStatusIcon(currentItem.status)}
                     <div className="min-w-0">
                       <span className="block text-sm font-medium text-ink-900 leading-snug">
-                        {c.title}
+                        {t(c.title)}
                       </span>
                       {!isExpanded && (
                         <span className="block text-[11px] text-ink-500 mt-0.5 truncate max-w-[220px]">
-                          {currentItem.notes || c.detail}
+                          {currentItem.notes || t(c.detail)}
                         </span>
                       )}
                     </div>
@@ -286,11 +338,11 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
                     {/* Steps */}
                     <div className="space-y-1.5">
                       <h4 className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-500 font-bold">
-                        <BookOpen className="size-3" /> Step-by-step instructions
+                        <BookOpen className="size-3" /> {t("Step-by-step instructions")}
                       </h4>
                       <ol className="list-decimal pl-4 space-y-1 text-ink-700 leading-relaxed">
                         {c.steps.map((step, idx) => (
-                          <li key={idx}>{step}</li>
+                          <li key={idx}>{t(step)}</li>
                         ))}
                       </ol>
                     </div>
@@ -298,18 +350,18 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
                     {/* Checks */}
                     <div className="space-y-1.5">
                       <h4 className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-ink-500 font-bold">
-                        <Info className="size-3" /> Critical checks
+                        <Info className="size-3" /> {t("Critical checks")}
                       </h4>
                       <ul className="list-disc pl-4 space-y-1 text-ink-700 leading-relaxed">
                         {c.checks.map((check, idx) => (
-                          <li key={idx}>{check}</li>
+                          <li key={idx}>{t(check)}</li>
                         ))}
                       </ul>
                     </div>
 
                     {/* Tip */}
                     <div className="rounded-md bg-purple-50/50 p-2.5 border border-purple-100 text-purple-800 leading-relaxed">
-                      <strong>Audit tip:</strong> {c.tip}
+                      <strong>{t("Audit tip:")}</strong> {t(c.tip)}
                     </div>
 
                     {/* Notes Area */}
@@ -318,55 +370,85 @@ export function ManualReviewChecklist({ scanId }: { scanId: string }) {
                         htmlFor={`notes-${c.id}`}
                         className="block text-[10px] uppercase tracking-wider text-ink-500 font-bold"
                       >
-                        Observations & notes
+                        {t("Observations & notes")}
                       </label>
                       <textarea
                         id={`notes-${c.id}`}
                         value={currentItem.notes}
-                        onChange={(e) => updateCheck(c.id, currentItem.status, e.target.value)}
-                        placeholder="Write down any accessibility bugs, failures or general remarks found here..."
-                        className="w-full min-h-[70px] rounded-md bg-paper p-2.5 border border-line focus:outline-none focus:ring-1 focus:ring-purple-500 text-ink-900 leading-relaxed resize-y"
+                        disabled={!canRecord}
+                        onChange={(e) =>
+                          setDrafts((prev) => ({ ...prev, [c.id]: e.target.value }))
+                        }
+                        onBlur={(e) => {
+                          // Persist once the reviewer moves on, not per keystroke.
+                          if (e.target.value !== (stored?.notes ?? "")) {
+                            void updateCheck(c.id, currentItem.status, e.target.value);
+                          }
+                        }}
+                        placeholder={t("Write down any accessibility bugs, failures or general remarks found here...")}
+                        className="w-full min-h-[70px] rounded-md bg-paper p-2.5 border border-line focus:outline-none focus:ring-1 focus:ring-purple-500 text-ink-900 leading-relaxed resize-y disabled:opacity-60"
                       />
                     </div>
+
+                    {stored && (
+                      <p className="text-[11px] text-ink-500">
+                        {t("Recorded by")}{" "}
+                        <span className="font-medium text-ink-700">
+                          {stored.reviewerName || stored.reviewerEmail || t("a teammate")}
+                        </span>{" "}
+                        · {new Date(stored.updatedAt).toLocaleString()}
+                        {stored.revision > 1 ? (
+                          <>
+                            {" · "}
+                            {t("revision")} {stored.revision}
+                          </>
+                        ) : (
+                          ""
+                        )}
+                      </p>
+                    )}
 
                     {/* Status selectors */}
                     <div className="flex flex-wrap items-center justify-between gap-3 pt-1 border-t border-line/60">
                       <span className="text-[10px] uppercase tracking-wider text-ink-500 font-bold">
-                        Audit Status
+                        {t("Audit Status")}
                       </span>
                       <div className="flex gap-1.5">
                         <button
                           type="button"
-                          onClick={() => updateCheck(c.id, "pending", currentItem.notes)}
+                          onClick={() => void updateCheck(c.id, "pending", currentItem.notes)}
+                          disabled={!canRecord || savingId === c.id}
                           className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
                             currentItem.status === "pending"
                               ? "bg-ink-100 text-ink-800"
                               : "bg-paper text-ink-600 border border-line hover:bg-canvas-2/50"
                           }`}
                         >
-                          Clear
+                          {t("Clear")}
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateCheck(c.id, "passed", currentItem.notes)}
+                          onClick={() => void updateCheck(c.id, "passed", currentItem.notes)}
+                          disabled={!canRecord || savingId === c.id}
                           className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
                             currentItem.status === "passed"
                               ? "bg-green-500 text-paper"
                               : "bg-paper text-green-700 border border-green-200 hover:bg-green-50/30"
                           }`}
                         >
-                          Passed
+                          {t("Passed")}
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateCheck(c.id, "failed", currentItem.notes)}
+                          onClick={() => void updateCheck(c.id, "failed", currentItem.notes)}
+                          disabled={!canRecord || savingId === c.id}
                           className={`px-3 py-1.5 rounded-md font-medium transition-colors ${
                             currentItem.status === "failed"
                               ? "bg-rose-500 text-paper"
                               : "bg-paper text-rose-700 border border-rose-200 hover:bg-rose-50/30"
                           }`}
                         >
-                          Failed
+                          {t("Failed")}
                         </button>
                       </div>
                     </div>

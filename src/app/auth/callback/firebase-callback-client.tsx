@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { sanitizeCallback } from "@/lib/auth/callback-url";
 import { useCallback, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { isSignInWithEmailLink, signInWithEmailLink } from "firebase/auth";
@@ -8,6 +9,7 @@ import { Loader2, Mail } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Input, Label, FieldHint } from "@/components/ui/Input";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 import {
   firebaseClientAuth,
   firebaseClientConfigured,
@@ -32,6 +34,10 @@ export function FirebaseCallbackClient() {
   const [phase, setPhase] = useState<"working" | "need-email" | "error">("working");
   const [email, setEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
+  // Copy renders through React state (never the DOM-mutating i18n observer):
+  // phase changes re-render this page and mutated text nodes throw hydration
+  // #418. data-i18n-skip keeps the observer off this subtree.
+  const { t } = useLanguage();
 
   const completeSignIn = useCallback(
     async (address: string, link: string) => {
@@ -100,7 +106,7 @@ export function FirebaseCallbackClient() {
   }
 
   return (
-    <div className="min-h-screen bg-canvas-2 flex flex-col">
+    <div className="min-h-screen bg-canvas-2 flex flex-col" data-i18n-skip>
       <header className="bg-paper border-b border-rule">
         <div className="max-w-md mx-auto px-4 lg:px-8 h-16 flex items-center">
           <Link href="/"><Logo variant="site" /></Link>
@@ -121,10 +127,10 @@ export function FirebaseCallbackClient() {
               <Loader2 className="size-5 animate-spin" />
             </span>
             <h1 className="text-2xl font-semibold text-ink-900 tracking-tight">
-              Signing you in…
+              {t("Signing you in…")}
             </h1>
             <p className="text-sm text-ink-600 mt-3 leading-relaxed" role="status">
-              Hold on while we confirm your link and open your dashboard.
+              {t("Hold on while we confirm your link and open your dashboard.")}
             </p>
           </div>
         )}
@@ -132,22 +138,21 @@ export function FirebaseCallbackClient() {
         {phase === "need-email" && (
           <>
             <h1 className="text-2xl font-semibold text-ink-900 tracking-tight">
-              Confirm your email
+              {t("Confirm your email")}
             </h1>
             <p className="text-sm text-ink-600 mt-2">
-              Enter the email address this sign-in link was sent to and we&apos;ll finish
-              signing you in.
+              {t("Enter the email address this sign-in link was sent to and we'll finish signing you in.")}
             </p>
 
             {error && (
-              <AlertCallout tone="danger" title="Sign-in failed" className="mt-5">
-                {error}
+              <AlertCallout tone="danger" title={t("Sign-in failed")} className="mt-5">
+                {t(error)}
               </AlertCallout>
             )}
 
             <form onSubmit={confirmEmail} className="mt-6 space-y-4 bg-paper border border-rule p-6">
               <div>
-                <Label htmlFor="email" required>Email address</Label>
+                <Label htmlFor="email" required>{t("Email address")}</Label>
                 <Input
                   id="email"
                   name="email"
@@ -158,13 +163,13 @@ export function FirebaseCallbackClient() {
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                 />
-                <FieldHint>Use the address you requested the link with.</FieldHint>
+                <FieldHint>{t("Use the address you requested the link with.")}</FieldHint>
               </div>
               <button
                 type="submit"
                 className="w-full inline-flex items-center justify-center gap-2 h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-bold hover:bg-navy-800"
               >
-                <Mail className="size-4" aria-hidden /> Finish sign-in
+                <Mail className="size-4" aria-hidden /> {t("Finish sign-in")}
               </button>
             </form>
           </>
@@ -172,14 +177,14 @@ export function FirebaseCallbackClient() {
 
         {phase === "error" && (
           <div className="text-center">
-            <AlertCallout tone="danger" title="We couldn't sign you in" className="mt-2 text-left">
-              {error}
+            <AlertCallout tone="danger" title={t("We couldn't sign you in")} className="mt-2 text-left">
+              {error ? t(error) : null}
             </AlertCallout>
             <Link
               href="/auth/sign-in"
               className="inline-flex items-center justify-center gap-2 h-11 px-4 mt-6 rounded-md bg-navy-900 text-paper text-sm font-bold hover:bg-navy-800"
             >
-              Back to sign-in
+              {t("Back to sign-in")}
             </Link>
           </div>
         )}
@@ -188,10 +193,6 @@ export function FirebaseCallbackClient() {
   );
 }
 
-function sanitizeCallback(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/app";
-  return value;
-}
 
 function firebaseError(err: unknown): string {
   const message = err instanceof Error ? err.message : String(err);

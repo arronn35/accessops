@@ -7,7 +7,19 @@ export default function robots(): MetadataRoute.Robots {
     rules: {
       userAgent: "*",
       allow: ["/", "/pricing", "/onboarding", "/auth/sign-in"],
-      disallow: ["/app", "/api"],
+      // Tokenised and per-user surfaces. /r and /statement already send
+      // noindex headers of their own; listing them here stops a crawler
+      // fetching them at all, which is the stronger guarantee for a URL that
+      // is itself the credential.
+      disallow: [
+        "/app",
+        "/api",
+        "/r/",
+        "/statement/",
+        "/invite/",
+        "/workspace/",
+        "/auth/callback",
+      ],
     },
     sitemap: `${appUrl}/sitemap.xml`,
   };

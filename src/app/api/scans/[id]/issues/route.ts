@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
-import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { apiError, ApiError, requirePermission } from "@/lib/api/context";
 import { getScanJob, listIssues, listScanPages } from "@/lib/data/firestore";
+import { roleHasPermission } from "@/lib/entitlements";
 
 const SEVERITY_RANK: Record<string, number> = {
   critical: 0,
@@ -16,7 +17,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("view_scans");
     const { id } = await params;
     const job = await getScanJob(ctx.workspaceId, id);
     if (!job) throw new ApiError(404, "not_found");
@@ -43,6 +44,8 @@ export async function GET(
     const filtered = severityFilter ? rows.filter((r) => r.severity === severityFilter) : rows;
 
     if (req.nextUrl.searchParams.get("format") === "csv") {
+      // CSV is a data export, not a read: it needs export_reports on top of view_scans.
+      if (!roleHasPermission(ctx.role, "export_reports")) throw new ApiError(403, "forbidden");
       const csv = [
         ["id", "ruleId", "severity", "impact", "pageUrl", "help"].join(","),
         ...filtered.map((r) =>

@@ -8,7 +8,9 @@ const COLUMNS = [
       { href: "/pricing", label: "Pricing" },
       { href: "/#how", label: "How it works" },
       { href: "/#who", label: "Who it's for" },
-      { href: "/#report", label: "Example report" },
+      { href: "/solutions/agencies", label: "For agencies" },
+      { href: "/solutions/turkiye", label: "Türkiye" },
+      { href: "/sample-report", label: "Sample report" },
     ],
   },
   {
@@ -47,6 +49,7 @@ export function SiteFooter() {
           <div className="flex items-center gap-3">
             <Logo
               variant="mark"
+              decorative
               className="size-7 shadow-[4px_4px_0_var(--color-accent)]"
             />
             <span className="text-[17px] font-extrabold tracking-[-0.03em] text-navy-900">

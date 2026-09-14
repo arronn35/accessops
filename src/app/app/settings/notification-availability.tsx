@@ -14,7 +14,8 @@ export function NotificationAvailability() {
       <CardHeader>
         <CardTitle>Notifications</CardTitle>
         <CardDescription>
-          In-app notifications are live. Email delivery is on the roadmap.
+          In-app notifications are live, including regression alerts from
+          monitors. Email delivery is on the roadmap.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -22,9 +23,11 @@ export function NotificationAvailability() {
           tone="info"
           title="Email notifications aren't available yet"
         >
-          Scan, report, and team events already appear in the bell menu in the
-          top bar. Email delivery is not built yet, so these planned preferences
-          cannot be changed or saved.
+          Scan, report, and team events appear in the bell menu in the top bar,
+          and a monitor that finds new critical issues or a significant score
+          drop raises one there too. What is missing is delivery to your inbox,
+          so you still have to open the app to see them. These planned
+          preferences cannot be changed or saved yet.
         </AlertCallout>
 
         <fieldset
@@ -52,7 +55,7 @@ export function NotificationAvailability() {
               readOnly
               className="cursor-not-allowed"
               label="New critical findings"
-              description="Alert me if a scan introduces new critical issues."
+              description="Email me when a monitor finds new critical issues. Already shown in the bell menu."
             />
           </div>
           <div className="pt-4">

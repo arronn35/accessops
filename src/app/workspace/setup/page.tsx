@@ -1,15 +1,28 @@
 import Link from "next/link";
+import { NOINDEX } from "@/lib/seo/canonical";
 import { ArrowRight, HelpCircle } from "lucide-react";
 import { Logo } from "@/components/brand/Logo";
 import { Input, Label, Select, FieldHint } from "@/components/ui/Input";
 import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
 import { updateWorkspaceAction } from "@/lib/server/workspace-actions";
+import { newScanPath, safePublicScanUrl } from "@/lib/navigation/scan-handoff";
+import { personaById } from "@/lib/onboarding/personas";
 
-export const metadata = { title: "Workspace setup — Percevia AI" };
+export const metadata = {
+  ...NOINDEX, title: "Workspace setup — Percevia AI" };
 export const dynamic = "force-dynamic";
 
-export default async function WorkspaceSetupPage() {
+export default async function WorkspaceSetupPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ url?: string; persona?: string }>;
+}) {
   const { workspace } = await getCurrentWorkspaceOrRedirect();
+  const params = await searchParams;
+  const url = safePublicScanUrl(params.url);
+  // Unknown ids resolve to null, so a hand-edited query string cannot inject
+  // copy into the page or a framework value into the workspace.
+  const persona = personaById(params.persona);
 
   return (
     <div className="min-h-screen bg-canvas-2 flex flex-col">
@@ -30,9 +43,15 @@ export default async function WorkspaceSetupPage() {
         <p className="text-sm text-ink-600 mt-2 max-w-xl">
           These defaults shape new scans and reports. You can change them later in Settings.
         </p>
+        {persona && (
+          <p className="mt-3 max-w-xl border-l-2 border-navy-900 pl-3 text-sm text-ink-700">
+            {persona.setupHint}
+          </p>
+        )}
 
         <form action={updateWorkspaceAction} className="mt-8 space-y-6">
-          <input type="hidden" name="redirectTo" value="/app" />
+          <input type="hidden" name="redirectTo" value={newScanPath(url)} />
+          {persona && <input type="hidden" name="persona" value={persona.id} />}
 
           <div className="space-y-6 bg-paper border border-rule p-6">
             <div>
@@ -71,7 +90,13 @@ export default async function WorkspaceSetupPage() {
               </div>
               <div>
                 <Label htmlFor="ws-fw">Primary framework</Label>
-                <Select id="ws-fw" name="framework" defaultValue={workspace.framework ?? "next"}>
+                <Select
+                  id="ws-fw"
+                  name="framework"
+                  defaultValue={
+                    workspace.framework ?? persona?.defaultFramework ?? "next"
+                  }
+                >
                   <option value="html">HTML / CSS</option>
                   <option value="react">React</option>
                   <option value="next">Next.js</option>
@@ -103,7 +128,7 @@ export default async function WorkspaceSetupPage() {
           </div>
 
           <div className="flex items-center justify-between gap-3">
-            <Link href="/onboarding" className="text-sm text-ink-600 hover:text-ink-900">
+            <Link href={url ? `/onboarding?url=${encodeURIComponent(url)}` : "/onboarding"} className="text-sm text-ink-600 hover:text-ink-900">
               ← Back
             </Link>
             <button

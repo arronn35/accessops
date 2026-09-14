@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   CheckCircle2, MessageSquarePlus, ShieldQuestion, Plus, Loader2,
 } from "lucide-react";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 const STATUSES: { id: string; label: string }[] = [
   { id: "to_review", label: "To Review" },
@@ -26,6 +27,11 @@ export function IssueActions({
   const [status, setStatus] = useState(initialStatus);
   const [pending, startTransition] = useTransition();
   const [taskCreated, setTaskCreated] = useState(false);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this component re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   async function patch(payload: Record<string, unknown>) {
     startTransition(async () => {
@@ -56,9 +62,9 @@ export function IssueActions({
   }
 
   return (
-    <div className="flex flex-wrap gap-2 items-start">
+    <div className="flex flex-wrap gap-2 items-start" data-i18n-skip>
       <label className="inline-flex items-center gap-2 text-xs">
-        <span className="sr-only">Status</span>
+        <span className="sr-only">{t("Status")}</span>
         <select
           value={status}
           onChange={(e) => {
@@ -69,7 +75,7 @@ export function IssueActions({
         >
           {STATUSES.map((s) => (
             <option key={s.id} value={s.id}>
-              {s.label}
+              {t(s.label)}
             </option>
           ))}
         </select>
@@ -81,7 +87,7 @@ export function IssueActions({
         onClick={createTask}
         className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
       >
-        <Plus className="size-4" aria-hidden /> {taskCreated ? "Task created" : "Create task"}
+        <Plus className="size-4" aria-hidden /> {taskCreated ? t("Task created") : t("Create task")}
       </button>
 
       <button
@@ -89,7 +95,7 @@ export function IssueActions({
         onClick={() => patch({ status: "fixed" })}
         className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
       >
-        <CheckCircle2 className="size-4" aria-hidden /> Mark fixed
+        <CheckCircle2 className="size-4" aria-hidden /> {t("Mark fixed")}
       </button>
 
       <button
@@ -97,7 +103,7 @@ export function IssueActions({
         onClick={() => patch({ falsePositive: true, status: "false_positive" })}
         className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
       >
-        <ShieldQuestion className="size-4" aria-hidden /> False positive
+        <ShieldQuestion className="size-4" aria-hidden /> {t("False positive")}
       </button>
 
       <button
@@ -105,7 +111,7 @@ export function IssueActions({
         onClick={() => patch({ humanReviewRequired: true })}
         className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
       >
-        <MessageSquarePlus className="size-4" aria-hidden /> Flag for review
+        <MessageSquarePlus className="size-4" aria-hidden /> {t("Flag for review")}
       </button>
     </div>
   );

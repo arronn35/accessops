@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
 
 const {
@@ -46,12 +46,18 @@ vi.mock("@/lib/scanner/dispatch", () => ({
 
 import { GET } from "./route";
 
-function request(url: string): NextRequest {
-  return new NextRequest(`http://localhost${url}`);
+function request(url: string, headers?: Record<string, string>): NextRequest {
+  return new NextRequest(`http://localhost${url}`, { headers });
+}
+
+const DIAG_TOKEN = "test-diagnostics-token";
+function diagRequest(url: string): NextRequest {
+  return request(url, { "x-diagnostics-token": DIAG_TOKEN });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  process.env.INTERNAL_DIAGNOSTICS_TOKEN = DIAG_TOKEN;
   firebaseAdminConfiguredMock.mockReturnValue(true);
   firestoreMock.mockReturnValue({
     collection: () => ({ limit: () => ({ get: async () => ({}) }) }),
@@ -64,6 +70,10 @@ beforeEach(() => {
     configured: true,
     missing: [],
   });
+});
+
+afterEach(() => {
+  delete process.env.INTERNAL_DIAGNOSTICS_TOKEN;
 });
 
 describe("GET /api/healthz", () => {
@@ -79,11 +89,11 @@ describe("GET /api/healthz", () => {
     expect(firestoreMock).not.toHaveBeenCalled();
   });
 
-  it("deep check reports a fresh worker", async () => {
+  it("deep check reports a fresh worker to authorized diagnostics", async () => {
     getLatestWorkerHeartbeatMock.mockResolvedValue(new Date());
     isWorkerHeartbeatFreshMock.mockReturnValue(true);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -91,14 +101,13 @@ describe("GET /api/healthz", () => {
     expect(body.degraded).toBe(false);
     expect(body.checks.worker.ok).toBe(true);
     expect(body.checks.worker.state).toBe("active");
-    expect(typeof body.checks.worker.lastSeenSecondsAgo).toBe("number");
   });
 
   it("deep check marks a stale worker as degraded but stays ready", async () => {
     getLatestWorkerHeartbeatMock.mockResolvedValue(new Date(Date.now() - 3_600_000));
     isWorkerHeartbeatFreshMock.mockReturnValue(false);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const body = await res.json();
 
     expect(res.status).toBe(200);
@@ -118,7 +127,7 @@ describe("GET /api/healthz", () => {
     );
     isWorkerHeartbeatFreshMock.mockReturnValue(false);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const body = await res.json();
 
     expect(body.degraded).toBe(false);
@@ -140,18 +149,17 @@ describe("GET /api/healthz", () => {
     );
     isWorkerHeartbeatFreshMock.mockReturnValue(false);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const body = await res.json();
 
     expect(body.degraded).toBe(true);
-    expect(body.checks.worker.pending).toBe(true);
     expect(body.checks.worker.state).toBe("stale");
   });
 
   it("deep check fails readiness when Firebase Admin is unconfigured", async () => {
     firebaseAdminConfiguredMock.mockReturnValue(false);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const body = await res.json();
 
     expect(res.status).toBe(503);
@@ -165,9 +173,65 @@ describe("GET /api/healthz", () => {
     getLatestWorkerHeartbeatMock.mockResolvedValue(new Date());
     isWorkerHeartbeatFreshMock.mockReturnValue(true);
 
-    const res = await GET(request("/api/healthz?deep=1"));
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
     const text = JSON.stringify(await res.json());
 
     expect(text).not.toMatch(/workerId|hostname|inflight/i);
+  });
+
+  it("public deep response carries summary only, no internals", async () => {
+    scanDispatchConfigurationMock.mockReturnValue({
+      mode: "cloud-tasks",
+      configured: false,
+      missing: ["SCAN_WORKER_URL", "INTERNAL_WORKER_SECRET"],
+    });
+    getLatestWorkerHeartbeatMock.mockResolvedValue(new Date());
+    isWorkerHeartbeatFreshMock.mockReturnValue(true);
+
+    const res = await GET(request("/api/healthz?deep=1"));
+    const text = JSON.stringify(await res.json());
+    const body = JSON.parse(text);
+
+    expect(res.status).toBe(200);
+    expect(body.mode).toBe("readiness");
+    expect(typeof body.degraded).toBe("boolean");
+    expect(body).not.toHaveProperty("dispatch");
+    expect(body).not.toHaveProperty("checks");
+    expect(text).not.toMatch(/missing|lastSeenSecondsAgo|pending|detail/i);
+    expect(text).not.toMatch(/SCAN_WORKER_URL|INTERNAL_WORKER_SECRET|CLOUD_TASKS/);
+  });
+
+  it("public deep failure hides raw dependency errors", async () => {
+    firebaseAdminConfiguredMock.mockReturnValue(false);
+
+    const res = await GET(request("/api/healthz?deep=1"));
+    const text = JSON.stringify(await res.json());
+    const body = JSON.parse(text);
+
+    expect(res.status).toBe(503);
+    expect(body.ok).toBe(false);
+    expect(text).not.toMatch(/Firebase Admin|detail/i);
+  });
+
+  it("wrong diagnostics token still gets the public summary", async () => {
+    const res = await GET(request("/api/healthz?deep=1", { "x-diagnostics-token": "wrong" }));
+    const body = await res.json();
+
+    expect(body.mode).toBe("readiness");
+    expect(body).not.toHaveProperty("checks");
+  });
+
+  it("authorized diagnostics never leak missing-env names or raw errors", async () => {
+    scanDispatchConfigurationMock.mockReturnValue({
+      mode: "cloud-tasks",
+      configured: false,
+      missing: ["SCAN_WORKER_URL", "INTERNAL_WORKER_SECRET"],
+    });
+    firebaseAdminConfiguredMock.mockReturnValue(false);
+
+    const res = await GET(diagRequest("/api/healthz?deep=1"));
+    const text = JSON.stringify(await res.json());
+
+    expect(text).not.toMatch(/SCAN_WORKER_URL|INTERNAL_WORKER_SECRET|Firebase Admin/);
   });
 });

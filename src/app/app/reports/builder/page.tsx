@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
-  Download, FileBarChart2, FileText, Eye, Loader2, AlertCircle,
+  Download, FileBarChart2, FileJson, FileText, Eye, Loader2, AlertCircle,
 } from "lucide-react";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/Card";
 import { Checkbox } from "@/components/ui/Checkbox";
@@ -11,6 +11,7 @@ import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { Input, Label } from "@/components/ui/Input";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface ScanSummary {
   id: string;
@@ -34,6 +35,7 @@ const FORMATS = [
   { id: "html", label: "HTML (download)", icon: FileBarChart2 },
   { id: "pdf", label: "PDF (auto-download)", icon: FileText },
   { id: "csv", label: "CSV (issues only)", icon: Download },
+  { id: "json", label: "JSON (machine-readable)", icon: FileJson },
 ] as const;
 
 export default function ReportBuilderPage() {
@@ -44,9 +46,16 @@ export default function ReportBuilderPage() {
   const [scanId, setScanId] = useState<string>(presetScanId ?? "");
   const [title, setTitle] = useState<string>("");
   const [selected, setSelected] = useState<string[]>(SECTIONS.map((s) => s.id));
-  const [format, setFormat] = useState<"html" | "pdf" | "csv">("html");
+  const [format, setFormat] = useState<"html" | "pdf" | "csv" | "json">("html");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this builder re-renders on every selection keystroke, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  // SECTIONS / FORMATS labels stay SOURCE English in the const arrays and are
+  // translated at render time via t(s.label) / t(f.label).
+  const { t } = useLanguage();
 
   useEffect(() => {
     fetch("/api/scans?limit=20")
@@ -93,7 +102,7 @@ export default function ReportBuilderPage() {
     }
   }
 
-  async function downloadReportExport(reportId: string, exportFormat: "html" | "pdf" | "csv") {
+  async function downloadReportExport(reportId: string, exportFormat: "html" | "pdf" | "csv" | "json") {
     const exportRes = await fetch(`/api/reports/${reportId}/export?format=${exportFormat}`);
     if (!exportRes.ok) {
       const body = await exportRes.json().catch(() => ({}));
@@ -114,15 +123,16 @@ export default function ReportBuilderPage() {
   }
 
   return (
-    <div className="px-4 lg:px-8 py-8 max-w-[1400px]">
+    <div data-i18n-skip className="px-4 lg:px-8 py-8 max-w-[1400px]">
       <header className="mb-6">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">Reports</p>
+        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">{t("Reports")}</p>
         <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">
-          Build an audit-ready report
+          {t("Build an engineering-ready report")}
         </h1>
         <p className="text-sm text-ink-600 mt-1 max-w-2xl">
-          Pick a completed scan, choose sections and format, and we&apos;ll render a self-contained
-          report with a non-legal disclaimer baked in.
+          {t(
+            "Pick a completed scan, choose sections and format, and we'll render a self-contained report with a non-legal disclaimer baked in."
+          )}
         </p>
       </header>
 
@@ -130,17 +140,17 @@ export default function ReportBuilderPage() {
         <div className="space-y-5">
           <Card>
             <CardHeader>
-              <CardTitle>Source scan</CardTitle>
+              <CardTitle>{t("Source scan")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {scans.length === 0 ? (
                 <AlertCallout tone="info">
-                  No completed scans yet. Start one from the dashboard to build a report.
+                  {t("No completed scans yet. Start one from the dashboard to build a report.")}
                 </AlertCallout>
               ) : (
                 <>
                   <div>
-                    <Label htmlFor="scan-select">Scan</Label>
+                    <Label htmlFor="scan-select">{t("Scan")}</Label>
                     <select
                       id="scan-select"
                       value={scanId}
@@ -149,18 +159,18 @@ export default function ReportBuilderPage() {
                     >
                       {scans.map((s) => (
                         <option key={s.id} value={s.id}>
-                          {hostFromUrl(s.baseUrl)} · {s.pagesScanned} pages · {s.id.slice(0, 8)}
+                          {hostFromUrl(s.baseUrl)} · {s.pagesScanned} {t("pages")} · {s.id.slice(0, 8)}
                         </option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <Label htmlFor="title">Report title</Label>
+                    <Label htmlFor="title">{t("Report title")}</Label>
                     <Input
                       id="title"
                       value={title}
                       onChange={(e) => setTitle(e.target.value)}
-                      placeholder="Accessibility assessment — example.com"
+                      placeholder={t("Accessibility assessment — example.com")}
                     />
                   </div>
                 </>
@@ -170,7 +180,7 @@ export default function ReportBuilderPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Sections to include</CardTitle>
+              <CardTitle>{t("Sections to include")}</CardTitle>
             </CardHeader>
             <CardContent>
               <ul className="space-y-3">
@@ -188,15 +198,15 @@ export default function ReportBuilderPage() {
                       }}
                       label={
                         <span className="flex items-center gap-2">
-                          {s.label}
+                          {t(s.label)}
                           {(s as { required?: boolean }).required && (
                             <span className="text-[10px] uppercase tracking-wider text-rose-700 font-semibold">
-                              Required
+                              {t("Required")}
                             </span>
                           )}
                         </span>
                       }
-                      description={s.description}
+                      description={t(s.description)}
                     />
                   </li>
                 ))}
@@ -206,7 +216,7 @@ export default function ReportBuilderPage() {
 
           <Card>
             <CardHeader>
-              <CardTitle>Export format</CardTitle>
+              <CardTitle>{t("Export format")}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="flex flex-wrap gap-2">
@@ -226,20 +236,28 @@ export default function ReportBuilderPage() {
                       }`}
                     >
                       <Icon className="size-4" aria-hidden />
-                      {f.label}
+                      {t(f.label)}
                     </button>
                   );
                 })}
               </div>
               {format === "pdf" && (
                 <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-                  A PDF is rendered server-side and downloaded automatically.
+                  {t("A PDF is rendered server-side and downloaded automatically.")}
                 </p>
               )}
               {format === "html" && (
                 <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-                  The HTML report downloads as a self-contained file. Use Preview report to review
-                  it in the dashboard first.
+                  {t(
+                    "The HTML report downloads as a self-contained file. Use Preview report to review it in the dashboard first."
+                  )}
+                </p>
+              )}
+              {format === "json" && (
+                <p className="text-xs text-ink-500 mt-3 leading-relaxed">
+                  {t(
+                    "Normalized issues, groups, and scan metadata without screenshots — for spreadsheets, tickets, and pipelines."
+                  )}
                 </p>
               )}
             </CardContent>
@@ -249,7 +267,7 @@ export default function ReportBuilderPage() {
 
           {error && (
             <AlertCallout tone="danger" icon={AlertCircle}>
-              {error}
+              {t(error)}
             </AlertCallout>
           )}
 
@@ -261,11 +279,11 @@ export default function ReportBuilderPage() {
             >
               {loading ? (
                 <>
-                  <Loader2 className="size-4 animate-spin" aria-hidden /> Generating…
+                  <Loader2 className="size-4 animate-spin" aria-hidden /> {t("Generating…")}
                 </>
               ) : (
                 <>
-                  <Download className="size-4" aria-hidden /> Generate &amp; download
+                  <Download className="size-4" aria-hidden /> {t("Generate & download")}
                 </>
               )}
             </button>
@@ -280,7 +298,7 @@ export default function ReportBuilderPage() {
               disabled={!scanId}
               className="inline-flex items-center gap-2 h-11 px-4 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2 disabled:opacity-50 disabled:cursor-not-allowed"
             >
-              <Eye className="size-4" aria-hidden /> Preview report
+              <Eye className="size-4" aria-hidden /> {t("Preview report")}
             </button>
           </div>
         </div>
@@ -288,29 +306,29 @@ export default function ReportBuilderPage() {
         <aside className="lg:sticky lg:top-20 self-start">
           <Card>
             <CardHeader>
-              <CardTitle className="text-sm">Live preview</CardTitle>
+              <CardTitle className="text-sm">{t("Live preview")}</CardTitle>
             </CardHeader>
             <CardContent>
               <div className="rounded-md ring-1 ring-line p-4 bg-paper">
                 <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">
-                  Accessibility assessment
+                  {t("Accessibility assessment")}
                 </p>
                 <h3 className="text-base font-semibold text-ink-900 line-clamp-2">
-                  {title || "Untitled report"}
+                  {title || t("Untitled report")}
                 </h3>
 
                 <ul className="mt-4 space-y-1.5 text-xs text-ink-700 border-t border-line pt-3">
                   {SECTIONS.filter((s) => selected.includes(s.id) || (s as { required?: boolean }).required).map((s, i) => (
                     <li key={s.id} className="flex items-center gap-2">
                       <span className="font-mono text-ink-500 w-4 tabular-nums">{i + 1}.</span>
-                      <span>{s.label}</span>
+                      <span>{t(s.label)}</span>
                     </li>
                   ))}
                 </ul>
 
                 <div className="mt-4 pt-3 border-t border-line">
                   <p className="text-[10px] text-ink-500 leading-relaxed">
-                    {COMPLIANCE_COPY.REPORT_NOT_LEGAL}
+                    {t(COMPLIANCE_COPY.REPORT_NOT_LEGAL)}
                   </p>
                 </div>
               </div>

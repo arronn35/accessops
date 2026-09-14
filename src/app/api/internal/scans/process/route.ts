@@ -1,11 +1,18 @@
 import { processScanInline } from "@/lib/scanner/inline-runner";
 import { findScanJob } from "@/lib/data/firestore";
+import { authorizeInternalRequest } from "@/lib/api/internal-auth";
 
 export const maxDuration = 60;
 
 export async function POST(req: Request) {
-  const secret = process.env.INTERNAL_WORKER_SECRET;
-  if (!secret || req.headers.get("x-internal-worker-secret") !== secret) {
+  // Cloud Tasks attaches an OIDC token; the shared header is the legacy path.
+  // Unlike the scheduler routes this one never opens up without a credential:
+  // it runs a full scan, so an unconfigured deployment must reject.
+  const auth = await authorizeInternalRequest(req, {
+    secretEnv: "INTERNAL_WORKER_SECRET",
+    secretHeader: "x-internal-worker-secret",
+  });
+  if (!auth.ok || auth.via === "unauthenticated_dev") {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   const body = (await req.json().catch(() => ({}))) as { scanJobId?: string };

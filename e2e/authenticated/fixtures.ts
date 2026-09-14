@@ -1,20 +1,14 @@
 import path from "node:path";
 
+const runId = `${process.env.GITHUB_RUN_ID ?? process.env.E2E_RUN_ID ?? "local"}-${process.env.GITHUB_RUN_ATTEMPT ?? "1"}`;
+
 /** Deterministic staging seed user for the authenticated lane. */
 export const E2E_USER = {
-  uid: "e2e-owner",
-  email: "e2e-owner@percevia.test",
+  uid: `e2e-owner-${runId}`,
+  email: `e2e-owner-${runId}@percevia.test`,
   name: "E2E Owner",
 };
 
 export const STORAGE_STATE_PATH = path.join(__dirname, ".auth", "owner.json");
 
-/** All staging credentials the authenticated lane depends on. */
-export function authLaneConfigured(): boolean {
-  return Boolean(
-    process.env.E2E_FIREBASE_PROJECT_ID &&
-      process.env.E2E_FIREBASE_CLIENT_EMAIL &&
-      process.env.E2E_FIREBASE_PRIVATE_KEY &&
-      process.env.NEXT_PUBLIC_FIREBASE_API_KEY
-  );
-}
+export { authLaneConfigured } from "../../src/lib/testing/authenticated-e2e";

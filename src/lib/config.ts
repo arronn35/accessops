@@ -44,6 +44,19 @@ export function publicCheckEnabled(): boolean {
   return process.env.PUBLIC_CHECK_ENABLED !== "false";
 }
 
+/**
+ * Direct plan selection is a local/demo convenience, never a payment path.
+ *
+ * In production it is off unless explicitly enabled, so a missing or partial
+ * billing configuration can never be used to grant a paid entitlement: with
+ * Polar configured the route sends callers to checkout, and without it the
+ * route refuses paid tiers outright. Mirrors publicCheckEnabled()'s contract.
+ */
+export function directPlanSelectEnabled(): boolean {
+  if (isProduction()) return process.env.ALLOW_DIRECT_PLAN_SELECT === "true";
+  return true;
+}
+
 export function visualEvidenceEnabled(): boolean {
   return process.env.VISUAL_EVIDENCE_ENABLED === "true";
 }
@@ -62,4 +75,13 @@ export function visualEvidenceMaxPerScan(): number {
 
 export function visualEvidenceRetentionDays(): number {
   return Math.max(1, Number(process.env.VISUAL_EVIDENCE_RETENTION_DAYS ?? 30));
+}
+
+/** First-party, Firestore-backed product analytics. No browser SDK or cookies. */
+export function analyticsEnabled(): boolean {
+  return process.env.ANALYTICS_ENABLED !== "false";
+}
+
+export function analyticsRetentionDays(): number {
+  return Math.max(1, Number(process.env.ANALYTICS_RETENTION_DAYS ?? 180));
 }

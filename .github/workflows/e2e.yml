@@ -1,4 +1,4 @@
-name: E2E
+name: Public E2E
 
 on:
   pull_request:
@@ -33,14 +33,14 @@ jobs:
         # Public + route-mocked lanes only. The authenticated lane needs
         # staging Firebase credentials (E2E_FIREBASE_* secrets) and is
         # skipped automatically when they are absent.
-        run: npm run test:e2e
+        run: npm run test:e2e -- --project=marketing --project=ui-mocks
         env:
           NEXT_PUBLIC_APP_URL: http://127.0.0.1:3100
 
-      - name: Upload Playwright report on failure
-        if: failure()
+      - name: Upload public Playwright report
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-report
+          name: public-playwright-report
           path: playwright-report/
           retention-days: 7

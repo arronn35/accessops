@@ -80,11 +80,12 @@ export const PLANS: MarketingPlan[] = [
     description: "Regulated industries, large estates, and bespoke hosting.",
     cta: "Contact sales",
     features: [
-      "Private / on-prem scanning (roadmap)",
-      "SSO (SAML / OIDC) — roadmap",
+      "Everything in Team",
+      "All current Percevia AI features",
+      "Custom usage limits and workspace structure",
       "Custom DPA",
-      "Dedicated region & residency",
-      "Local scanner roadmap",
+      "Coordinated region and residency options",
+      "Priority onboarding and support",
     ],
   },
 ];

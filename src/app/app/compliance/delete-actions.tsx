@@ -3,14 +3,21 @@
 import { useState } from "react";
 import { Loader2, Trash2, Download } from "lucide-react";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function ExportWorkspaceButton() {
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): provider-mutated text nodes diverge from React's virtual DOM
+  // and throw hydration #418. data-i18n-skip keeps the observer off this
+  // subtree entirely.
+  const { t } = useLanguage();
   return (
     <a
+      data-i18n-skip
       href="/api/privacy/export-workspace-data"
       className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
     >
-      <Download className="size-4" aria-hidden /> Export JSON
+      <Download className="size-4" aria-hidden /> {t("Export JSON")}
     </a>
   );
 }
@@ -26,6 +33,11 @@ export function DeleteAllScansButton() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [phase, setPhase] = useState<DeletionPhase>("idle");
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this flow re-renders on every poll/open/confirm step, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   async function pollUntilDone() {
     for (let i = 0; i < DELETION_POLL_LIMIT; i++) {
@@ -69,37 +81,45 @@ export function DeleteAllScansButton() {
 
   if (phase === "completed") {
     return (
-      <AlertCallout tone="success" title="Scan data deleted">
-        All scan data for this workspace has been removed and verified.
-      </AlertCallout>
+      <span data-i18n-skip className="contents">
+        <AlertCallout tone="success" title={t("Scan data deleted")}>
+          {t("All scan data for this workspace has been removed and verified.")}
+        </AlertCallout>
+      </span>
     );
   }
 
   if (phase === "queued") {
     return (
-      <AlertCallout tone="info" title="Deletion in progress">
-        Scan data deletion is running in the background. You can leave this
-        page — the audit log will record completion.
-      </AlertCallout>
+      <span data-i18n-skip className="contents">
+        <AlertCallout tone="info" title={t("Deletion in progress")}>
+          {t(
+            "Scan data deletion is running in the background. You can leave this page — the audit log will record completion."
+          )}
+        </AlertCallout>
+      </span>
     );
   }
 
   if (!open) {
     return (
       <button
+        data-i18n-skip
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-2 h-10 px-3.5 rounded-md bg-rose-50 text-rose-700 ring-1 ring-rose-50 text-sm font-medium hover:bg-rose-50/80"
       >
-        <Trash2 className="size-4" aria-hidden /> Delete…
+        <Trash2 className="size-4" aria-hidden /> {t("Delete…")}
       </button>
     );
   }
 
   return (
-    <div className="space-y-3 mt-2">
+    <div data-i18n-skip className="space-y-3 mt-2">
       <p className="text-xs text-ink-700">
-        Type <span className="font-mono font-semibold text-rose-700">DELETE</span> to confirm.
-        This removes all scans, pages, issues, AI explanations, and reports in this workspace.
+        {t("Type")} <span className="font-mono font-semibold text-rose-700">DELETE</span>{" "}
+        {t(
+          "to confirm. This removes all scans, pages, issues, AI explanations, and reports in this workspace."
+        )}
       </p>
       <input
         type="text"
@@ -109,7 +129,7 @@ export function DeleteAllScansButton() {
         placeholder="DELETE"
       />
       {error && (
-        <AlertCallout tone="danger">{error}</AlertCallout>
+        <AlertCallout tone="danger">{t(error)}</AlertCallout>
       )}
       <div className="flex gap-2">
         <button
@@ -117,7 +137,7 @@ export function DeleteAllScansButton() {
           disabled={loading}
           className="h-10 px-3.5 rounded-md ring-1 ring-line bg-paper text-sm font-medium text-ink-700 hover:bg-canvas-2"
         >
-          Cancel
+          {t("Cancel")}
         </button>
         <button
           onClick={runDelete}
@@ -125,7 +145,7 @@ export function DeleteAllScansButton() {
           className="h-10 px-3.5 rounded-md bg-rose-500 text-paper text-sm font-medium hover:bg-rose-700 disabled:opacity-50 disabled:cursor-not-allowed inline-flex items-center gap-2"
         >
           {loading ? <Loader2 className="size-4 animate-spin" aria-hidden /> : <Trash2 className="size-4" aria-hidden />}
-          Delete permanently
+          {t("Delete permanently")}
         </button>
       </div>
     </div>

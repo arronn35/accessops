@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/subprocessors"),
   title: "Subprocessors — Percevia AI",
   description: "Current list of subprocessors used by maitrico Percevia AI.",
 };
@@ -29,7 +31,7 @@ const ROWS: Row[] = [
     vendor: "Google Cloud Run (Google LLC)",
     purpose: "Hosts the browser scan worker (Playwright + axe-core)",
     data: "Scanned page content processed transiently in memory; results written to Firestore. No page HTML retained on the worker.",
-    region: "EU (europe-west1)",
+    region: "Configured Cloud Run worker region",
   },
   {
     vendor: "OpenAI, L.L.C. (US)",

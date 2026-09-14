@@ -1,13 +1,16 @@
+import { resolveComparison } from "@/lib/server/compare";
 import "server-only";
 import {
   getScanJob,
   getScanSummary,
   listIssueGroups,
   listIssues,
+  listManualReviews,
   listScanPages,
 } from "@/lib/data/firestore";
 import { loadReportEvidence } from "@/lib/reports/evidence";
 import type { ReportInput } from "@/lib/reports/render";
+import { manualCheckById } from "@/lib/compliance/manual-checks";
 
 export interface BuildReportInputParams {
   scanJobId: string;
@@ -38,11 +41,12 @@ export async function buildReportInput(
 ): Promise<ReportInput | null> {
   const scan = await getScanJob(params.workspaceId, params.scanJobId);
   if (!scan) return null;
-  const [issues, pages, groups, summary] = await Promise.all([
+  const [issues, pages, groups, summary, manualReviews] = await Promise.all([
     listIssues(params.workspaceId, scan.id),
     listScanPages(params.workspaceId, scan.id),
     listIssueGroups(params.workspaceId, scan.id),
     getScanSummary(params.workspaceId, scan.id),
+    listManualReviews(params.workspaceId, scan.id),
   ]);
   const failedStoredPages = pages.filter((page) => {
     const metadata = page.rawMetadataJson;
@@ -76,7 +80,12 @@ export async function buildReportInput(
     evidenceByIssue = await loadReportEvidence(params.workspaceId, candidates);
   }
 
+  const comparison = await resolveComparison(scan.id, null, params.workspaceId);
   return {
+    comparisonProfile: scan.comparisonProfile ?? null,
+    comparisonEvidence: comparison.comparable
+      ? { comparable: true, againstScanId: comparison.before.id, reasons: [], result: comparison.comparison }
+      : { comparable: false, reasons: comparison.reasons, verificationStatus: comparison.verificationStatus },
     title: params.title,
     workspaceName: params.workspaceName,
     scanId: scan.id,
@@ -116,6 +125,18 @@ export async function buildReportInput(
       primaryWcagTag: group.primaryWcagTag,
       recommendedFix: group.recommendedFix,
       priority: group.priority,
+    })),
+    // Titles come from the shared check definitions rather than the stored row,
+    // so renaming a check does not leave old reports citing a stale label.
+    manualReviews: manualReviews.map((review) => ({
+      checkId: review.checkId,
+      title: manualCheckById(review.checkId)?.title ?? review.checkId,
+      status: review.status,
+      notes: review.notes,
+      wcagCriteria: review.wcagCriteria,
+      reviewerName: review.reviewerName ?? review.reviewerEmail,
+      reviewedAt: review.updatedAt,
+      revision: review.revision,
     })),
   };
 }

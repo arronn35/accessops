@@ -2,8 +2,8 @@ import { Badge } from "@/components/ui/Badge";
 import { Card, CardContent } from "@/components/ui/Card";
 
 const REGION_PREFERENCE_LABELS: Record<string, string> = {
-  eu: "EU (Frankfurt)",
-  us: "US (Virginia)",
+  eu: "EU",
+  us: "US",
   uk: "UK",
   ca: "Canada",
   other: "Other",
@@ -20,7 +20,7 @@ const HOSTING_OPTIONS = [
   },
   {
     id: "us",
-    label: "US (Virginia)",
+    label: "US",
     description: "Available through an Enterprise infrastructure migration.",
     badge: "Enterprise",
     tone: "neutral" as const,

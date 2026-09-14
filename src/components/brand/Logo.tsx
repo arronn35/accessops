@@ -4,18 +4,27 @@ import { cn } from "@/lib/utils";
 interface LogoProps {
   variant?: "wordmark" | "mark" | "lockup" | "wordmark-light" | "site";
   className?: string;
+  /**
+   * Render the image with an empty alt.
+   *
+   * The composite variants below place the mark next to the wordmark text, so
+   * a described image repeats the name that is already there — a screen reader
+   * announces "Percevia AI Percevia AI". Standalone marks keep their alt.
+   */
+  decorative?: boolean;
 }
 
-export function Logo({ variant = "wordmark", className }: LogoProps) {
+export function Logo({ variant = "wordmark", className, decorative }: LogoProps) {
   // The public-site lockup: square mark offset in accent, heavy wordmark.
   if (variant === "site") {
     return (
       <span className={cn("inline-flex items-center gap-3", className)}>
         <Logo
           variant="mark"
+          decorative
           className="size-8 shadow-[5px_5px_0_var(--color-accent)]"
         />
-        <span className="text-[17px] sm:text-[19px] font-extrabold tracking-[-0.03em] text-navy-900">
+        <span className="hidden whitespace-nowrap text-[17px] font-extrabold tracking-[-0.03em] text-navy-900 min-[360px]:inline sm:text-[19px]">
           Percevia AI
         </span>
       </span>
@@ -26,7 +35,10 @@ export function Logo({ variant = "wordmark", className }: LogoProps) {
     return (
       <Image
         src="/brand/percevia-logo.png"
-        alt="Percevia AI"
+        alt={decorative ? "" : "Percevia AI"}
+        // Decorative marks sit next to the wordmark text: hiding them keeps
+        // screen readers from announcing "Percevia AI Percevia AI".
+        aria-hidden={decorative ? true : undefined}
         width={1356}
         height={1356}
         priority
@@ -38,7 +50,7 @@ export function Logo({ variant = "wordmark", className }: LogoProps) {
   if (variant === "lockup") {
     return (
       <div className={cn("inline-flex items-center gap-3", className)}>
-        <Logo variant="mark" className="size-12" />
+        <Logo variant="mark" decorative className="size-12" />
         <div className="flex flex-col leading-none">
           <span className="text-[22px] font-semibold tracking-tight text-navy-900">
             percevia
@@ -55,7 +67,7 @@ export function Logo({ variant = "wordmark", className }: LogoProps) {
 
   return (
     <div className={cn("inline-flex items-center gap-2.5", className)}>
-      <Logo variant="mark" className="size-10" />
+      <Logo variant="mark" decorative className="size-10" />
       <span
         className={cn(
           "text-[19px] font-semibold tracking-tight",

@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { FieldHint, Input, Label } from "@/components/ui/Input";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function ProfileClient({
   name,
@@ -18,6 +19,12 @@ export function ProfileClient({
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this form re-renders on every keystroke/save, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree
+  // entirely.
+  const { t } = useLanguage();
 
   async function save(e: React.FormEvent) {
     e.preventDefault();
@@ -48,17 +55,17 @@ export function ProfileClient({
   }
 
   return (
-    <form onSubmit={save} className="rounded-lg ring-1 ring-line bg-paper p-6 space-y-5">
+    <form onSubmit={save} className="rounded-lg ring-1 ring-line bg-paper p-6 space-y-5" data-i18n-skip>
       {email && (
         <div>
-          <Label>Email</Label>
+          <Label>{t("Email")}</Label>
           <Input value={email} disabled />
-          <FieldHint>Email changes require a new magic-link identity.</FieldHint>
+          <FieldHint>{t("Email changes require a new magic-link identity.")}</FieldHint>
         </div>
       )}
 
       <div>
-        <Label htmlFor="display-name" required>Display name</Label>
+        <Label htmlFor="display-name" required>{t("Display name")}</Label>
         <Input
           id="display-name"
           value={displayName}
@@ -69,7 +76,7 @@ export function ProfileClient({
       </div>
 
       <div>
-        <Label htmlFor="full-name">Full name</Label>
+        <Label htmlFor="full-name">{t("Full name")}</Label>
         <Input
           id="full-name"
           value={legalName}
@@ -78,11 +85,11 @@ export function ProfileClient({
         />
       </div>
 
-      {error && <p className="text-sm text-rose-700">{error}</p>}
-      {message && <p className="text-sm text-green-700">{message}</p>}
+      {error && <p className="text-sm text-rose-700">{t(error)}</p>}
+      {message && <p className="text-sm text-green-700">{t(message)}</p>}
 
       <Button type="submit" disabled={busy}>
-        {busy ? "Saving..." : "Save profile"}
+        {busy ? t("Saving...") : t("Save profile")}
       </Button>
     </form>
   );

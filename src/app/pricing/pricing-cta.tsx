@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { cn } from "@/lib/utils";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 /**
  * Pricing-page CTA.
@@ -21,11 +22,16 @@ export function PricingCta({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this button re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   if (planId === "free") {
     return (
-      <a href="/onboarding" className={ctaClasses(highlighted)}>
-        {label}
+      <a href="/onboarding" className={ctaClasses(highlighted)} data-i18n-skip>
+        {t(label)}
       </a>
     );
   }
@@ -34,8 +40,9 @@ export function PricingCta({
       <a
         href="mailto:maitritechco@gmail.com?subject=Percevia%20Enterprise%20inquiry"
         className={ctaClasses(highlighted)}
+        data-i18n-skip
       >
-        {label}
+        {t(label)}
       </a>
     );
   }
@@ -105,19 +112,19 @@ export function PricingCta({
   }
 
   return (
-    <>
+    <span data-i18n-skip className="contents">
       <button
         type="button"
         onClick={go}
         disabled={busy || done}
         className={ctaClasses(highlighted)}
       >
-        {done ? "Plan activated ✓" : busy ? "Activating…" : label}
+        {done ? t("Plan activated ✓") : busy ? t("Activating…") : t(label)}
       </button>
       {error && (
-        <p className="mt-2 text-[11px] text-rose-700 leading-snug">{error}</p>
+        <p className="mt-2 text-[11px] text-rose-700 leading-snug">{t(error)}</p>
       )}
-    </>
+    </span>
   );
 }
 

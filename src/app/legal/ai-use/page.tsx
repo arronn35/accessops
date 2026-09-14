@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/ai-use"),
   title: "AI Use Disclosure — Percevia AI",
   description: "How maitrico Percevia AI uses GPT to assist accessibility work.",
 };

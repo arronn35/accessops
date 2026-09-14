@@ -1,3 +1,4 @@
+import { SCANNER_VERSION } from "./comparison-profile";
 /**
  * Playwright + axe-core runner.
  *
@@ -304,6 +305,7 @@ async function newHardenedContext(
 ): Promise<BrowserContext> {
   return browser.newContext({
     userAgent: USER_AGENT,
+    locale: "en-US",
     viewport: { width: viewport.width, height: viewport.height },
     bypassCSP: false,
     javaScriptEnabled: true,
@@ -320,6 +322,17 @@ async function configurePage(
   allowedHost: string,
   blocklist: Set<string>
 ) {
+  // Per-page verdict cache for cross-host subresource checks: one DNS
+  // lookup per unique hostname instead of one per request.
+  const crossHostVerdicts = new Map<string, Promise<void>>();
+  const checkCrossHost = (hostname: string): Promise<void> => {
+    let verdict = crossHostVerdicts.get(hostname);
+    if (!verdict) {
+      verdict = resolveAndCheckHost(hostname).then(() => undefined);
+      crossHostVerdicts.set(hostname, verdict);
+    }
+    return verdict;
+  };
   // Resource blocking — declared before navigation.
   await page.route("**/*", async (route) => {
     const req = route.request();
@@ -335,18 +348,32 @@ async function configurePage(
     if (target.protocol !== "http:" && target.protocol !== "https:") {
       return route.abort();
     }
-    // Cross-origin navigations on top frame: only allow if same host (we
-    // do same-domain crawl later, but a single page nav must not jump).
-    if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
-      if (target.hostname !== allowedHost) {
-        return route.abort();
-      }
-    }
-    if (blocklist.has(type)) {
+  // Cross-origin navigations on top frame: only allow if same host (we
+  // do same-domain crawl later, but a single page nav must not jump).
+  if (req.isNavigationRequest() && req.frame() === page.mainFrame()) {
+    if (target.hostname !== allowedHost) {
       return route.abort();
     }
-    return route.continue();
-  });
+  }
+  // Cross-host subresources (scripts, images, XHR/fetch…) resolve through
+  // the attacker's page markup, so a private-IP literal or an internal
+  // hostname embedded by the page would otherwise be fetched with no IP
+  // check at all. Resolve-and-check each unique cross-host once per page.
+  // Residual: Chromium resolves separately from this check, so DNS
+  // rebinding between check and connect is still possible — a mandatory
+  // egress proxy is the complete fix; this closes the deterministic path.
+  if (target.hostname !== allowedHost) {
+    try {
+      await checkCrossHost(target.hostname);
+    } catch {
+      return route.abort();
+    }
+  }
+  if (blocklist.has(type)) {
+    return route.abort();
+  }
+  return route.continue();
+});
 
   page.setDefaultTimeout(NAV_TIMEOUT_MS);
   page.setDefaultNavigationTimeout(NAV_TIMEOUT_MS);
@@ -474,6 +501,8 @@ export async function scanSinglePage(
     statusCode: first.statusCode,
     scannedAt: new Date(),
     rawMetadata: {
+      scannerVersion: SCANNER_VERSION,
+      locale: "en-US",
       axeVersion: firstStringMetadata(metadata, "axeVersion"),
       playwrightVersion: PLAYWRIGHT_VERSION,
       renderProfile: profile,
@@ -926,9 +955,10 @@ export async function crawlSameDomain(
     };
   }
 
-  // Re-resolve start host once more — gives us the pinned IP set for
-  // optional future use (we don't pin connections here because Playwright
-  // hides the socket, but we re-check on every navigation).
+  // Re-validate the start host's current DNS before crawling. This is a
+  // point-in-time check, not connection pinning: Playwright resolves again
+  // at connect time, so DNS rebinding between check and connect remains a
+  // documented residual (egress proxy is the complete fix).
   const resolved = await resolveAndCheckHost(startValidated.host).catch((err) => err);
   if (resolved instanceof Error) {
     return {

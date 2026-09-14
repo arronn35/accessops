@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2 } from "lucide-react";
 import { Switch } from "@/components/ui/Switch";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function PrivacyToggle({
   fieldKey,
@@ -22,6 +23,11 @@ export function PrivacyToggle({
   const [checked, setChecked] = useState(initial);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this toggle re-renders on every change, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   function onToggle(next: boolean) {
     setChecked(next);
@@ -43,12 +49,12 @@ export function PrivacyToggle({
   }
 
   return (
-    <div>
+    <div data-i18n-skip>
       <div className="flex items-center justify-between gap-3">
         <div className="flex-1">
-          <p className="text-sm font-medium text-ink-900">{label}</p>
+          <p className="text-sm font-medium text-ink-900">{t(label)}</p>
           {description && (
-            <p className="text-xs text-ink-600 mt-1 leading-relaxed">{description}</p>
+            <p className="text-xs text-ink-600 mt-1 leading-relaxed">{t(description)}</p>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -57,11 +63,11 @@ export function PrivacyToggle({
             checked={checked}
             onChange={(e) => onToggle(e.target.checked)}
             disabled={disabled || pending}
-            aria-label={label}
+            aria-label={t(label)}
           />
         </div>
       </div>
-      {error && <p className="text-xs text-rose-700 mt-2">{error}</p>}
+      {error && <p className="text-xs text-rose-700 mt-2">{t(error)}</p>}
     </div>
   );
 }

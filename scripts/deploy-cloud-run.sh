@@ -26,6 +26,26 @@ set -euo pipefail
 : "${CRON_SECRET:?set CRON_SECRET (bearer for the sweep)}"
 : "${VERCEL_APP_URL:?set VERCEL_APP_URL, e.g. https://app.example.com}"
 
+# A deploy must identify the exact reviewed source before any cloud mutation.
+if [[ -n "$(git status --porcelain)" ]]; then
+  echo "Commit the reviewed release changes before deployment; working tree is dirty." >&2
+  exit 1
+fi
+BUILD_COMMIT_SHA="$(git rev-parse HEAD)"
+RELEASE_ENVIRONMENT="${RELEASE_ENVIRONMENT:-staging}"
+if [[ "$RELEASE_ENVIRONMENT" != staging && "$RELEASE_ENVIRONMENT" != production ]]; then
+  echo "RELEASE_ENVIRONMENT must be staging or production" >&2
+  exit 1
+fi
+
+if [[ "${CONFIGURE_VERCEL:-0}" == "1" && "$RELEASE_ENVIRONMENT" != production ]]; then
+  echo "CONFIGURE_VERCEL configures production; set RELEASE_ENVIRONMENT=production and pass the CI gate." >&2
+  exit 1
+fi
+if [[ "$RELEASE_ENVIRONMENT" == production ]]; then
+  node scripts/verify-release-ci.mjs
+fi
+
 SERVICE="${SERVICE:-scan-worker}"
 QUEUE="${QUEUE:-scan-jobs}"
 SWEEP_JOB="${SWEEP_JOB:-scan-sweep}"
@@ -114,7 +134,7 @@ echo "==> Building worker image from Dockerfile.worker"
 gcloud builds submit . \
   --project "$PROJECT" \
   --config cloudbuild.worker.yaml \
-  --substitutions "_IMAGE=${IMAGE}"
+  --substitutions "_IMAGE=${IMAGE},_COMMIT_SHA=${BUILD_COMMIT_SHA},_ENVIRONMENT=${RELEASE_ENVIRONMENT}"
 
 echo "==> Deploying Cloud Run service '$SERVICE'"
 gcloud run deploy "$SERVICE" \
@@ -151,10 +171,38 @@ gcloud tasks queues update "$QUEUE" \
   --min-backoff "${TASK_MIN_BACKOFF:-10s}" \
   --max-backoff "${TASK_MAX_BACKOFF:-300s}" >/dev/null
 
+# Scheduler credential.
+#
+# Preferred: a Google-signed OIDC token for SCHEDULER_OIDC_SERVICE_ACCOUNT,
+# audience-bound to the target URL. Tokens are short-lived, so a leaked request
+# log is not a permanent key. The app verifies them in
+# src/lib/api/internal-auth.ts, which needs the matching env on Vercel:
+#   INTERNAL_OIDC_AUDIENCE=<the job URI>
+#   INTERNAL_OIDC_SERVICE_ACCOUNTS=<SCHEDULER_OIDC_SERVICE_ACCOUNT>
+#
+# Fallback (default): the long-lived CRON_SECRET bearer header.
+#
+# Cloud Scheduler owns the Authorization header once OIDC is configured, so the
+# two are mutually exclusive per job. The app accepts either, which makes the
+# migration safe in this order: deploy the app, set the two env vars, then
+# re-run this script with SCHEDULER_OIDC_SERVICE_ACCOUNT set.
 ensure_scheduler_job() {
   local name="$1"
   local schedule="$2"
   local uri="$3"
+  local -a auth_args_create auth_args_update
+  if [[ -n "${SCHEDULER_OIDC_SERVICE_ACCOUNT:-}" ]]; then
+    auth_args_create=(
+      --oidc-service-account-email "$SCHEDULER_OIDC_SERVICE_ACCOUNT"
+      --oidc-token-audience "$uri"
+    )
+    # Drop the legacy bearer header when switching a job over.
+    auth_args_update=("${auth_args_create[@]}" --remove-headers Authorization)
+  else
+    auth_args_create=(--headers "Authorization=Bearer ${CRON_SECRET}")
+    auth_args_update=(--update-headers "Authorization=Bearer ${CRON_SECRET}")
+  fi
+
   if gcloud scheduler jobs describe "$name" \
     --project "$PROJECT" --location "$REGION" >/dev/null 2>&1; then
     gcloud scheduler jobs update http "$name" \
@@ -163,7 +211,7 @@ ensure_scheduler_job() {
       --uri "$uri" --http-method POST \
       --attempt-deadline 300s \
       --max-retry-attempts 3 \
-      --update-headers "Authorization=Bearer ${CRON_SECRET}"
+      "${auth_args_update[@]}"
   else
     gcloud scheduler jobs create http "$name" \
       --project "$PROJECT" --location "$REGION" \
@@ -171,7 +219,7 @@ ensure_scheduler_job() {
       --uri "$uri" --http-method POST \
       --attempt-deadline 300s \
       --max-retry-attempts 3 \
-      --headers "Authorization=Bearer ${CRON_SECRET}"
+      "${auth_args_create[@]}"
   fi
 }
 

@@ -1,4 +1,5 @@
 import { Suspense } from "react";
+import { sanitizeCallback } from "@/lib/auth/callback-url";
 import { redirect } from "next/navigation";
 import { Logo } from "@/components/brand/Logo";
 import { verifySessionCookie } from "@/lib/auth/session";
@@ -45,7 +46,3 @@ function SignInFallback() {
   );
 }
 
-function sanitizeCallback(value: string): string {
-  if (!value.startsWith("/") || value.startsWith("//")) return "/app";
-  return value;
-}

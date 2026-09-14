@@ -13,7 +13,7 @@ describe("RegionHostingCard", () => {
     expect(html).not.toContain("aria-pressed");
     expect(html).toContain("Default target");
     expect(html).toContain("Enterprise");
-    expect(html).toContain("US (Virginia)");
+    expect(html).toContain(">US<");
     expect(html).toContain(
       "actual location follows the deployment configuration"
     );

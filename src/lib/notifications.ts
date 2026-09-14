@@ -36,6 +36,9 @@ const TITLES: Record<string, string> = {
   "visual_evidence.deleted": "Visual evidence deleted",
   "plan.selected": "Plan changed",
   "monitor.scan_scheduled": "Scheduled scan started",
+  "manual_review.recorded": "Manual review recorded",
+  "monitor.new_critical": "New critical issues detected",
+  "monitor.score_drop": "Accessibility score dropped",
 };
 
 function humanize(action: string): string {

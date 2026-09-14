@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/dpa"),
   title: "Data Processing Addendum — Percevia AI",
   description:
     "Default Data Processing Addendum for maitrico Percevia AI customers.",

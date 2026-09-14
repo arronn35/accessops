@@ -5,6 +5,7 @@ import {
   ArrowDownRight,
   ArrowUpRight,
   CheckCircle2,
+  HelpCircle,
   Minus,
   PlusCircle,
   RefreshCw,
@@ -13,13 +14,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { requirePagePermission } from "@/lib/server/workspace";
 import {
   resolveComparison,
   ComparisonError,
   type ComparisonResult,
 } from "@/lib/server/compare";
-import type { CompareGroupResult } from "@/lib/scanner/compare";
+import type { CompareGroupResult, ScanComparison } from "@/lib/scanner/compare";
 import { formatDate } from "@/lib/utils";
 
 export const metadata = { title: "Scan comparison — Percevia AI" };
@@ -34,7 +36,7 @@ export default async function ScanComparePage({
 }) {
   const { id } = await params;
   const { against } = await searchParams;
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
 
   let result: ComparisonResult;
   try {
@@ -67,16 +69,20 @@ export default async function ScanComparePage({
           <CardContent className="py-10 text-center">
             <RefreshCw className="size-8 text-ink-300 mx-auto mb-3" aria-hidden />
             <p className="text-sm font-medium text-ink-900">
-              No earlier scan to compare against
+              {result.verificationStatus === "verification_pending" ? "Verification pending" : "Comparison inconclusive"}
             </p>
             <p className="text-sm text-ink-600 mt-1 max-w-md mx-auto">
-              Re-scan{" "}
-              <span className="font-mono text-ink-700">
-                {result.after.baseUrl}
-              </span>{" "}
-              to build a history. Once a second completed scan exists, this page
-              shows what was fixed, what is new, and what remains.
+              A verified result requires two completed scans with matching scope, engine, viewport and scoring settings.
+
             </p>
+            <ul className="mt-3 text-sm text-ink-700" aria-label="Comparison reasons">
+              {result.reasons.map((reason) => <li key={reason}>{reason.replaceAll("_", " ").toLowerCase()}</li>)}
+            </ul>
+            {result.before && <p className="mt-3 text-xs text-ink-600">Missing URLs: {result.before.scope.urls.filter((url) => !result.after.scope.urls.includes(url)).join(", ") || "None"}</p>}
+            <details className="mt-4 text-left text-xs text-ink-700">
+              <summary className="cursor-pointer text-center">Scan scope and engine profile</summary>
+              <pre className="mt-2 whitespace-pre-wrap break-all rounded bg-ink-50 p-3">{JSON.stringify({ before: result.before?.profile ?? null, after: result.after.profile }, null, 2)}</pre>
+            </details>
             <Link
               href="/app/scans/new"
               className="inline-flex items-center gap-2 h-10 px-4 mt-5 rounded-md bg-ink-900 text-paper text-sm font-medium hover:bg-ink-800"
@@ -124,15 +130,14 @@ function ComparisonBody({
                 <span className="text-3xl font-bold text-ink-900 tabular-nums">
                   {score.after}
                 </span>
-                <span className="text-sm text-ink-500">
-                  ({score.beforeGrade} → {score.afterGrade})
-                </span>
               </div>
             </div>
             <DeltaPill direction={score.direction} delta={score.delta} />
           </CardContent>
         </Card>
       )}
+
+      <CoverageNotice coverage={comparison.coverage} />
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <StatTile
@@ -185,6 +190,22 @@ function ComparisonBody({
           title="Manual review (not counted as fixed or new)"
           emptyText=""
           groups={comparison.manualReview}
+          tone="neutral"
+        />
+      )}
+      {comparison.notObserved.length > 0 && (
+        <GroupList
+          title="Not observed in the re-scan (not counted as fixed)"
+          emptyText=""
+          groups={comparison.notObserved}
+          tone="neutral"
+        />
+      )}
+      {comparison.inconclusive.length > 0 && (
+        <GroupList
+          title="Inconclusive (scans use different grouping versions)"
+          emptyText=""
+          groups={comparison.inconclusive}
           tone="neutral"
         />
       )}
@@ -244,6 +265,53 @@ function DeltaPill({
       )}
       {delta > 0 ? `+${delta}` : delta} points
     </span>
+  );
+}
+
+/**
+ * Says out loud why a verdict is being withheld. Without this the page shows
+ * "Fixed 0" when the truth is "we could not check" — the exact confusion the
+ * not_observed / inconclusive buckets exist to prevent.
+ */
+function CoverageNotice({
+  coverage,
+}: {
+  coverage: ScanComparison["coverage"];
+}) {
+  if (coverage.identityComparable && coverage.scopeEquivalent && !coverage.addedInAfter.length) {
+    return null;
+  }
+
+  const reasons: string[] = [];
+  if (!coverage.identityComparable) {
+    reasons.push(
+      "The two scans were grouped by different versions of the finding-identity scheme, so findings cannot be matched reliably."
+    );
+  }
+  if (coverage.missingFromAfter.length) {
+    reasons.push(
+      `The re-scan did not cover ${coverage.missingFromAfter.length} page(s) the earlier scan did, so findings there could not be re-checked.`
+    );
+  }
+  if (coverage.afterFailedPageCount > 0) {
+    reasons.push(
+      `${coverage.afterFailedPageCount} page(s) failed to scan, so their findings are unknown rather than resolved.`
+    );
+  }
+  if (coverage.addedInAfter.length) {
+    reasons.push(
+      `The re-scan covered ${coverage.addedInAfter.length} page(s) the earlier scan did not, so findings there may be pre-existing rather than new.`
+    );
+  }
+
+  return (
+    <AlertCallout tone="warning" title="Limited comparison" icon={HelpCircle}>
+      <ul className="list-disc pl-5 space-y-1">
+        {reasons.map((reason) => (
+          <li key={reason}>{reason}</li>
+        ))}
+      </ul>
+    </AlertCallout>
   );
 }
 
@@ -319,7 +387,7 @@ function GroupList({
                   <div className="flex items-center gap-2 flex-wrap">
                     <SeverityBadge severity={g.severity} />
                     <span className="text-sm font-medium text-ink-900 truncate">
-                      {g.title}
+                      {g.title}{g.verificationStatus === "reopened" && <span className="ml-2 text-rose-700">(Reopened)</span>}
                     </span>
                   </div>
                   <p className="text-xs text-ink-500 font-mono mt-1">

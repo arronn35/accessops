@@ -8,54 +8,73 @@ import { Logo } from "@/components/brand/Logo";
 import { Checkbox } from "@/components/ui/Checkbox";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
+import { PERSONAS } from "@/lib/onboarding/personas";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
+import { scanSetupPath } from "@/lib/navigation/scan-handoff";
 import { cn } from "@/lib/utils";
 
-const ROLES = [
-  { id: "agency", label: "I am an agency", icon: Briefcase, body: "I audit and manage accessibility across client websites." },
-  { id: "developer", label: "I am a developer", icon: Code2, body: "I want code-aware fix suggestions for my own work." },
-  { id: "ecommerce", label: "I own an e-commerce site", icon: ShoppingBag, body: "I run a store and want to catch issues before customers do." },
-  { id: "saas", label: "I manage a SaaS product", icon: Layers, body: "I want accessibility as part of our release cycle." },
-  { id: "client_check", label: "I am checking a client website", icon: FolderSearch, body: "I'm doing a one-off check for someone else." },
-];
+const ICONS: Record<string, React.ElementType> = {
+  agency: Briefcase,
+  developer: Code2,
+  ecommerce: ShoppingBag,
+  saas: Layers,
+  client_check: FolderSearch,
+};
 
-export function OnboardingClient({ nextHref }: { nextHref: string }) {
+export function OnboardingClient({
+  scanUrl,
+  signedIn,
+}: {
+  scanUrl: string | null;
+  signedIn: boolean;
+}) {
   const router = useRouter();
   const [role, setRole] = useState<string | null>(null);
   const [acknowledged, setAcknowledged] = useState(false);
   const [attemptedContinue, setAttemptedContinue] = useState(false);
+  // Copy renders through React state (never the DOM-mutating i18n observer):
+  // role/ack toggles re-render this form and mutated text nodes throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree.
+  const { t } = useLanguage();
 
   const canContinue = Boolean(role && acknowledged);
 
   function continueNext() {
     setAttemptedContinue(true);
     if (!canContinue) return;
-    router.push(nextHref);
+    // Carry the persona to setup. Signing in sits between the two, so it rides
+    // in the callbackUrl rather than being dropped at the auth boundary.
+    const setupPath = scanSetupPath(scanUrl, role);
+    router.push(
+      signedIn
+        ? setupPath
+        : `/auth/sign-in?callbackUrl=${encodeURIComponent(setupPath)}`
+    );
   }
 
   return (
-    <div className="min-h-screen bg-canvas-2 flex flex-col">
+    <div className="min-h-screen bg-canvas-2 flex flex-col" data-i18n-skip>
       <header className="bg-paper border-b border-rule">
         <div className="max-w-3xl mx-auto px-4 lg:px-8 h-16 flex items-center justify-between">
           <Link href="/"><Logo variant="site" /></Link>
-          <p className="text-xs text-ink-500">Step 1 of 3</p>
+          <p className="text-xs text-ink-500">{t("Step 1 of 3")}</p>
         </div>
       </header>
 
       <main id="main" tabIndex={-1} className="flex-1 max-w-3xl w-full mx-auto px-4 lg:px-8 py-10 lg:py-16 focus:outline-none">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-2">Welcome</p>
+        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-2">{t("Welcome")}</p>
         <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">
-          What brings you to Percevia AI?
+          {t("What brings you to Percevia AI?")}
         </h1>
         <p className="text-sm text-ink-600 mt-2 max-w-xl">
-          Pick the option that fits best. We&apos;ll tailor the workspace, scans, and report templates
-          to your context.
+          {t("Pick the option that fits best. We'll tailor the workspace, scans, and report templates to your context.")}
         </p>
 
         <fieldset className="mt-8">
-          <legend className="sr-only">Your role</legend>
+          <legend className="sr-only">{t("Your role")}</legend>
           <ul className="space-y-2.5">
-            {ROLES.map((r) => {
-              const Icon = r.icon;
+            {PERSONAS.map((r) => {
+              const Icon = ICONS[r.id];
               const active = role === r.id;
               return (
                 <li key={r.id}>
@@ -85,8 +104,8 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
                         <Icon className="size-4" aria-hidden />
                       </span>
                       <div>
-                        <p className="text-sm font-semibold text-ink-900">{r.label}</p>
-                        <p className="text-xs text-ink-600 mt-1 leading-relaxed">{r.body}</p>
+                        <p className="text-sm font-semibold text-ink-900">{t(r.label)}</p>
+                        <p className="text-xs text-ink-600 mt-1 leading-relaxed">{t(r.body)}</p>
                       </div>
                     </div>
                   </label>
@@ -97,8 +116,8 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
         </fieldset>
 
         <div className="mt-8">
-          <AlertCallout tone="info" icon={ShieldCheck} title="Product boundary">
-            {COMPLIANCE_COPY.ONBOARDING_BOUNDARY}
+          <AlertCallout tone="info" icon={ShieldCheck} title={t("Product boundary")}>
+            {t(COMPLIANCE_COPY.ONBOARDING_BOUNDARY)}
           </AlertCallout>
         </div>
 
@@ -106,20 +125,20 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
           <Checkbox
             checked={acknowledged}
             onChange={(e) => setAcknowledged(e.target.checked)}
-            label={<span className="font-medium">{COMPLIANCE_COPY.ONBOARDING_ACK}</span>}
-            description="You can revisit this acknowledgement anytime in the Privacy & Compliance Center."
+            label={<span className="font-medium">{t(COMPLIANCE_COPY.ONBOARDING_ACK)}</span>}
+            description={t("Percevia AI reports findings; it does not certify compliance.")}
           />
         </div>
 
         {attemptedContinue && !canContinue && (
-          <AlertCallout tone="warning" icon={AlertCircle} title="Finish this step" className="mt-5">
-            Choose a role and acknowledge the product boundary before continuing.
+          <AlertCallout tone="warning" icon={AlertCircle} title={t("Finish this step")} className="mt-5">
+            {t("Choose a role and acknowledge the product boundary before continuing.")}
           </AlertCallout>
         )}
 
         <div className="mt-8 flex items-center justify-between gap-3">
           <Link href="/" className="text-sm text-ink-600 hover:text-ink-900">
-            ← Back
+            {t("← Back")}
           </Link>
           <button
             type="button"
@@ -132,7 +151,7 @@ export function OnboardingClient({ nextHref }: { nextHref: string }) {
                 : "bg-canvas-2 text-ink-500 hover:bg-canvas-2"
             )}
           >
-            Continue <ArrowRight className="size-4" aria-hidden />
+            {t("Continue")} <ArrowRight className="size-4" aria-hidden />
           </button>
         </div>
       </main>

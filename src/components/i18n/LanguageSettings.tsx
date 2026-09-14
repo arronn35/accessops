@@ -12,11 +12,20 @@ const choices: Array<{ locale: Locale; label: string; detail: string }> = [
   { locale: "tr", label: "Türkçe", detail: "Arayüzü Türkçe kullanın." },
 ];
 
+function prefetchTurkishCatalog() {
+  void import("@/lib/i18n/translations.tr.json");
+}
+
 export function LanguageSettings() {
-  const { locale, setLocale } = useLanguage();
+  const { locale, setLocale, t } = useLanguage();
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this card re-renders on every locale switch, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree
+  // entirely.
 
   async function selectLocale(nextLocale: Locale) {
     if (nextLocale === locale || busy) return;
@@ -43,18 +52,18 @@ export function LanguageSettings() {
   }
 
   return (
-    <Card>
+    <Card data-i18n-skip>
       <CardHeader>
         <div className="flex items-center gap-2">
           <Languages className="size-5 text-blue-700" aria-hidden />
-          <CardTitle>Language</CardTitle>
+          <CardTitle>{t("Language")}</CardTitle>
         </div>
         <CardDescription>
-          Choose the language used across Percevia AI. Technical terms and standards keep their official names.
+          {t("Choose the language used across Percevia AI. Technical terms and standards keep their official names.")}
         </CardDescription>
       </CardHeader>
       <CardContent>
-        <div className="grid gap-3 sm:grid-cols-2" role="group" aria-label="Interface language">
+        <div className="grid gap-3 sm:grid-cols-2" role="group" aria-label={t("Interface language")}>
           {choices.map((choice) => {
             const selected = locale === choice.locale;
             return (
@@ -64,6 +73,8 @@ export function LanguageSettings() {
                 aria-pressed={selected}
                 disabled={busy}
                 onClick={() => void selectLocale(choice.locale)}
+                onMouseEnter={choice.locale === "tr" ? prefetchTurkishCatalog : undefined}
+                onFocus={choice.locale === "tr" ? prefetchTurkishCatalog : undefined}
                 className={cn(
                   "flex min-h-24 items-start justify-between rounded-lg border p-4 text-left transition-colors",
                   "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 focus-visible:ring-offset-2",
@@ -74,20 +85,20 @@ export function LanguageSettings() {
                 )}
               >
                 <span>
-                  <span className="block text-base font-semibold">{choice.label}</span>
-                  <span className="mt-1 block text-sm text-ink-600">{choice.detail}</span>
+                  <span className="block text-base font-semibold" data-i18n-skip>{choice.label}</span>
+                  <span className="mt-1 block text-sm text-ink-600">{t(choice.detail)}</span>
                 </span>
-                {selected && <Check className="size-5 shrink-0 text-blue-700" aria-label="Selected" />}
+                {selected && <Check className="size-5 shrink-0 text-blue-700" aria-label={t("Selected")} />}
               </button>
             );
           })}
         </div>
         <p className="mt-4 text-sm text-ink-600">
-          Your selection is saved on this device and synchronized with your account.
+          {t("Your selection is saved on this device and synchronized with your account.")}
         </p>
         <div aria-live="polite" className="mt-2 min-h-5 text-sm">
-          {message && <p className="text-green-700">{message}</p>}
-          {error && <p className="text-rose-700">{error}</p>}
+          {message && <p className="text-green-700">{t(message)}</p>}
+          {error && <p className="text-rose-700">{t(error)}</p>}
         </div>
       </CardContent>
     </Card>

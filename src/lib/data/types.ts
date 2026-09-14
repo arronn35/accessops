@@ -56,6 +56,11 @@ export interface Workspace {
   companyName: string | null;
   region: string;
   framework: string | null;
+  /**
+   * Onboarding persona, when the user told us one. Recorded so the answer to
+   * "what brings you here?" survives the question that asked it.
+   */
+  persona?: string | null;
   targetStandard: string;
   plan: PlanTier;
   /** Polar (billing) linkage. Absent until the workspace first checks out. */
@@ -123,6 +128,8 @@ export interface ScanTimings {
 }
 
 export interface ScanJob {
+  deletionStartedAt?: Date | null;
+  comparisonProfile?: import("../scanner/comparison-profile").ComparisonProfile | null;
   id: string;
   workspaceId: string;
   projectId?: string | null;
@@ -258,7 +265,39 @@ export interface IssueGroup {
   summary: string | null;
   recommendedFix: string | null;
   priority: number;
+  /**
+   * Normalized selectors this group covers. Null on groups written before
+   * fingerprint v2; comparison treats that as "identity unknown" rather than
+   * silently matching on rootCauseKey alone.
+   */
+  elementKeys: string[] | null;
+  /** Grouping identity scheme; see FINGERPRINT_VERSION in scanner/grouping. */
+  fingerprintVersion: number | null;
   createdAt: Date;
+}
+
+/**
+ * One reviewer's verdict on one guided manual check, for one scan.
+ *
+ * These used to live in the reviewer's localStorage, which meant a second
+ * teammate could not see them, clearing the browser destroyed them, and the
+ * server-rendered report could not cite the real review. Keyed by checkId so a
+ * re-review updates in place; `revision` records how many times it changed.
+ */
+export interface ManualReviewRecord {
+  id: string;
+  scanJobId: string;
+  checkId: string;
+  status: "pending" | "passed" | "failed";
+  notes: string | null;
+  /** WCAG success criteria the check covers, denormalised for the report. */
+  wcagCriteria: string[];
+  reviewerUserId: string;
+  reviewerName: string | null;
+  reviewerEmail: string | null;
+  revision: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface ScanSummary {
@@ -477,6 +516,12 @@ export interface Monitor {
   lastRunAt: Date | null;
   /** Most recent scan job produced by this monitor; the diff baseline. */
   lastScanId: string | null;
+  /**
+   * Last scan this monitor has already evaluated for regressions. The sweep
+   * runs every couple of minutes, so without this it would re-diff the same
+   * completed scan forever.
+   */
+  lastAlertedScanId?: string | null;
   alertChannels: {
     email: string[];
     slackWebhookUrl?: string | null;

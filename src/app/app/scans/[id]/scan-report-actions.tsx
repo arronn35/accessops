@@ -3,6 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { Braces, Check, Copy, FileBarChart2, FileText, Loader2, Share2 } from "lucide-react";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 /**
  * Quick-action buttons on the scan results page: view the report as
@@ -15,6 +16,11 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [shareUrl, setShareUrl] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this component re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   async function createReport(): Promise<string | null> {
     const res = await fetch("/api/reports", {
@@ -134,12 +140,12 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
   }
 
   return (
-    <div className="flex items-center gap-2 flex-wrap">
+    <div className="flex items-center gap-2 flex-wrap" data-i18n-skip>
       <Link
         href={`/app/reports/preview?scanId=${scanId}`}
         className="inline-flex items-center gap-2 h-10 px-3 rounded-md ring-1 ring-line bg-paper text-sm text-ink-700 hover:bg-canvas-2"
       >
-        <FileBarChart2 className="size-4" aria-hidden /> View HTML
+        <FileBarChart2 className="size-4" aria-hidden /> {t("View HTML")}
       </Link>
       <button
         type="button"
@@ -152,7 +158,7 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
         ) : (
           <Braces className="size-4" aria-hidden />
         )}
-        JSON
+        {t("JSON")}
       </button>
       <button
         type="button"
@@ -165,7 +171,7 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
         ) : (
           <Share2 className="size-4" aria-hidden />
         )}
-        Share
+        {t("Share")}
       </button>
       <button
         type="button"
@@ -178,14 +184,14 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
         ) : (
           <FileText className="size-4" aria-hidden />
         )}
-        {busy === "pdf" ? "Generating…" : "Download PDF"}
+        {busy === "pdf" ? t("Generating…") : t("Download PDF")}
       </button>
       {error && (
-        <span className="text-xs text-rose-700 ml-2">{error}</span>
+        <span className="text-xs text-rose-700 ml-2">{t(error)}</span>
       )}
       {shareUrl && (
         <div className="basis-full mt-1 flex items-center gap-2 rounded-md ring-1 ring-line bg-canvas-2 px-3 py-2">
-          <span className="text-xs text-ink-500 shrink-0">Public link:</span>
+          <span className="text-xs text-ink-500 shrink-0">{t("Public link:")}</span>
           <input
             readOnly
             value={shareUrl}
@@ -199,11 +205,11 @@ export function ScanReportActions({ scanId }: { scanId: string }) {
           >
             {copied ? (
               <>
-                <Check className="size-3.5" aria-hidden /> Copied
+                <Check className="size-3.5" aria-hidden /> {t("Copied")}
               </>
             ) : (
               <>
-                <Copy className="size-3.5" aria-hidden /> Copy
+                <Copy className="size-3.5" aria-hidden /> {t("Copy")}
               </>
             )}
           </button>

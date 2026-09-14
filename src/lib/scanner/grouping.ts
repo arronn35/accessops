@@ -48,6 +48,18 @@ export interface DerivedGroup {
   priority: number;
   /** ids of the raw accessibility_issues rows that belong to this group. */
   issueIds: string[];
+  /**
+   * Normalized selectors this group covers, deduped and sorted.
+   *
+   * rootCauseKey is not a stable comparison identity for contrast rules: it
+   * embeds the color pair, so recoloring #aaaaaa -> #bbbbbb (still failing)
+   * changes the key and the diff reads it as one fixed + one new issue. The
+   * element set is what actually persists across such a change, so
+   * before/after matching falls back to overlap on these.
+   */
+  elementKeys: string[];
+  /** Identity scheme that produced the keys above; see FINGERPRINT_VERSION. */
+  fingerprintVersion: number;
 }
 
 export interface GroupingResult {
@@ -57,6 +69,16 @@ export interface GroupingResult {
 }
 
 const CONTRAST_RULES = new Set(["color-contrast", "color-contrast-enhanced"]);
+
+/**
+ * Version of the grouping identity scheme.
+ *
+ * Bump whenever rootCauseKeyFor / normalizeSelector / elementKeyFor change in
+ * a way that makes keys from an older scan incomparable. Comparison refuses to
+ * assert "fixed" across a version boundary and reports `inconclusive` instead,
+ * so a scheme change can never be mistaken for remediation work.
+ */
+export const FINGERPRINT_VERSION = 2;
 
 const SEVERITY_RANK: Record<Severity, number> = {
   critical: 0,
@@ -95,6 +117,16 @@ function isReview(issue: GroupableIssue): boolean {
 
 function isBestPractice(issue: GroupableIssue): boolean {
   return !issue.wcagTags.some((t) => /^wcag\d/i.test(t));
+}
+
+/**
+ * Element-level identity, independent of the styling that happens to be
+ * failing. Unlike rootCauseKeyFor this never embeds a color pair.
+ */
+export function elementKeyFor(issue: GroupableIssue): string {
+  const category = isReview(issue) ? "review" : "violation";
+  const standard = isBestPractice(issue) ? "bp" : "wcag";
+  return `${category}:${standard}:${issue.ruleId}:${normalizeSelector(issue.target)}`;
 }
 
 export function rootCauseKeyFor(issue: GroupableIssue): string {
@@ -172,6 +204,8 @@ export function groupIssues(issues: GroupableIssue[]): GroupingResult {
       recommendedFix: representative.help,
       priority: priorityFor({ ruleId: representative.ruleId, severity, isReview: review }),
       issueIds: members.map((m) => m.id),
+      elementKeys: [...new Set(members.map(elementKeyFor))].sort(),
+      fingerprintVersion: FINGERPRINT_VERSION,
     });
   }
 

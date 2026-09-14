@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { AlertCallout } from "@/components/feedback/AlertCallout";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 import type { Workspace, PrivacySettings, ScanJob } from "@/lib/data/types";
 
@@ -64,6 +65,11 @@ export function StatementClient({
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this form re-renders on every keystroke/save, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   const origin = useSyncExternalStore(
     subscribeToBrowserLocation,
@@ -116,7 +122,7 @@ export function StatementClient({
 
   const badgeHtml = `<a href="${publicUrl}" target="_blank" style="display:inline-flex;align-items:center;gap:6px;font-family:sans-serif;font-size:12px;color:#0B1220;text-decoration:none;border:1px solid #E4E8F0;padding:6px 10px;border-radius:6px;background:#FFF;box-shadow:0 1px 2px rgba(0,0,0,0.05);">
   <span style="width:6px;height:6px;border-radius:50%;background:#3FA67A;display:inline-block;"></span>
-  Verified Accessibility Audit by Percevia AI
+  Accessibility Work Record by Percevia AI
 </a>`;
 
   const copyBadge = () => {
@@ -135,42 +141,42 @@ export function StatementClient({
     : "—";
 
   return (
-    <div className="px-4 lg:px-8 py-8 space-y-6 max-w-[1400px]">
+    <div data-i18n-skip className="px-4 lg:px-8 py-8 space-y-6 max-w-[1400px]">
       <div className="flex items-center gap-2">
         <Link
           href="/app/compliance"
           className="inline-flex items-center gap-1.5 text-xs text-ink-600 hover:text-ink-900"
         >
-          <ArrowLeft className="size-3.5" aria-hidden /> Privacy & Compliance
+          <ArrowLeft className="size-3.5" aria-hidden /> {t("Privacy & Compliance")}
         </Link>
       </div>
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">
-            Accessibility Statement Generator
+            {t("Accessibility Statement Generator")}
           </h1>
           <p className="text-sm text-ink-600 mt-1">
-            Build, publish, and link your official digital accessibility statement.
+            {t("Draft, publish, and link a transparent accessibility work record.")}
           </p>
         </div>
       </div>
 
-      {error && <AlertCallout tone="danger">{error}</AlertCallout>}
-      {success && <AlertCallout tone="success">{success}</AlertCallout>}
+      {error && <AlertCallout tone="danger">{t(error)}</AlertCallout>}
+      {success && <AlertCallout tone="success">{t(success)}</AlertCallout>}
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Settings Form */}
         <div className="lg:col-span-5 space-y-5">
           <Card>
             <CardHeader>
-              <CardTitle>Statement settings</CardTitle>
+              <CardTitle>{t("Statement settings")}</CardTitle>
             </CardHeader>
             <CardContent className="space-y-4">
               {/* Contact Email / link */}
               <div className="space-y-1.5">
                 <label htmlFor="stmt-email" className="block text-xs font-semibold text-ink-700">
-                  Feedback Contact Email or Link
+                  {t("Feedback Contact Email or Link")}
                 </label>
                 <div className="relative">
                   <Mail className="absolute left-3 top-3 size-4 text-ink-400" />
@@ -179,39 +185,39 @@ export function StatementClient({
                     type="text"
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
-                    placeholder="E.g., accessibility@company.com"
+                    placeholder={t("E.g., accessibility@company.com")}
                     className="w-full rounded-md bg-paper pl-9 pr-3 py-2.5 text-sm ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
                 <p className="text-[10px] text-ink-500 leading-snug">
-                  Provide an email address or link where visitors can report accessibility barriers.
+                  {t("Provide an email address or link where visitors can report accessibility barriers.")}
                 </p>
               </div>
 
               {/* Known Limitations */}
               <div className="space-y-1.5">
                 <label htmlFor="stmt-limit" className="block text-xs font-semibold text-ink-700">
-                  Known Accessibility Limitations
+                  {t("Known Accessibility Limitations")}
                 </label>
                 <textarea
                   id="stmt-limit"
                   value={limitations}
                   onChange={(e) => setLimitations(e.target.value)}
-                  placeholder="E.g., Video subtitles are missing on older archives. We are actively working to remediate this by Q4 2026."
+                   placeholder={t("E.g., Video subtitles are missing on older archives. We are actively working to remediate this by Q4 2026.")}
                   className="w-full min-h-[90px] rounded-md bg-paper p-3 text-sm ring-1 ring-line focus:outline-none focus:ring-2 focus:ring-blue-500 resize-y leading-relaxed"
                 />
                 <p className="text-[10px] text-ink-500 leading-snug">
-                  Mention parts of the site that are not fully accessible yet. Being honest protects you legally.
+                  {t("Describe known barriers and remediation work in plain language. This record does not determine legal compliance.")}
                 </p>
               </div>
 
               {/* Publish Toggle */}
               <div className="flex items-center justify-between p-3 rounded-md bg-canvas-2/50 border border-line">
                 <div>
-                  <span className="block text-xs font-semibold text-ink-900">Publish Statement</span>
-                  <span className="block text-[10px] text-ink-500 mt-0.5">
-                    Make the statement public at a dedicated Percevia URL.
-                  </span>
+                   <span className="block text-xs font-semibold text-ink-900">{t("Publish Statement")}</span>
+                   <span className="block text-[10px] text-ink-500 mt-0.5">
+                     {t("Make the statement public at a dedicated Percevia URL.")}
+                   </span>
                 </div>
                 <label className="relative inline-flex items-center cursor-pointer">
                   <input
@@ -231,7 +237,7 @@ export function StatementClient({
                 className="w-full inline-flex items-center justify-center gap-2 h-10 px-4 rounded-md bg-navy-900 text-paper text-sm font-medium hover:bg-navy-800 disabled:opacity-50"
               >
                 {loading && <Loader2 className="size-4 animate-spin" />}
-                Save configurations
+                {t("Save configurations")}
               </button>
             </CardContent>
           </Card>
@@ -241,12 +247,12 @@ export function StatementClient({
             <Card className="ring-1 ring-purple-100 bg-purple-50/10">
               <CardHeader>
                 <CardTitle className="flex items-center gap-1.5 text-purple-800">
-                  <ShieldCheck className="size-4 text-purple-600" /> Copy verified badge
+                  <ShieldCheck className="size-4 text-purple-600" /> {t("Copy work-record badge")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-4">
                 <p className="text-xs text-ink-600 leading-relaxed">
-                  Paste this accessible HTML badge in your website footer. It links users to your official hosted Accessibility Statement.
+                  {t("Paste this accessible HTML badge in your website footer. It links users to your hosted accessibility work record and does not claim certification.")}
                 </p>
 
                 {/* Badge preview */}
@@ -258,7 +264,7 @@ export function StatementClient({
                     className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-line bg-paper text-ink-900 text-xs font-sans font-medium shadow-sm cursor-pointer"
                   >
                     <span className="size-1.5 rounded-full bg-green-500" />
-                    Verified Accessibility Audit by Percevia AI
+                    Accessibility Work Record by Percevia AI
                   </a>
                 </div>
 
@@ -272,12 +278,12 @@ export function StatementClient({
                     className="absolute right-2 top-2 inline-flex items-center gap-1 px-2.5 py-1 rounded bg-paper/80 border border-line text-xs font-semibold hover:bg-paper"
                   >
                     {copied ? <Check className="size-3.5" /> : <Clipboard className="size-3.5" />}
-                    {copied ? "Copied" : "Copy"}
+                    {copied ? t("Copied") : t("Copy")}
                   </button>
                 </div>
 
                 <p className="text-[10px] text-ink-500 leading-normal">
-                  Public hosted URL:{" "}
+                  {t("Public hosted URL:")}{" "}
                   <a
                     href={publicUrl}
                     target="_blank"
@@ -296,7 +302,7 @@ export function StatementClient({
         <div className="lg:col-span-7 space-y-4">
           <div className="flex items-center justify-between border-b border-line pb-2">
             <h3 className="text-sm font-semibold text-ink-900 flex items-center gap-1.5">
-              <FileText className="size-4 text-ink-500" /> Statement Live Preview
+              <FileText className="size-4 text-ink-500" /> {t("Statement Live Preview")}
             </h3>
             <div className="flex rounded-md ring-1 ring-line bg-paper p-0.5 text-xs">
               <button
@@ -336,13 +342,11 @@ export function StatementClient({
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold text-ink-900">Uyum Durumu</h3>
+                  <h3 className="text-base font-bold text-ink-900">Değerlendirme Kapsamı</h3>
                   <p className="mt-2 text-ink-700">
-                    Bu web sitesi, gerçekleştirilen otomatik tarama testleri ve kılavuz denetim
-                    adımları sonucunda{" "}
-                    <strong>{workspace.targetStandard.replace(/_/g, " ").toUpperCase()}</strong>{" "}
-                    standartlarına göre <strong>kısmen uyumludur</strong>. Kısmi uyumsuzluklar veya
-                    kısıtlamalar aşağıda listelenmiştir.
+                    Bu kayıt, <strong>{workspace.targetStandard.replace(/_/g, " ").toUpperCase()}</strong>{" "}
+                    hedefi doğrultusunda yapılan otomatik taramayı ve kılavuzlu manuel inceleme
+                    ilerlemesini özetler. Tek başına uygunluk, sertifika veya hukuki uyum sonucu vermez.
                   </p>
                 </div>
 
@@ -413,12 +417,11 @@ export function StatementClient({
                 </div>
 
                 <div>
-                  <h3 className="text-base font-bold text-ink-900">Conformance Status</h3>
+                  <h3 className="text-base font-bold text-ink-900">Assessment Scope</h3>
                   <p className="mt-2 text-ink-700">
-                    This website is <strong>partially conformant</strong> with the{" "}
-                    <strong>{workspace.targetStandard.replace(/_/g, " ").toUpperCase()}</strong>{" "}
-                    standards, due to automated scans and guided auditing. Limitations and
-                    non-conformances are documented below.
+                    This record summarizes an automated scan and guided manual-review progress
+                    against the <strong>{workspace.targetStandard.replace(/_/g, " ").toUpperCase()}</strong>{" "}
+                    target. It does not, by itself, determine conformance, certification, or legal compliance.
                   </p>
                 </div>
 
@@ -469,7 +472,7 @@ export function StatementClient({
                 </div>
 
                 <div className="border-t border-line pt-4 text-xs text-ink-500 flex items-center justify-between">
-                  <span>Verified Accessibility Audit powered by Percevia AI.</span>
+                  <span>Accessibility work record generated with Percevia AI assessment data.</span>
                   <span>© {new Date().getFullYear()}</span>
                 </div>
               </div>

@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { Activity, Check, Loader2 } from "lucide-react";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 /**
  * "Monitor this site" entry point on the scan results page (Layer 2, B-2).
@@ -15,6 +16,11 @@ export function MonitorScanButton({ scanId }: { scanId: string }) {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this button re-renders on every click, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   async function start() {
     setBusy(true);
@@ -40,7 +46,7 @@ export function MonitorScanButton({ scanId }: { scanId: string }) {
   }
 
   return (
-    <div className="flex flex-col items-end gap-1">
+    <div className="flex flex-col items-end gap-1" data-i18n-skip>
       <button
         type="button"
         onClick={start}
@@ -54,10 +60,10 @@ export function MonitorScanButton({ scanId }: { scanId: string }) {
         ) : (
           <Activity className="size-4" aria-hidden />
         )}
-        {done ? "Monitoring" : "Monitor this site"}
+        {done ? t("Monitoring") : t("Monitor this site")}
       </button>
       {error && (
-        <p className="text-xs text-rose-600 max-w-[240px] text-right">{error}</p>
+        <p className="text-xs text-rose-600 max-w-[240px] text-right">{t(error)}</p>
       )}
     </div>
   );

@@ -26,7 +26,11 @@ const PROSE = [
   "[&_h2]:text-2xl [&_h2]:font-extrabold [&_h2]:tracking-[-0.03em] [&_h2]:text-navy-900 [&_h2]:mt-12 [&_h2]:mb-3",
   "[&_h3]:text-base [&_h3]:font-bold [&_h3]:text-navy-900 [&_h3]:mt-7 [&_h3]:mb-2",
   "[&_p]:mt-3 [&_ul]:mt-3 [&_ul]:list-disc [&_ul]:pl-5 [&_ul_li]:mt-1",
-  "[&_a]:text-blue-700 [&_a]:underline-offset-2 [&_a:hover]:underline",
+  // Underline is permanent, not hover-only: in a paragraph these links carry
+  // only a 1.76:1 contrast difference against the surrounding text, so colour
+  // alone does not identify them (WCAG 1.4.1). Focus is handled globally by
+  // *:focus-visible in globals.css.
+  "[&_a]:text-blue-700 [&_a]:underline [&_a]:underline-offset-2 [&_a:hover]:decoration-2",
   "[&_code]:bg-canvas-2 [&_code]:px-1 [&_code]:py-0.5 [&_code]:font-mono [&_code]:text-xs",
   "[&_table]:w-full [&_th]:border-b [&_th]:border-rule [&_td]:border-b [&_td]:border-line-soft",
 ].join(" ");

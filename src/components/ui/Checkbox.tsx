@@ -1,7 +1,7 @@
 "use client";
 
 import { Check } from "lucide-react";
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { forwardRef, useId, type InputHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
@@ -11,7 +11,10 @@ interface CheckboxProps extends InputHTMLAttributes<HTMLInputElement> {
 
 export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(
   ({ className, label, description, id, ...props }, ref) => {
-    const inputId = id ?? `cb-${Math.random().toString(36).slice(2, 9)}`;
+    // useId (not Math.random): the id must be identical on the server and the
+    // client, otherwise hydration fails with a text/attribute mismatch (#418).
+    const generatedId = useId().replace(/:/g, "");
+    const inputId = id ?? `cb-${generatedId}`;
     return (
       <label htmlFor={inputId} className={cn("flex items-start gap-3 cursor-pointer group", className)}>
         <span className="relative inline-flex items-center justify-center mt-0.5">

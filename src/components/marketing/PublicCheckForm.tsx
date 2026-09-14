@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { ArrowRight, LoaderCircle } from "lucide-react";
 import { useState, type FormEvent } from "react";
+import { trackClientEvent } from "@/lib/analytics/client";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface PublicCheckResult {
   url: string;
@@ -34,11 +36,17 @@ type CheckState =
 export function PublicCheckForm() {
   const [url, setUrl] = useState("");
   const [state, setState] = useState<CheckState>({ status: "idle" });
+  // All copy goes through React state (never the DOM-mutating i18n
+  // observer): every keystroke and status change re-renders this form, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree.
+  const { t } = useLanguage();
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!url.trim() || state.status === "loading") return;
     setState({ status: "loading" });
+    trackClientEvent({ event: "public_scan_started", properties: { source: "landing" } });
 
     try {
       const response = await fetch("/api/public-check", {
@@ -71,13 +79,13 @@ export function PublicCheckForm() {
   }
 
   return (
-    <div className="mt-9 max-w-[680px] border border-rule bg-canvas-2">
+    <div className="mt-9 max-w-[680px] border border-rule bg-canvas-2" data-i18n-skip>
       <form onSubmit={submit} className="p-4 sm:p-5">
         <label htmlFor="public-check-url" className="block text-sm font-bold text-navy-900">
-          Check one public page — no account required
+          {t("Check one public page — no account required")}
         </label>
         <p id="public-check-hint" className="mt-1 text-xs leading-relaxed text-ink-600">
-          Fast initial-HTML preview. No screenshots, no stored result.
+          {t("Fast initial-HTML preview. No screenshots, no stored result.")}
         </p>
         <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
           <input
@@ -100,11 +108,11 @@ export function PublicCheckForm() {
           >
             {state.status === "loading" ? (
               <>
-                <LoaderCircle className="size-4 animate-spin" aria-hidden /> Checking…
+                <LoaderCircle className="size-4 animate-spin" aria-hidden /> {t("Checking…")}
               </>
             ) : (
               <>
-                Check page <ArrowRight className="size-4" aria-hidden />
+                {t("Check page")} <ArrowRight className="size-4" aria-hidden />
               </>
             )}
           </button>
@@ -114,7 +122,7 @@ export function PublicCheckForm() {
       <div id="public-check-status" aria-live="polite" aria-atomic="true">
         {state.status === "error" && (
           <p className="border-t border-rule bg-rose-50 px-4 py-3 text-sm font-medium text-rose-800 sm:px-5">
-            {state.message}
+            {t(state.message)}
           </p>
         )}
         {state.status === "success" && <CheckResult result={state.result} />}
@@ -124,6 +132,7 @@ export function PublicCheckForm() {
 }
 
 function CheckResult({ result }: { result: PublicCheckResult }) {
+  const { t, locale } = useLanguage();
   const findingCount =
     result.issueCounts.critical +
     result.issueCounts.serious +
@@ -132,23 +141,44 @@ function CheckResult({ result }: { result: PublicCheckResult }) {
     result.issueCounts.review;
 
   return (
-    <section className="border-t border-rule bg-paper" aria-label="Instant check result">
+    <section className="border-t border-rule bg-paper" aria-label={t("Instant check result")}>
       <div className="grid grid-cols-[104px_1fr] sm:grid-cols-[128px_1fr]">
         <div className="flex flex-col items-center justify-center border-r border-rule bg-navy-900 px-3 py-6 text-paper">
           <span className="text-4xl font-extrabold leading-none tabular-nums">{result.score}</span>
-          <span className="mt-2 font-mono text-[11px] uppercase tracking-wider">
-            Grade {result.grade}
+          <span className="mt-2 text-center font-mono text-[10px] uppercase leading-tight tracking-wider">
+            {t("Automated")}
+            <br />
+            {t("score")}
+          </span>
+          {/* Scope belongs next to the number. A bare 100 reads as "your site
+              is fine" when it means "nothing was found in one HTML response". */}
+          <span className="mt-1.5 text-center font-mono text-[9px] uppercase leading-tight tracking-wider text-paper/70">
+            {t("initial")}
+            <br />
+            {t("HTML only")}
           </span>
         </div>
         <div className="min-w-0 px-4 py-5 sm:px-5">
           <p className="truncate font-mono text-xs text-ink-600">{result.url}</p>
           <p className="mt-2 text-lg font-bold text-navy-900">
-            {findingCount} preliminary {findingCount === 1 ? "finding" : "findings"}
+            {findingCount === 0
+              ? t("No issues found in the first HTML response")
+              : <>{findingCount} {t("preliminary")} {locale === "en"
+                  // English pluralizes the noun; Turkish keeps the singular
+                  // after numerals ("6 ön bulgu", never "bulgular").
+                  ? (findingCount === 1 ? "finding" : "findings")
+                  : t("finding")}</>}
           </p>
-          <p className="mt-1 text-xs leading-relaxed text-ink-600">
-            {result.issueCounts.critical} critical · {result.issueCounts.serious} serious ·{" "}
-            {result.issueCounts.review} review
-          </p>
+          {findingCount === 0 ? (
+            <p className="mt-1 text-xs leading-relaxed text-ink-600">
+              {t("That is not the same as an accessible site: the checks this preview could not run are listed below.")}
+            </p>
+          ) : (
+            <p className="mt-1 text-xs leading-relaxed text-ink-600">
+              {result.issueCounts.critical} {t("critical")} · {result.issueCounts.serious} {t("serious")} ·{" "}
+              {result.issueCounts.review} {t("review")}
+            </p>
+          )}
         </div>
       </div>
 
@@ -166,15 +196,19 @@ function CheckResult({ result }: { result: PublicCheckResult }) {
       )}
 
       <div className="border-t border-rule bg-canvas-2 px-4 py-4 sm:px-5">
-        <p className="text-xs leading-relaxed text-ink-600">
-          This low-confidence preview does not run JavaScript or establish compliance. The full
-          browser scan tests responsive viewports and interactive states.
+        <p className="font-mono text-[10px] uppercase tracking-wider text-ink-500">
+          {t("What this check did not cover")}
         </p>
+        <ul className="mt-1.5 list-disc space-y-1 pl-4 text-xs leading-relaxed text-ink-600">
+          {result.limitations.map((limitation) => (
+            <li key={limitation}>{limitation}</li>
+          ))}
+        </ul>
         <Link
-          href="/onboarding"
+          href={`/onboarding?url=${encodeURIComponent(result.url)}`}
           className="mt-3 inline-flex min-h-11 items-center gap-2 bg-blue-600 px-5 text-sm font-bold text-paper hover:bg-blue-700"
         >
-          Run the full scan <ArrowRight className="size-4" aria-hidden />
+          {t("Run the full scan")} <ArrowRight className="size-4" aria-hidden />
         </Link>
       </div>
     </section>

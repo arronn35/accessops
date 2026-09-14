@@ -1,4 +1,4 @@
-import { apiError, requireSession } from "@/lib/api/context";
+import { apiError, requirePermission } from "@/lib/api/context";
 import { getVisualEvidenceForIssue } from "@/lib/data/firestore";
 
 export async function GET(
@@ -6,7 +6,7 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    const ctx = await requirePermission("view_scans");
     const { id } = await params;
     const evidence = await getVisualEvidenceForIssue(ctx.workspaceId, id);
     return Response.json({

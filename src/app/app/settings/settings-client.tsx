@@ -87,7 +87,7 @@ export function SettingsClient({
                       defaultValue={workspace.region}
                       disabled={!canEditWorkspace}
                     >
-                      <option value="eu">EU (Frankfurt)</option>
+                      <option value="eu">EU</option>
                       <option value="us">US (Virginia)</option>
                       <option value="uk">UK</option>
                       <option value="ca">Canada</option>

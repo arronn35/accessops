@@ -1,7 +1,7 @@
 import { Check, X } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { ROLES, PERMISSIONS, PERMISSION_MATRIX, type Role } from "@/lib/mock/workspace";
 import { allowedRolesForPlan, memberLimitForPlan } from "@/lib/entitlements";
 import { countWorkspaceSeats, listWorkspaceMembers } from "@/lib/data/firestore";
@@ -21,7 +21,7 @@ const ROLE_TONE: Record<Role, "navy" | "info" | "ai" | "warning" | "neutral" | "
 };
 
 export default async function TeamPage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("manage_team");
   const canInvite = ctx.member.role === "owner" || ctx.member.role === "admin";
   const [members, seatsUsed] = await Promise.all([
     listWorkspaceMembers(ctx.workspace.id),

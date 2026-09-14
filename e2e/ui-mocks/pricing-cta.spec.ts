@@ -57,4 +57,37 @@ test.describe("pricing CTA → plan-select API", () => {
     await page.getByRole("button", { name: /Get started/i }).first().click();
     await expect(page.getByText(/Something went wrong/i)).toBeVisible();
   });
+
+  test("does not throw hydration errors in Turkish (React #418)", async ({
+    context,
+    page,
+  }) => {
+    // The CTA re-renders on click (idle → busy → redirect). Before the
+    // React-state i18n migration, the DOM-mutating translator had rewritten
+    // its label behind React's back and this click threw minified #418.
+    await context.addCookies([
+      {
+        name: "percevia_locale",
+        value: "tr",
+        domain: "127.0.0.1",
+        path: "/",
+        sameSite: "Lax",
+      },
+    ]);
+    await page.route("**/api/billing/checkout", (route) =>
+      route.fulfill({
+        status: 401,
+        contentType: "application/json",
+        body: JSON.stringify({ error: "unauthorized" }),
+      })
+    );
+
+    const errors: string[] = [];
+    page.on("pageerror", (err) => errors.push(String(err)));
+
+    await page.goto("/pricing");
+    await page.getByRole("button", { name: /Hemen başla/i }).first().click();
+    await expect(page).toHaveURL(/\/auth\/sign-in\?callbackUrl=/);
+    expect(errors.join("\n")).not.toMatch(/418/);
+  });
 });

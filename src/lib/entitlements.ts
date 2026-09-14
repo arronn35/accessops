@@ -19,7 +19,29 @@ export type WorkspacePermission =
   | "delete_scans"
   | "manage_team"
   | "manage_remediation"
-  | "view_remediation";
+  | "view_remediation"
+  // Recording a guided manual-audit result. Separate from manage_remediation
+  // because an auditor's whole job is this review, yet auditors deliberately
+  // cannot manage remediation tasks.
+  | "manage_manual_review";
+
+/**
+ * Human-readable permission names, for UI that has to explain a denial.
+ * Keyed by WorkspacePermission so a new permission fails the build here.
+ */
+export const PERMISSION_LABELS: Record<WorkspacePermission, string> = {
+  create_scans: "Start scans",
+  view_scans: "View scans and findings",
+  view_ai: "View AI explanations",
+  export_reports: "Export reports and data",
+  manage_billing: "Manage billing",
+  manage_privacy: "Manage privacy and data retention",
+  delete_scans: "Delete scans",
+  manage_team: "Manage team members",
+  manage_remediation: "Manage remediation tasks",
+  view_remediation: "View remediation tasks",
+  manage_manual_review: "Record manual review results",
+};
 
 export const TESTER_ADMIN_PLAN: PlanTier = "enterprise";
 export const TESTER_ADMIN_ROLE: WorkspaceRole = "owner";
@@ -157,6 +179,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: true,
     manage_remediation: true,
     view_remediation: true,
+    manage_manual_review: true,
   },
   admin: {
     create_scans: true,
@@ -169,6 +192,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: true,
     manage_remediation: true,
     view_remediation: true,
+    manage_manual_review: true,
   },
   developer: {
     create_scans: true,
@@ -181,6 +205,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: false,
     manage_remediation: true,
     view_remediation: true,
+    manage_manual_review: true,
   },
   auditor: {
     create_scans: false,
@@ -193,6 +218,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: false,
     manage_remediation: false,
     view_remediation: true,
+    manage_manual_review: true,
   },
   client_viewer: {
     create_scans: false,
@@ -205,6 +231,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: false,
     manage_remediation: false,
     view_remediation: true,
+    manage_manual_review: false,
   },
   report_viewer: {
     create_scans: false,
@@ -217,6 +244,7 @@ export const ROLE_PERMISSIONS: Record<WorkspaceRole, Record<WorkspacePermission,
     manage_team: false,
     manage_remediation: false,
     view_remediation: false,
+    manage_manual_review: false,
   },
 };
 

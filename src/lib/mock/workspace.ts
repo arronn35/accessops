@@ -60,7 +60,7 @@ export const workspace = {
   id: "ws_northwind",
   name: "Northwind Studios",
   type: "Agency" as const,
-  region: "EU (Frankfurt)" as const,
+  region: "EU" as const,
   primaryFramework: "Next.js" as const,
   targetStandard: "WCAG 2.2 AA" as const,
   createdAt: "2025-01-14",

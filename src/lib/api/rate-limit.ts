@@ -19,6 +19,7 @@
  *     compute endpoints opt into fail-closed behavior to prevent abuse.
  */
 import { Timestamp } from "firebase-admin/firestore";
+import { createHash } from "node:crypto";
 import { firebaseAdminConfigured, firestore } from "@/lib/firebase/admin";
 
 const buckets = new Map<string, { count: number; reset: number }>();
@@ -29,11 +30,34 @@ export const limiters = {
   aiExplain: { max: 60, windowMs: 60 * 60_000 },
   reportExport: { max: 30, windowMs: 60 * 60_000 },
   visualEvidence: { max: 120, windowMs: 60 * 60_000 },
+  analyticsEvent: { max: 120, windowMs: 60_000 },
 };
 
 export type LimiterName = keyof typeof limiters;
 
-export interface RateLimitResult {
+/**
+ * Server-derived anonymous identity for quota keys.
+ *
+ * Quota keys must never come from client-chosen values (request-body UUIDs,
+ * User-Agent strings): the caller can mint unlimited fresh keys and walk
+ * around the budget. This helper hashes only the network signal so rotating
+ * a header or UUID cannot open a new budget.
+ *
+ * Trust note: x-forwarded-for / x-real-ip are only meaningful when the edge
+ * proxy normalizes them (strips client-spoofed copies, selects the correct
+ * hop). If the deployment serves traffic directly, the fallback bucket
+ * ("address-unavailable") is shared by all such callers — safe, but coarse.
+ * NAT sharing means one budget covers everyone behind the same egress IP;
+ * thresholds are sized for that (generous per-IP budgets, fail-closed only
+ * on public compute endpoints).
+ */
+export function anonymousNetworkKey(headers: Headers): string {
+  const forwarded =
+    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
+    headers.get("x-real-ip")?.trim() ||
+    "address-unavailable";
+  return createHash("sha256").update(`anon-v1\n${forwarded}`).digest("hex").slice(0, 32);
+}export interface RateLimitResult {
   ok: boolean;
   remaining: number;
   reset: number;

@@ -14,6 +14,12 @@ const eslintConfig = defineConfig([
     ".vercel/**",
     "next-env.d.ts",
     "worker/dist/**",
+    // Scan/audit artifacts, not source: these are generated reports and
+    // throwaway probe scripts, and linting them fails the whole run on rules
+    // (like no-require-imports) that only make sense for our own code.
+    "output/**",
+    "test-results/**",
+    "playwright-report/**",
   ]),
 ]);
 

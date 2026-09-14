@@ -1,15 +1,20 @@
 import Link from "next/link";
+import { canonical } from "@/lib/seo/canonical";
 import type { CSSProperties } from "react";
 import { MarketingShell } from "@/components/marketing/MarketingShell";
 import { ProductPreview } from "@/components/marketing/ProductPreview";
 import { PublicCheckForm } from "@/components/marketing/PublicCheckForm";
+import { SyntheticPilotSection } from "@/components/marketing/SyntheticPilotSection";
+import { PlanLimitItems } from "@/components/marketing/PlanLimitItems";
 import { SectionTag, Aside } from "@/components/marketing/SectionTag";
 import { COMPLIANCE_COPY } from "@/lib/microcopy/compliance";
-import { PLANS, planFeatures } from "@/lib/marketing/plans";
+import { PLANS } from "@/lib/marketing/plans";
+import { scanCapsForPlan, type PlanTier } from "@/lib/entitlements";
 import { verifySessionCookie } from "@/lib/auth/session";
 import { publicCheckEnabled } from "@/lib/config";
 
 export const metadata = {
+  ...canonical("/"),
   title: "maitrico Percevia AI — Accessibility operations, not one-click compliance",
 };
 export const dynamic = "force-dynamic";
@@ -48,7 +53,7 @@ const METHOD = [
   { title: "Scan", body: "Crawl single pages, multi-page templates, or sitemaps. Screenshots opt-in." },
   { title: "Understand", body: "AI explains each issue in plain language and shows who it affects." },
   { title: "Remediate", body: "Code-aware suggestions, manual review checklist, assigned tasks on a board." },
-  { title: "Report", body: "Audit-ready PDF, HTML, and CSV exports with WCAG mapping. No legal promises." },
+  { title: "Report", body: "Engineering-ready PDF, HTML, and CSV exports with WCAG mapping. No legal promises." },
 ];
 
 const TARGET_USERS = [
@@ -71,7 +76,7 @@ const REPORT_SECTIONS = [
 
 const PRIVACY_POINTS = [
   "Screenshots are off by default. You opt in per scan.",
-  "EU-hosted by default. US and UK regions on higher plans.",
+  "Workspace data stays in the configured Firestore region; scan processing follows the deployed worker region.",
   "AI suggestions are reviewable; nothing is auto-applied.",
   "We do not sell scan data and do not train models on customer code.",
   "Workspace data is exportable and deletable on demand.",
@@ -85,7 +90,7 @@ const COMPLIANCE_CARDS = [
   },
   {
     title: "Human review required",
-    body: "Automated checks catch roughly 30–50% of issues. Keyboard, screen reader and zoom passes stay manual.",
+    body: "Automated checks cannot detect every WCAG failure. Keyboard, screen reader and zoom passes stay manual.",
   },
   {
     title: "AI use disclosure",
@@ -130,7 +135,7 @@ const FAQ = [
   },
   {
     q: "What happens to my scan data?",
-    a: "Scan data stays in your workspace and is retained for 12 months by default. Screenshots are opt-in and off by default. Hosted in the EU by default; US and other regions available on higher plans.",
+    a: "Scan data stays in your workspace and is retained for 12 months by default. Screenshots are opt-in and off by default. Workspace storage lives in the EU multi-region and the scan worker runs in europe-west1 (Belgium); the web app itself is served by Vercel from its global edge and US compute, and OpenAI processes AI requests in the US when you enable them. Region migrations are handled as a scoped Enterprise engagement, not a self-serve toggle.",
   },
   {
     q: "Will AI fix issues automatically?",
@@ -317,7 +322,7 @@ export default async function LandingPage() {
                 privacy controls, and reporting stay connected instead of scattering
                 across exports and tickets.
               </p>
-              <Aside className="mt-4">the working product, not a decorative mockup</Aside>
+              <Aside className="mt-4">the real interface, shown with sample data</Aside>
             </div>
           </div>
           <ProductPreview signedIn={signedIn} />
@@ -374,10 +379,10 @@ export default async function LandingPage() {
                 the part your client actually reads
               </Aside>
               <Link
-                href="/onboarding"
+                href="/sample-report"
                 className="mt-8 inline-block bg-paper px-7 py-4 text-sm font-bold text-navy-900 shadow-[7px_7px_0_var(--color-purple-600)]"
               >
-                Run your first scan
+                Open the synthetic report
               </Link>
             </div>
 
@@ -411,6 +416,8 @@ export default async function LandingPage() {
             </div>
           </div>
         </section>
+
+        <SyntheticPilotSection />
 
         {/* ---------- 07 Stance ---------- */}
         <section id="privacy" className="border-b border-rule">
@@ -463,6 +470,9 @@ export default async function LandingPage() {
             {PLANS.map((p) => {
               const dark = Boolean(p.highlighted);
               const quiet = p.id === "enterprise";
+              // Caps come from the same source the API enforces, passed as
+              // props so the locale-reactive limit lines can never drift.
+              const caps = scanCapsForPlan(p.id as PlanTier);
               return (
                 <article
                   key={p.id}
@@ -495,7 +505,8 @@ export default async function LandingPage() {
                       dark ? "text-paper/85" : "text-ink-700"
                     }`}
                   >
-                    {planFeatures(p).map((f) => (
+                    <PlanLimitItems daily={caps.dailyScanCap} maxPages={caps.maxPagesCap} />
+                    {p.features.map((f) => (
                       <li key={f}>{f}</li>
                     ))}
                   </ul>
@@ -578,20 +589,20 @@ export default async function LandingPage() {
           <div className="grid gap-3.5 px-6 sm:px-10 pb-5 sm:grid-cols-2 lg:grid-cols-3">
             <div className="border border-rule px-5 py-5 shadow-[6px_6px_0_var(--color-accent)]">
               <div className="flex items-center justify-between gap-2.5">
-                <span className="text-base font-bold">EU (Frankfurt)</span>
+                <span className="text-base font-bold">Firestore workspace storage</span>
                 <span className="eyebrow bg-blue-700 px-2 py-1 text-[10px] text-paper">
-                  Current
+                  Configured project
                 </span>
               </div>
-              <p className="mt-2.5 text-[13px] text-ink-600">GDPR-friendly default</p>
+              <p className="mt-2.5 text-[13px] text-ink-600">Location follows the Firebase project configuration</p>
             </div>
             <div className="border border-rule px-5 py-5">
-              <span className="text-base font-bold">US (Virginia)</span>
-              <p className="mt-2.5 text-[13px] text-ink-600">Required for some clients</p>
+              <span className="text-base font-bold">Cloud Run scan worker</span>
+              <p className="mt-2.5 text-[13px] text-ink-600">Playwright + axe processing in the deployed worker region</p>
             </div>
             <div className="border border-rule px-5 py-5">
-              <span className="text-base font-bold">Other (on-request)</span>
-              <p className="mt-2.5 text-[13px] text-ink-600">Enterprise plan: AU, UK, CA</p>
+              <span className="text-base font-bold">Region migration</span>
+              <p className="mt-2.5 text-[13px] text-ink-600">Coordinated infrastructure work for Enterprise</p>
             </div>
           </div>
           <p className="max-w-[110ch] px-6 sm:px-10 pb-9 text-[13px] leading-relaxed text-ink-600">

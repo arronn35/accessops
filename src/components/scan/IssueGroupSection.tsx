@@ -4,6 +4,7 @@ import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { SeverityBadge } from "./SeverityBadge";
 import { cn } from "@/lib/utils";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export interface IssueGroupHeader {
   id: string;
@@ -30,10 +31,15 @@ export function IssueGroupSection({
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this section re-renders on every toggle, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
   const multiple = group.affectedCount > 1;
 
   return (
-    <div className="rounded-lg ring-1 ring-line bg-paper overflow-hidden">
+    <div className="rounded-lg ring-1 ring-line bg-paper overflow-hidden" data-i18n-skip>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -55,7 +61,7 @@ export function IssueGroupSection({
                   : "bg-canvas-2 text-ink-600 ring-line"
               )}
             >
-              {group.affectedCount} {multiple ? "instances" : "instance"}
+              {group.affectedCount} {multiple ? t("instances") : t("instance")}
             </span>
           </span>
           <span className="mt-1 flex items-center gap-2 text-[11px] text-ink-500 flex-wrap">

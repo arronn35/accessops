@@ -14,7 +14,6 @@ vi.mock("./url-validation", () => ({
       normalized: url.toString(),
       host: url.hostname,
       origin: url.origin,
-      ips: ["93.184.216.34"],
     };
   }),
   validateFinalUrl: vi.fn(async (input: string) => ({
@@ -22,7 +21,6 @@ vi.mock("./url-validation", () => ({
     normalized: input,
     host: new URL(input).hostname,
     origin: new URL(input).origin,
-    ips: ["93.184.216.34"],
   })),
 }));
 
@@ -60,7 +58,9 @@ describe("scan source planning", () => {
       "fetch",
       vi.fn(async () => ({
         ok: true,
+        status: 200,
         url: "https://example.org/sitemap.xml",
+        headers: new Headers({ "content-type": "application/xml" }),
         text: async () => `
           <urlset>
             <url><loc>https://example.org/a</loc></url>

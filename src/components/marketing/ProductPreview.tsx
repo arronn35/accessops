@@ -43,7 +43,7 @@ export function ProductPreview({ signedIn }: { signedIn: boolean }) {
           <Logo variant="wordmark" className="[&_span]:font-extrabold" />
           <div className="hidden items-center gap-2 sm:flex">
             <span className="eyebrow border border-rule px-3 py-2 text-[10px] text-ink-600">
-              Northwind workspace
+              Northwind — sample workspace
             </span>
             <Link
               href={signedIn ? "/app/scans/new" : "/onboarding"}
@@ -81,7 +81,7 @@ export function ProductPreview({ signedIn }: { signedIn: boolean }) {
           <div className="min-w-0 bg-grid p-4 sm:p-6">
             <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
               <div>
-                <div className="eyebrow text-[10px] text-purple-700">Workspace pulse · live product view</div>
+                <div className="eyebrow text-[10px] text-purple-700">Workspace pulse · sample workspace, synthetic data</div>
                 <h3 className="mt-2 text-[clamp(1.75rem,3.2vw,2.6rem)] font-extrabold leading-none tracking-[-0.04em]">
                   From signal to shipped fix.
                 </h3>
@@ -96,7 +96,7 @@ export function ProductPreview({ signedIn }: { signedIn: boolean }) {
             </div>
 
             <div className="mt-5 grid gap-3 xl:grid-cols-[minmax(250px,0.8fr)_minmax(0,1.3fr)]">
-              <article className="border border-rule bg-paper p-5 shadow-[5px_5px_0_var(--color-accent)]">
+              <article className="min-w-0 border border-rule bg-paper p-5 shadow-[5px_5px_0_var(--color-accent)]">
                 <div className="eyebrow text-[10px] text-ink-500">Latest scan</div>
                 <div className="mt-1 font-mono text-xs text-ink-700">northwind-shop.example</div>
                 <div className="mt-5 flex items-center gap-5">
@@ -113,7 +113,7 @@ export function ProductPreview({ signedIn }: { signedIn: boolean }) {
                 </p>
               </article>
 
-              <article className="border border-rule bg-paper">
+              <article className="min-w-0 border border-rule bg-paper">
                 <div className="flex items-center justify-between border-b border-rule px-5 py-4">
                   <div>
                     <div className="text-sm font-bold">Open findings</div>
@@ -130,7 +130,7 @@ export function ProductPreview({ signedIn }: { signedIn: boolean }) {
             </div>
 
             <div className="mt-3 grid gap-3 xl:grid-cols-[minmax(0,1fr)_minmax(280px,0.72fr)]">
-              <article className="border border-rule bg-paper p-5">
+              <article className="min-w-0 border border-rule bg-paper p-5">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-bold">Scan → remediation workflow</div>

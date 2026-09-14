@@ -12,6 +12,9 @@
 # other.
 FROM mcr.microsoft.com/playwright:v1.60.0-jammy
 
+# Pin the worker to the same supported Node major as CI.
+COPY --from=node:22-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+
 ENV NODE_ENV=production \
     # Browsers are baked into the base image; don't re-download on install.
     PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
@@ -28,6 +31,12 @@ RUN npm ci --include=dev
 COPY tsconfig.json ./
 COPY src ./src
 COPY worker ./worker
+COPY scripts/build-manifest.ts ./scripts/build-manifest.ts
+ARG BUILD_COMMIT_SHA
+ARG RELEASE_ENVIRONMENT=staging
+ARG FIREBASE_PROJECT_ID
+ENV BUILD_COMMIT_SHA=$BUILD_COMMIT_SHA RELEASE_ENVIRONMENT=$RELEASE_ENVIRONMENT FIREBASE_PROJECT_ID=$FIREBASE_PROJECT_ID RELEASE_SOURCE_CLEAN=true
+RUN node --import tsx scripts/build-manifest.ts
 
 # Docker COPY preserves restrictive local modes (for example 0600). Ensure the
 # runtime user can read the application tree without granting write access.

@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, type InputHTMLAttributes } from "react";
+import { forwardRef, useId, type InputHTMLAttributes } from "react";
 import { cn } from "@/lib/utils";
 
 interface SwitchProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "type"> {
@@ -10,7 +10,10 @@ interface SwitchProps extends Omit<InputHTMLAttributes<HTMLInputElement>, "type"
 
 export const Switch = forwardRef<HTMLInputElement, SwitchProps>(
   ({ className, label, description, id, ...props }, ref) => {
-    const inputId = id ?? `sw-${Math.random().toString(36).slice(2, 9)}`;
+    // useId (not Math.random): the id must be identical on the server and the
+    // client, otherwise hydration fails with a text/attribute mismatch (#418).
+    const generatedId = useId().replace(/:/g, "");
+    const inputId = id ?? `sw-${generatedId}`;
     return (
       <label htmlFor={inputId} className={cn("flex items-start justify-between gap-4 cursor-pointer", className)}>
         {(label || description) && (

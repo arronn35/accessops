@@ -1,12 +1,12 @@
 import { AiAssistantClient, type AssistantResult, type AssistantScan } from "./ai-assistant-client";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { getLatestAssistantResults, listScans } from "@/lib/data/firestore";
 
 export const metadata = { title: "AI fix assistant - Percevia AI" };
 export const dynamic = "force-dynamic";
 
 export default async function AiAssistantPage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_ai");
   const scans = (await listScans(ctx.workspace.id, 50))
     .filter((scan) => scan.status === "completed")
     .map<AssistantScan>((scan) => ({

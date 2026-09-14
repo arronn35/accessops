@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ArrowLeft, Printer } from "lucide-react";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import {
   getScanJob,
   getScanSummary,
@@ -19,7 +19,7 @@ export default async function ReportPreviewPage({
   searchParams: Promise<{ scanId?: string }>;
 }) {
   const { scanId } = await searchParams;
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
   const scan = scanId
     ? await getScanJob(ctx.workspace.id, scanId)
     : (await listScans(ctx.workspace.id, 20)).find((item) => item.status === "completed") ?? null;

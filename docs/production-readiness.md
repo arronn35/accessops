@@ -1,6 +1,6 @@
 # maitrico Percevia AI - Production Readiness
 
-Last reviewed: 2026-06-11
+Last reviewed: 2026-09-07
 
 ## Current Stack
 
@@ -11,7 +11,7 @@ Last reviewed: 2026-06-11
 | Data | Ready | Firestore repositories through Firebase Admin SDK. |
 | Dispatch | Ready | Cloud Tasks invokes the private Cloud Run worker through OIDC; Cloud Scheduler provides crash recovery and continuous-monitor dispatch. |
 | Scanner | Ready | Scale-to-zero Cloud Run worker (`worker/serve.ts`) runs Playwright + axe-core. Static HTML scan remains an in-worker fallback if Chromium fails to launch. |
-| Reports | Ready | HTML/CSV export and printable HTML fallback for PDF. |
+| Reports | Ready | HTML/CSV/JSON export. Server-side PDF via dual-engine renderer (`lib/reports/pdf`): full Playwright Chromium where browsers are installed, `@sparticuz/chromium` fallback on serverless; printable HTML remains as fallback. First deploy must prove `format=pdf` end-to-end (see Known Limits). |
 | Storage | Firestore only | Visual-evidence screenshots (consented, redacted, 650 KB cap, expiring) live in Firestore; no object storage in V1. |
 | Privacy deletion | Ready | `POST /api/privacy/delete-scan-data` returns `202` with a tracked job in `dataDeletionJobs`; the worker deletes scans/issues/evidence/reports and verifies zero residue before marking it completed. `DELETE /api/scans/:id` removes a single scan. |
 | Retention | Ready | Daily cron (`/api/cron/data-retention`, 03:17 UTC) applies each workspace's `scanDataRetentionDays` and purges expired visual evidence. Protect with `CRON_SECRET`. |
@@ -41,6 +41,10 @@ Required on Vercel:
 - `INTERNAL_WORKER_SECRET`
 - `CRON_SECRET`
 - `PAGE_JOBS_ENABLED=true`
+- `ANALYTICS_ENABLED=true`
+- `ANALYTICS_ID_SALT` (a long, random secret used only to pseudonymize analytics identifiers)
+- `ANALYTICS_RETENTION_DAYS=180`
+- `PUBLIC_CHECK_ENABLED=true` (explicit production opt-in for the homepage checker)
 
 Required on the browser worker container (see `docs/worker-deploy.md`):
 
@@ -73,8 +77,9 @@ One-time Firestore setup (Google Cloud console → Firestore → TTL):
 
 - TTL policy on `rateLimits.expireAt` (stale rate-limit windows)
 - TTL policy on `workerHeartbeats.expireAt` (dead worker ids)
+- TTL policy on `analyticsEvents.expireAt` (first-party analytics retention)
 
-Correctness does not depend on either policy; they only bound storage growth.
+Correctness does not depend on these policies; they only bound storage growth.
 
 ## Smoke Checklist
 
@@ -89,6 +94,9 @@ Correctness does not depend on either policy; they only bound storage growth.
 - Public report share `/r/:token` reads from Firestore.
 
 ## Known Limits
+
+- PDF export on serverless depends on the `@sparticuz/chromium` fallback (no browser binaries on Vercel/λ). After deploy: export a real report as PDF, confirm `content-type: application/pdf`, and check function size/duration in the Vercel dashboard (externalized via `serverExternalPackages`; needs headroom for the ~66 MB Chromium package and >10 s cold starts on Hobby). If limits bite, move rendering to the Cloud Run worker (`/process`-style endpoint).
+- `NEXT_PUBLIC_APP_URL` must be set in the Vercel project (empty falls back to `https://percevia-chi.vercel.app`; a custom domain needs the real value or canonical/OG URLs break).
 
 - Visual evidence/screenshots require workspace consent and are stored in Firestore (650 KB/screenshot cap).
 - Invitation emails are delivered through Firebase Auth email-link sign-in (no SMTP provider); if Firebase declines the send, the UI falls back to manual link sharing. Billing remains disabled; plan selection is an entitlement switch.

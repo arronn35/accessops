@@ -1,4 +1,6 @@
+import { canonical } from "@/lib/seo/canonical";
 export const metadata = {
+  ...canonical("/legal/accessibility-methodology"),
   title: "Accessibility Methodology — Percevia AI",
   description: "How maitrico Percevia AI performs automated accessibility checks.",
 };

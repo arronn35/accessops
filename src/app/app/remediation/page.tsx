@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { NoGuaranteeBanner } from "@/components/compliance/NoGuaranteeBanner";
 import { EmptyState } from "@/components/empty/EmptyState";
 import { SeverityBadge } from "@/components/scan/SeverityBadge";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { listRemediationTasks } from "@/lib/data/firestore";
 import { fallbackProjectFolder } from "@/lib/remediation/project-folder";
 import { formatRelative } from "@/lib/utils";
@@ -24,7 +24,7 @@ const STATUS_TONE: Record<string, "neutral" | "info" | "warning" | "success" | "
 };
 
 export default async function RemediationPage() {
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_remediation");
   const tasks = await listRemediationTasks(ctx.workspace.id, 100);
   const open = tasks.filter((t) => t.status !== "fixed" && t.status !== "accepted_risk");
   const folders = groupTasksByProject(tasks);

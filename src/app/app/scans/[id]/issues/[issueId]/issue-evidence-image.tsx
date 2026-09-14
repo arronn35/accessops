@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { BoundingBox, ScanViewport } from "@/lib/scanner/types";
 import { calculateEvidenceCrop } from "@/lib/scanner/evidence-crop";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function IssueEvidenceImage({
   src,
@@ -17,6 +18,11 @@ export function IssueEvidenceImage({
 }) {
   const imageRef = useRef<HTMLImageElement>(null);
   const [imageSize, setImageSize] = useState<{ width: number; height: number } | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this image re-renders on load, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
   const box = readBoundingBox(boundingBox);
   const scanViewport = readViewport(viewport);
   const crop = imageSize ? calculateEvidenceCrop(imageSize, box, scanViewport) : null;
@@ -29,12 +35,12 @@ export function IssueEvidenceImage({
   }, [src]);
 
   return (
-    <div className="min-w-0 max-w-full">
+    <div className="min-w-0 max-w-full" data-i18n-skip>
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img
         ref={imageRef}
         src={src}
-        alt={crop ? "" : alt}
+        alt={crop ? "" : t(alt)}
         aria-hidden={crop ? true : undefined}
         onLoad={(event) => {
           const image = event.currentTarget;
@@ -45,7 +51,7 @@ export function IssueEvidenceImage({
       {crop && imageSize && (
         <svg
           role="img"
-          aria-label={alt}
+          aria-label={t(alt)}
           viewBox={`${crop.x} ${crop.y} ${crop.width} ${crop.height}`}
           className="block h-auto max-h-[520px] max-w-full rounded-md"
           style={{

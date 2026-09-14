@@ -28,6 +28,9 @@
 import { defineConfig, devices, type Project } from "@playwright/test";
 import { authLaneConfigured, STORAGE_STATE_PATH } from "./e2e/authenticated/fixtures";
 
+import { validateAuthenticatedE2E } from "./src/lib/testing/authenticated-e2e";
+if (process.env.E2E_REQUIRE_AUTH === "true") validateAuthenticatedE2E();
+
 const PORT = Number(process.env.E2E_PORT ?? 3100);
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 
@@ -48,13 +51,20 @@ if (authLaneConfigured()) {
   projects.push(
     {
       name: "auth-setup",
+      teardown: "auth-cleanup",
       testMatch: /authenticated\/auth\.setup\.ts$/,
+      use: { trace: "off", screenshot: "off" },
+    },
+    {
+      name: "auth-cleanup",
+      testMatch: /authenticated\/auth\.cleanup\.ts$/,
+      use: { trace: "off", screenshot: "off" },
     },
     {
       name: "authenticated",
       testMatch: /authenticated\/.*\.spec\.ts$/,
       dependencies: ["auth-setup"],
-      use: { ...devices["Desktop Chrome"], storageState: STORAGE_STATE_PATH },
+      use: { ...devices["Desktop Chrome"], storageState: STORAGE_STATE_PATH, trace: "off", screenshot: "off" },
     }
   );
 }
@@ -66,7 +76,7 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : "list",
+  reporter: [["list"], ["html", { open: "never" }], ["json", { outputFile: "playwright-report/authenticated.json" }]],
   use: {
     baseURL: BASE_URL,
     trace: "on-first-retry",
@@ -82,7 +92,7 @@ export default defineConfig({
       PUBLIC_CHECK_ENABLED: "true",
       NEXT_PUBLIC_FIREBASE_API_KEY: process.env.NEXT_PUBLIC_FIREBASE_API_KEY ?? "",
       NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN: process.env.NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN ?? "",
-      NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
+      NEXT_PUBLIC_FIREBASE_PROJECT_ID: process.env.E2E_FIREBASE_PROJECT_ID ?? process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ?? "",
       NEXT_PUBLIC_FIREBASE_APP_ID: process.env.NEXT_PUBLIC_FIREBASE_APP_ID ?? "",
       // Staging Firebase Admin credentials for the authenticated lane;
       // empty in public-only runs, which keeps all integrations off.

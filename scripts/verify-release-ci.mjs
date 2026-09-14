@@ -1,0 +1,12 @@
+import { execFileSync } from "node:child_process";
+const gh = (...args) => JSON.parse(execFileSync("gh", args, { encoding: "utf8", stdio: ["ignore", "pipe", "inherit"] }));
+const commit = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
+const repo = gh("repo", "view", "--json", "nameWithOwner").nameWithOwner;
+const protection = gh("api", `repos/${repo}/branches/main/protection`);
+if (!protection.required_status_checks?.contexts?.includes("release-gate")) throw new Error("main must require release-gate before production deployment");
+const runs = gh("api", `repos/${repo}/actions/workflows/ci.yml/runs?head_sha=${commit}&status=success&event=push`);
+const run = runs.workflow_runs.find((r) => r.head_sha === commit && r.head_branch === "main" && r.conclusion === "success");
+if (!run) throw new Error("No successful main-branch CI run for this exact commit");
+const artifacts = gh("api", `repos/${repo}/actions/runs/${run.id}/artifacts`);
+if (!artifacts.artifacts.some((a) => a.name === "authenticated-staging-evidence" && !a.expired)) throw new Error("Authenticated staging evidence is missing or expired");
+console.log(`Release CI verified for ${commit}; run ${run.id}`);

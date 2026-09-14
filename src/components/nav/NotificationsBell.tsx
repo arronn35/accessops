@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import { Bell, BellOff } from "lucide-react";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 interface UiNotification {
   id: string;
@@ -36,6 +37,11 @@ export function NotificationsBell() {
   const [open, setOpen] = useState(false);
   const [data, setData] = useState<NotifPayload | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this bell re-renders on every poll/open, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
   const popoverRef = useRef<HTMLDivElement>(null);
 
   async function refresh() {
@@ -93,14 +99,14 @@ export function NotificationsBell() {
   const unread = data?.unreadCount ?? 0;
 
   return (
-    <div className="relative" ref={popoverRef}>
+    <div className="relative" ref={popoverRef} data-i18n-skip>
       <button
         type="button"
         onClick={onOpen}
         aria-label={
           unread > 0
             ? `Notifications (${unread} new)`
-            : "Notifications"
+            : t("Notifications")
         }
         aria-expanded={open}
         aria-haspopup="menu"
@@ -120,35 +126,35 @@ export function NotificationsBell() {
       {open && (
         <div
           role="menu"
-          aria-label="Notifications"
+          aria-label={t("Notifications")}
           className="absolute right-0 mt-2 w-80 rounded-md bg-paper ring-1 ring-line shadow-[var(--shadow-card)] overflow-hidden z-40"
         >
           <div className="flex items-center justify-between px-4 py-3 border-b border-line/70">
-            <p className="text-sm font-semibold text-ink-900">Notifications</p>
+            <p className="text-sm font-semibold text-ink-900">{t("Notifications")}</p>
             {data && data.notifications.length > 0 && (
               <button
                 type="button"
                 onClick={markRead}
                 className="text-[11px] text-ink-500 hover:text-ink-900"
               >
-                Mark all read
+                {t("Mark all read")}
               </button>
             )}
           </div>
 
           {error ? (
-            <p className="px-4 py-6 text-xs text-rose-700">{error}</p>
+            <p className="px-4 py-6 text-xs text-rose-700">{t(error)}</p>
           ) : !data ? (
-            <p className="px-4 py-6 text-xs text-ink-500">Loading…</p>
+            <p className="px-4 py-6 text-xs text-ink-500">{t("Loading…")}</p>
           ) : data.notifications.length === 0 ? (
             <div className="px-4 py-8 text-center">
               <BellOff
                 className="size-6 text-ink-400 mx-auto mb-2"
                 aria-hidden
               />
-              <p className="text-sm text-ink-700">You&apos;re all caught up.</p>
+              <p className="text-sm text-ink-700">{t("You're all caught up.")}</p>
               <p className="text-xs text-ink-500 mt-1">
-                Scan, report and team events will show up here.
+                {t("Scan, report and team events will show up here.")}
               </p>
             </div>
           ) : (

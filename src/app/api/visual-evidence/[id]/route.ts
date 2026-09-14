@@ -1,4 +1,4 @@
-import { apiError, ApiError, requireSession } from "@/lib/api/context";
+import { apiError, ApiError, requirePermission, requireSession } from "@/lib/api/context";
 import { audit, getVisualEvidence, softDeleteVisualEvidence } from "@/lib/data/firestore";
 import { roleHasPermission } from "@/lib/entitlements";
 
@@ -7,7 +7,9 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const ctx = await requireSession();
+    // Metadata is scan data: readers need the same view_scans grant as the
+    // image-bytes and issue-evidence sibling routes.
+    const ctx = await requirePermission("view_scans");
     const { id } = await params;
     const evidence = await getVisualEvidence(ctx.workspaceId, id);
     if (!evidence) throw new ApiError(404, "not_found");

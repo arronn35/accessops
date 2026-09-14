@@ -25,6 +25,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Generate build metadata
+        run: npm run release:manifest
+
       - name: Lint
         run: npm run lint
 
@@ -39,3 +42,149 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  # Real Chromium + axe against local fixture pages. These are the only tests
+  # that exercise the actual scanning engine rather than a mock, so a green
+  # `verify` job alone does not prove the product's core works.
+  engine:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          # Keep in sync with "engines" in package.json.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate build metadata
+        run: npm run release:manifest
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Scanner engine integration tests
+        run: RUN_BROWSER_TESTS=1 npx vitest run src/lib/scanner/playwright-runner.integration.test.ts
+
+  # Public + route-mocked browser flows against a production build.
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          # Keep in sync with "engines" in package.json.
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate build metadata
+        run: npm run release:manifest
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      # playwright.config.ts builds and boots `next start` itself.
+      - name: E2E (marketing + ui-mocks)
+        run: npm run test:e2e -- --project=marketing --project=ui-mocks
+        env:
+          PUBLIC_CHECK_ENABLED: "true"
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+
+  authenticated:
+    # Never expose staging credentials to PR code, including same-repo PRs.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    concurrency:
+      group: authenticated-staging
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run release:manifest
+      - run: npx playwright install --with-deps chromium
+      - name: Required authenticated staging tests
+        env:
+          E2E_REQUIRE_AUTH: "true"
+          E2E_EXPECTED_FIREBASE_PROJECT_ID: ${{ vars.E2E_EXPECTED_FIREBASE_PROJECT_ID }}
+          E2E_FIREBASE_PROJECT_ID: ${{ secrets.E2E_FIREBASE_PROJECT_ID }}
+          E2E_FIREBASE_CLIENT_EMAIL: ${{ secrets.E2E_FIREBASE_CLIENT_EMAIL }}
+          E2E_FIREBASE_PRIVATE_KEY: ${{ secrets.E2E_FIREBASE_PRIVATE_KEY }}
+          NEXT_PUBLIC_FIREBASE_API_KEY: ${{ secrets.E2E_FIREBASE_API_KEY }}
+          E2E_FIXTURE_URL: ${{ vars.E2E_FIXTURE_URL }}
+          RELEASE_ENVIRONMENT: staging
+          SCAN_DISPATCH_MODE: poll
+          WORKER_HEALTH_PORT: "3101"
+        run: |
+          npx tsx scripts/check-authenticated-e2e.ts
+          export FIREBASE_PROJECT_ID="$E2E_FIREBASE_PROJECT_ID"
+          export FIREBASE_CLIENT_EMAIL="$E2E_FIREBASE_CLIENT_EMAIL"
+          export FIREBASE_PRIVATE_KEY="$E2E_FIREBASE_PRIVATE_KEY"
+          npm run release:manifest
+          npm run worker > /tmp/authenticated-worker.log 2>&1 &
+          worker_pid=$!
+          trap 'kill "$worker_pid" 2>/dev/null || true' EXIT
+          npx playwright test --project=authenticated
+          npx tsx scripts/check-authenticated-e2e.ts --verify-report
+      - name: Upload authenticated evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: authenticated-staging-evidence
+          path: |
+            playwright-report/
+            test-results/auth-fixture.json
+            src/generated/build-manifest.json
+          retention-days: 14
+          if-no-files-found: error
+
+  release-gate:
+    if: always()
+    needs: [verify, engine, e2e, authenticated]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Enforce required checks
+        env:
+          VERIFY_RESULT: ${{ needs.verify.result }}
+          ENGINE_RESULT: ${{ needs.engine.result }}
+          E2E_RESULT: ${{ needs.e2e.result }}
+          AUTH_RESULT: ${{ needs.authenticated.result }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          test "$VERIFY_RESULT" = success
+          test "$ENGINE_RESULT" = success
+          test "$E2E_RESULT" = success
+          if [ "$EVENT_NAME" = push ]; then
+            test "$AUTH_RESULT" = success
+          else
+            echo "::notice::Authenticated E2E skipped for PR security; this run is not release evidence."
+            echo "Authenticated E2E skipped for PR security. Release requires a successful main-branch staging run." >> "$GITHUB_STEP_SUMMARY"
+          fi

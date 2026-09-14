@@ -5,6 +5,7 @@ import {
 } from "@/lib/data/firestore";
 import { planForProductId, isEntitledStatus } from "@/lib/billing/polar";
 import { captureException } from "@/lib/observability";
+import { recordAnalyticsEvent } from "@/lib/analytics/firestore";
 
 /**
  * The subset of the Polar Subscription payload we read. Typed structurally
@@ -101,6 +102,16 @@ export async function POST(req: Request) {
       case "subscription.canceled":
       case "subscription.revoked":
         await applySubscription(event.data);
+        if (event.type === "subscription.active") {
+          const workspaceId = await resolveWorkspaceId(event.data);
+          const plan = planForProductId(event.data.productId);
+          if (workspaceId && plan) {
+            await recordAnalyticsEvent(
+              { event: "checkout_completed", properties: { plan } },
+              { source: "webhook", workspaceId }
+            );
+          }
+        }
         break;
       default:
         // Other events (orders, checkouts, …) need no entitlement change.

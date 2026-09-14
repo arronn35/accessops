@@ -7,6 +7,8 @@ import { renderCsv, renderHtml, renderJson } from "@/lib/reports/render";
 import { renderPdfFromHtml } from "@/lib/reports/pdf";
 import { buildReportInput } from "@/lib/reports/build-input";
 import { agencyBrandingEnabled, roleHasPermission } from "@/lib/entitlements";
+import { recordAnalyticsEvent } from "@/lib/analytics/firestore";
+import { afterResponse } from "@/lib/server/after-response";
 
 const FormatSchema = z.enum(["html", "csv", "json", "pdf"]);
 
@@ -41,6 +43,10 @@ export async function GET(
     });
     if (!input) throw new ApiError(404, "scan_not_found");
     await audit({ userId: ctx.userId, workspaceId: ctx.workspaceId, action: "report.exported", resourceType: "report", resourceId: id, metadata: { format } });
+    afterResponse(() => recordAnalyticsEvent(
+      { event: "report_exported", properties: { format } },
+      { source: "server", userId: ctx.userId, workspaceId: ctx.workspaceId }
+    ));
     const filenameBase = `percevia-report-${safeFilename(id)}`;
 
     if (format === "html") {

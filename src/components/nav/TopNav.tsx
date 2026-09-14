@@ -19,6 +19,7 @@ import {
 import { Logo } from "@/components/brand/Logo";
 import { NotificationsBell } from "@/components/nav/NotificationsBell";
 import { PrefetchLink } from "@/components/nav/PrefetchLink";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 import { firebaseClientAuth } from "@/lib/firebase/client";
 
 export function TopNav({
@@ -40,6 +41,11 @@ export function TopNav({
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const editInputRef = useRef<HTMLInputElement>(null);
   const displayName = userName || userEmail?.split("@")[0] || "Account";
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this nav re-renders on menu/edit states, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
   const initials = initialsFor(displayName, userEmail);
   const workspaceInitial = (workspaceName || "W").trim().charAt(0).toUpperCase();
 
@@ -85,11 +91,11 @@ export function TopNav({
   }
 
   return (
-    <header className="sticky top-0 z-30 bg-paper/85 backdrop-blur border-b border-rule">
+    <header className="safe-area-top sticky top-0 z-30 border-b border-rule bg-paper/85 backdrop-blur" data-i18n-skip>
       <div className="flex items-center justify-between gap-4 px-4 lg:px-8 h-16">
         <div className="flex items-center gap-3 lg:hidden">
-          <PrefetchLink href="/app" aria-label="percevia home">
-            <Logo variant="mark" className="size-10" />
+          <PrefetchLink href="/app" aria-label={t("percevia home")}>
+            <Logo variant="mark" decorative className="size-10" />
           </PrefetchLink>
         </div>
 
@@ -113,14 +119,14 @@ export function TopNav({
                   }
                 }}
                 disabled={savingWorkspace}
-                aria-label="Workspace name"
+                aria-label={t("Workspace name")}
                 className="text-sm bg-paper rounded px-1.5 h-7 border border-rule min-w-[160px]"
               />
               <button
                 type="button"
                 onClick={() => void saveWorkspaceName()}
                 disabled={savingWorkspace}
-                aria-label="Save workspace name"
+                aria-label={t("Save workspace name")}
                 className="size-7 inline-flex items-center justify-center text-green-700 hover:bg-canvas-2 rounded"
               >
                 <Check className="size-4" aria-hidden />
@@ -132,14 +138,14 @@ export function TopNav({
                   setWorkspaceDraft(workspaceName);
                   setWorkspaceError(null);
                 }}
-                aria-label="Cancel"
+                aria-label={t("Cancel")}
                 className="size-7 inline-flex items-center justify-center text-ink-500 hover:bg-canvas-2 rounded"
               >
                 <X className="size-4" aria-hidden />
               </button>
               {workspaceError && (
                 <span className="text-[11px] text-rose-700 ml-1">
-                  {workspaceError}
+                  {t(workspaceError)}
                 </span>
               )}
             </div>
@@ -164,11 +170,11 @@ export function TopNav({
 
         <div className="flex-1 max-w-md hidden md:block">
           <label className="relative block">
-            <span className="sr-only">Search scans, issues, pages</span>
+            <span className="sr-only">{t("Search scans, issues, pages")}</span>
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-ink-500" aria-hidden />
             <input
               type="search"
-              placeholder="Search scans, issues, pages…"
+              placeholder={t("Search scans, issues, pages…")}
               className="w-full h-10 pl-9 pr-3 border border-rule bg-canvas text-sm placeholder:text-ink-500"
             />
           </label>
@@ -182,7 +188,7 @@ export function TopNav({
               type="button"
               onClick={() => setOpen((v) => !v)}
               className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-canvas-2 min-h-[40px]"
-              aria-label="Account menu"
+              aria-label={t("Account menu")}
               aria-expanded={open}
             >
               <span className="size-8 rounded-full bg-purple-100 text-purple-600 inline-flex items-center justify-center text-xs font-semibold">
@@ -200,7 +206,7 @@ export function TopNav({
                   <p className="text-sm font-semibold text-ink-900 truncate">{displayName}</p>
                   {userEmail && <p className="text-xs text-ink-500 truncate">{userEmail}</p>}
                   <p className="text-[10px] uppercase tracking-wider text-purple-700 font-semibold mt-2">
-                    {plan} plan
+                    {plan} {t("plan")}
                   </p>
                 </div>
                 <MenuLink href="/app/settings/profile" icon={UserRound} label="Profile" />
@@ -213,7 +219,7 @@ export function TopNav({
                   className="w-full flex items-center gap-2 px-3 py-2 rounded-md text-sm text-rose-700 hover:bg-rose-50"
                 >
                   <LogOut className="size-4" aria-hidden />
-                  Sign out
+                  {t("Sign out")}
                 </button>
               </div>
             )}
@@ -233,13 +239,16 @@ function MenuLink({
   icon: ComponentType<{ className?: string; "aria-hidden"?: boolean }>;
   label: string;
 }) {
+  // Menu labels stay SOURCE English in props; translate at render so the
+  // DOM-mutating i18n observer never diverges from React (hydration #418).
+  const { t } = useLanguage();
   return (
     <PrefetchLink
       href={href}
       className="flex items-center gap-2 px-3 py-2 rounded-md text-sm text-ink-700 hover:bg-canvas-2"
     >
       <Icon className="size-4" aria-hidden />
-      {label}
+      {t(label)}
     </PrefetchLink>
   );
 }

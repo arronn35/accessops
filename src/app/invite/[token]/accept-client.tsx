@@ -1,10 +1,15 @@
 "use client";
 
 import { useState } from "react";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 export function AcceptInviteButton({ token }: { token: string }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Button text renders through React state (never the DOM-mutating i18n
+  // observer): busy toggles re-render it and mutated nodes throw hydration
+  // #418. data-i18n-skip keeps the observer off this subtree.
+  const { t } = useLanguage();
 
   async function accept() {
     setBusy(true);
@@ -29,16 +34,16 @@ export function AcceptInviteButton({ token }: { token: string }) {
   }
 
   return (
-    <div className="mt-5">
+    <div className="mt-5" data-i18n-skip>
       <button
         type="button"
         onClick={accept}
         disabled={busy}
         className="inline-flex h-11 px-4 rounded-md bg-navy-900 text-paper text-sm font-bold items-center justify-center disabled:opacity-50"
       >
-        {busy ? "Accepting…" : "Accept invitation"}
+        {busy ? t("Accepting…") : t("Accept invitation")}
       </button>
-      {err && <p className="text-xs text-rose-700 mt-3">{err}</p>}
+      {err && <p className="text-xs text-rose-700 mt-3">{t(err)}</p>}
     </div>
   );
 }

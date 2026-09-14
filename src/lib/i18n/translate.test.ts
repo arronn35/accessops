@@ -35,4 +35,28 @@ describe("translateMessage", () => {
     expect(translateMessage("Next.js", "tr")).toBe("Next.js");
     expect(hasTurkishTranslation("Save changes")).toBe(true);
   });
+
+  it("substitutes {vars} after translation", () => {
+    expect(
+      translateMessage("{count} scans per day", "tr", { count: 50 })
+    ).toBe("Günde 50 tarama");
+    expect(
+      translateMessage("Up to {count} pages per scan", "tr", { count: 3 })
+    ).toBe("Tarama başına en fazla 3 sayfa");
+  });
+
+  it("substitutes vars in English fallback without a catalog entry", () => {
+    expect(
+      translateMessage("{count} widgets", "en", { count: 2 })
+    ).toBe("2 widgets");
+    expect(
+      translateMessage("An untranslated {thing}", "tr", { thing: "sprocket" })
+    ).toBe("An untranslated sprocket");
+  });
+
+  it("leaves unknown placeholders untouched", () => {
+    expect(translateMessage("{count} scans per day", "tr")).toBe(
+      "Günde {count} tarama"
+    );
+  });
 });

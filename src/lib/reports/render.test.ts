@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { renderHtml, renderCsv, renderJson, type ReportInput } from "./render";
+import { renderHtml, renderCsv, renderJson, spreadsheetSafe, type ReportInput } from "./render";
 
 function fakeInput(overrides: Partial<ReportInput> = {}): ReportInput {
   return {
@@ -123,6 +123,39 @@ describe("renderCsv", () => {
     );
     expect(csv.split("\n")[0]).toMatch(/group_id.*group_title.*group_affected_count/);
     expect(csv).toMatch(/Buttons missing names/);
+  });
+
+  it("neutralizes formula prefixes in untrusted cells", () => {
+    const csv = renderCsv(
+      fakeInput({
+        issues: [
+          {
+            ...fakeInput().issues[0],
+            pageTitle: "=1+1",
+            htmlSnippet: "@SUM(A1:A2)",
+            description: "+2+3",
+          },
+        ],
+      })
+    );
+    expect(csv).toMatch(/"'=1\+1"/);
+    expect(csv).toMatch(/"'@SUM\(A1:A2\)"/);
+    expect(csv).toMatch(/"'\+2\+3"/);
+  });
+
+  it("neutralizes concealed prefixes behind whitespace and control chars", () => {
+    const csv = renderCsv(
+      fakeInput({
+        issues: [{ ...fakeInput().issues[0], pageTitle: "  \t=1+1" }],
+      })
+    );
+    expect(csv).toMatch(/"'  \t=1\+1"/);
+  });
+
+  it("leaves benign titles untouched", () => {
+    expect(spreadsheetSafe("Checkout")).toBe("Checkout");
+    expect(spreadsheetSafe("")).toBe("");
+    expect(spreadsheetSafe("-well-known")).toBe("'-well-known");
   });
 });
 

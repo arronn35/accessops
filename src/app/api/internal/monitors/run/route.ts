@@ -12,6 +12,7 @@ import {
 import { scanCapsForPlan, normalizePlan } from "@/lib/entitlements";
 import { pageJobsEnabled } from "@/lib/data/page-jobs";
 import { computeNextRunAt } from "@/lib/monitors/schedule";
+import { internalRequestAuthorized } from "@/lib/api/internal-auth";
 import { captureException } from "@/lib/observability";
 import {
   enqueueScanTask,
@@ -31,10 +32,8 @@ const MONITOR_RETRY_MS = Math.max(
   Number(process.env.MONITOR_SCHEDULER_RETRY_MS ?? 15 * 60_000)
 );
 
-function authorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+async function authorized(req: Request): Promise<boolean> {
+  return internalRequestAuthorized(req);
 }
 
 async function runDueMonitors(): Promise<{
@@ -143,7 +142,7 @@ async function runDueMonitors(): Promise<{
 }
 
 export async function GET(req: Request) {
-  if (!authorized(req)) {
+  if (!(await authorized(req))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   if (!firebaseAdminConfigured()) {

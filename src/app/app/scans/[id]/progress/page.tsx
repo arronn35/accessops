@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { getCurrentWorkspaceOrRedirect } from "@/lib/server/workspace";
+import { requirePagePermission } from "@/lib/server/workspace";
 import { getScanJob } from "@/lib/data/firestore";
 import { ProgressClient } from "./progress-client";
 
@@ -12,7 +12,7 @@ export default async function ScanProgressPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const ctx = await getCurrentWorkspaceOrRedirect();
+  const ctx = await requirePagePermission("view_scans");
 
   const job = await getScanJob(ctx.workspace.id, id);
 

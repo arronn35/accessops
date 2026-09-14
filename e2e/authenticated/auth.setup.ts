@@ -1,3 +1,5 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { validateAuthenticatedE2E } from "../../src/lib/testing/authenticated-e2e";
 /**
  * Authenticated-lane setup: signs in a deterministic staging user without
  * any public test-login endpoint.
@@ -20,7 +22,7 @@ import { getAuth } from "firebase-admin/auth";
 import { E2E_USER, STORAGE_STATE_PATH } from "./fixtures";
 
 setup("create authenticated session", async ({ request, baseURL }) => {
-  const projectId = process.env.E2E_FIREBASE_PROJECT_ID!;
+  const { projectId } = validateAuthenticatedE2E();
   const clientEmail = process.env.E2E_FIREBASE_CLIENT_EMAIL!;
   const privateKey = process.env.E2E_FIREBASE_PRIVATE_KEY!.replace(/\\n/g, "\n");
   const apiKey = process.env.NEXT_PUBLIC_FIREBASE_API_KEY!;
@@ -33,7 +35,7 @@ setup("create authenticated session", async ({ request, baseURL }) => {
     const auth = getAuth(app);
     await auth
       .createUser({ uid: E2E_USER.uid, email: E2E_USER.email, displayName: E2E_USER.name })
-      .catch(() => undefined); // already exists — fine, the seed is reusable
+      .catch((error: { code?: string }) => { if (error.code !== "auth/uid-already-exists" && error.code !== "auth/email-already-exists") throw new Error("Failed to initialize staging auth user"); });
     const customToken = await auth.createCustomToken(E2E_USER.uid);
 
     const exchange = await request.post(
@@ -43,12 +45,18 @@ setup("create authenticated session", async ({ request, baseURL }) => {
     expect(exchange.ok(), "custom token exchange should succeed").toBe(true);
     const { idToken } = (await exchange.json()) as { idToken: string };
 
+    const decoded = await auth.verifyIdToken(idToken);
+    expect(decoded.aud).toBe(projectId);
+    expect(decoded.uid).toBe(E2E_USER.uid);
+
     const session = await request.post(`${baseURL}/api/auth/session`, {
       data: { idToken, callbackUrl: "/app" },
     });
     expect(session.ok(), "session creation should succeed").toBe(true);
 
     await request.storageState({ path: STORAGE_STATE_PATH });
+    await mkdir("test-results", { recursive: true });
+    await writeFile("test-results/auth-fixture.json", JSON.stringify({ projectId, fixtureInitialized: true, initializedAt: new Date().toISOString() }));
   } finally {
     await deleteApp(app);
   }

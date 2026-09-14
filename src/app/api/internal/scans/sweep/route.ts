@@ -16,6 +16,8 @@ import { listClaimableDataDeletionJobs } from "@/lib/data/deletion";
 import { aggregateScan } from "@/lib/scanner/persistence";
 import { enqueueScanTask, scanDispatchMode } from "@/lib/scanner/dispatch";
 import { firebaseAdminConfigured } from "@/lib/firebase/admin";
+import { internalRequestAuthorized } from "@/lib/api/internal-auth";
+import { dispatchMonitorRegressionAlerts } from "@/lib/server/monitor-alerts";
 import { captureException } from "@/lib/observability";
 
 export const dynamic = "force-dynamic";
@@ -38,13 +40,12 @@ const SWEEP_MAX_FANOUT = Math.max(
  * finished scans, and re-enqueues a Cloud Task so the worker wakes for any
  * still-pending work. The heavy Playwright engine never runs here.
  *
- * Auth: when CRON_SECRET is set, require it as a bearer token (Cloud Scheduler
- * sends it); reject everything else so the sweep cannot be triggered publicly.
+ * Auth: see `@/lib/api/internal-auth` — a Google OIDC token from the
+ * Scheduler service account when configured, otherwise the CRON_SECRET bearer
+ * token; reject everything else so the sweep cannot be triggered publicly.
  */
-function authorized(req: Request): boolean {
-  const secret = process.env.CRON_SECRET;
-  if (!secret) return process.env.NODE_ENV !== "production";
-  return req.headers.get("authorization") === `Bearer ${secret}`;
+async function authorized(req: Request): Promise<boolean> {
+  return internalRequestAuthorized(req);
 }
 
 async function runSweep(): Promise<{
@@ -52,6 +53,7 @@ async function runSweep(): Promise<{
   aggregated: number;
   enqueued: number;
   pending: number;
+  alerts: { evaluated: number; alerted: number; skipped: number };
 }> {
   let applied = 0;
   let aggregated = 0;
@@ -141,11 +143,22 @@ async function runSweep(): Promise<{
     }
   }
 
-  return { applied, aggregated, enqueued, pending };
+  // Monitor runs become notifications here rather than in the worker: the
+  // decision needs the previous scan's stored groups, and this job already
+  // reconciles finished work. It is idempotent, so a repeated sweep is safe.
+  let alerts = { evaluated: 0, alerted: 0, skipped: 0 };
+  try {
+    alerts = await dispatchMonitorRegressionAlerts();
+  } catch (err) {
+    // Notification failure must never fail the sweep's crash-recovery duties.
+    void captureException(err, { scope: "scan.sweep.alerts" });
+  }
+
+  return { applied, aggregated, enqueued, pending, alerts };
 }
 
 export async function GET(req: Request) {
-  if (!authorized(req)) {
+  if (!(await authorized(req))) {
     return Response.json({ error: "unauthorized" }, { status: 401 });
   }
   if (!firebaseAdminConfigured()) {

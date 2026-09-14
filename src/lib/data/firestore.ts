@@ -41,6 +41,7 @@ import type {
   AiExplanationRecord,
   AuditLog,
   IssueGroup,
+  ManualReviewRecord,
   Monitor,
   MonitorFrequency,
   PageJob,
@@ -172,9 +173,14 @@ export function defaultUsageLimits(
   };
 }
 
-export async function ensureUserAndWorkspace(token: DecodedIdToken): Promise<WorkspaceContext> {
+export async function ensureUserAndWorkspace(
+  token: DecodedIdToken
+): Promise<WorkspaceContext & { isNewUser: boolean }> {
   const userRef = db().collection("users").doc(token.uid);
   const snap = await userRef.get();
+  // Captured before the write below, which is what makes it possible to tell a
+  // first sign-in from every later one.
+  const isNewUser = !snap.exists;
   const email = token.email ?? `${token.uid}@firebase.local`;
   const displayName =
     (typeof token.name === "string" && token.name) ||
@@ -250,7 +256,7 @@ export async function ensureUserAndWorkspace(token: DecodedIdToken): Promise<Wor
 
   const ctx = await getWorkspaceContext(token.uid);
   if (!ctx) throw new Error("workspace_bootstrap_failed");
-  return ctx;
+  return { ...ctx, isNewUser };
 }
 
 export async function getWorkspaceContext(userId: string): Promise<WorkspaceContext | null> {
@@ -310,7 +316,12 @@ export async function getWorkspace(workspaceId: string): Promise<Workspace | nul
 
 export async function updateWorkspace(
   workspaceId: string,
-  patch: Partial<Pick<Workspace, "name" | "companyName" | "framework" | "targetStandard" | "region" | "plan">>
+  patch: Partial<
+    Pick<
+      Workspace,
+      "name" | "companyName" | "framework" | "targetStandard" | "region" | "plan" | "persona"
+    >
+  >
 ) {
   await db()
     .collection("workspaces")
@@ -578,6 +589,23 @@ export async function listScans(workspaceId: string, limit = 20): Promise<ScanJo
     .limit(limit)
     .get();
   return snap.docs.map((d) => readDoc<ScanJob>(d.id, d.data())!);
+}
+
+/** Indexed site history, paged without a workspace-wide 50-scan cutoff. */
+export async function* listPriorComparisonScans(workspaceId: string, baseUrl: string, before: Date): AsyncGenerator<ScanJob> {
+  const query = scanRef(workspaceId, "unused").parent
+    .where("baseUrl", "==", baseUrl)
+    .where("status", "==", "completed")
+    .where("createdAt", "<", before)
+    .where("createdAt", ">=", new Date(before.getTime() - 365 * 24 * 60 * 60 * 1000))
+    .orderBy("createdAt", "desc");
+  let cursor: QueryDocumentSnapshot | undefined;
+  for (;;) {
+    const page = await (cursor ? query.startAfter(cursor) : query).limit(50).get();
+    if (page.empty) return;
+    for (const doc of page.docs) yield readDoc<ScanJob>(doc.id, doc.data())!;
+    cursor = page.docs.at(-1);
+  }
 }
 
 export async function countInflightScans(
@@ -1663,6 +1691,66 @@ export async function listIssueGroups(
   return snap.docs.map((d) => readDoc<IssueGroup>(d.id, d.data())!);
 }
 
+/**
+ * Manual-review records for a scan, oldest check first by definition order.
+ * Returns [] for a scan nobody has reviewed yet.
+ */
+export async function listManualReviews(
+  workspaceId: string,
+  scanId: string
+): Promise<ManualReviewRecord[]> {
+  const snap = await scanRef(workspaceId, scanId).collection("manualReviews").get();
+  return snap.docs.map((d) => readDoc<ManualReviewRecord>(d.id, d.data())!);
+}
+
+/**
+ * Record one reviewer's verdict on one check.
+ *
+ * Keyed by checkId so re-reviewing updates in place rather than appending a
+ * second opinion; `revision` counts how many times the verdict changed, and
+ * `createdAt` survives from the first review so the report can show how long a
+ * check has been settled. The caller supplies the reviewer identity from the
+ * session — it is never taken from the request body.
+ */
+export async function upsertManualReview(
+  workspaceId: string,
+  scanId: string,
+  input: {
+    checkId: string;
+    status: ManualReviewRecord["status"];
+    notes: string | null;
+    wcagCriteria: string[];
+    reviewerUserId: string;
+    reviewerName: string | null;
+    reviewerEmail: string | null;
+  }
+): Promise<ManualReviewRecord> {
+  const ref = scanRef(workspaceId, scanId).collection("manualReviews").doc(input.checkId);
+  return db().runTransaction(async (tx) => {
+    const parent = await tx.get(scanRef(workspaceId, scanId));
+    if (!parent.exists || parent.data()?.deletionStartedAt) throw new Error("scan_unavailable_for_review");
+    const snap = await tx.get(ref);
+    const existing = readDoc<ManualReviewRecord>(snap.id, snap.data());
+    const at = now();
+    const row: ManualReviewRecord = {
+      id: input.checkId,
+      scanJobId: scanId,
+      checkId: input.checkId,
+      status: input.status,
+      notes: input.notes,
+      wcagCriteria: input.wcagCriteria,
+      reviewerUserId: input.reviewerUserId,
+      reviewerName: input.reviewerName,
+      reviewerEmail: input.reviewerEmail,
+      revision: (existing?.revision ?? 0) + 1,
+      createdAt: existing?.createdAt ?? at,
+      updatedAt: at,
+    };
+    tx.set(ref, row);
+    return row;
+  });
+}
+
 export async function getScanSummary(
   workspaceId: string,
   scanId: string
@@ -1844,9 +1932,16 @@ export async function audit(input: {
   resourceType?: string | null;
   resourceId?: string | null;
   metadata?: unknown;
+  /**
+   * Stable document id. Entries that may legitimately be produced more than
+   * once for the same real-world event (a retried monitor run, a sweep that
+   * re-evaluates the same scan) pass a key so the repeat overwrites rather
+   * than appending a duplicate notification. Omit for ordinary events.
+   */
+  dedupeKey?: string;
 }) {
   const row: AuditLog = {
-    id: id(),
+    id: input.dedupeKey ?? id(),
     userId: input.userId ?? null,
     workspaceId: input.workspaceId ?? null,
     action: input.action,
@@ -2395,6 +2490,7 @@ export async function updateMonitor(
       | "nextRunAt"
       | "lastRunAt"
       | "lastScanId"
+      | "lastAlertedScanId"
       | "alertChannels"
       | "alertThreshold"
     >
@@ -2436,6 +2532,26 @@ export async function listDueMonitors(
     .limit(limit)
     .get();
   return snap.docs.map((d) => readDoc<Monitor>(d.id, d.data())!);
+}
+
+/**
+ * Monitors whose most recent scan has not yet been evaluated for regressions.
+ *
+ * Bounded by design: the sweep runs every couple of minutes, so this must stay
+ * a small, indexed read rather than a walk of every monitor. Filtering on
+ * lastAlertedScanId happens in the caller because Firestore cannot express
+ * "field A differs from field B".
+ */
+export async function listMonitorsWithUnalertedScans(limit = 25): Promise<Monitor[]> {
+  const snap = await db()
+    .collectionGroup("monitors")
+    .where("status", "==", "active")
+    .orderBy("lastRunAt", "desc")
+    .limit(limit)
+    .get();
+  return snap.docs
+    .map((d) => readDoc<Monitor>(d.id, d.data())!)
+    .filter((m) => m.lastScanId && m.lastScanId !== (m.lastAlertedScanId ?? null));
 }
 
 /**
@@ -2581,6 +2697,9 @@ export async function findPublicReport(token: string): Promise<{
     getReport(share.workspaceId, share.reportId),
   ]);
   if (!workspace || !report) return null;
+  // Defense in depth: a stale mapping left behind by a failed unshare must
+  // not serve a report that no longer carries this token.
+  if (report.publicShareToken !== token || report.sharedAt == null) return null;
   return { workspace, report };
 }
 
@@ -2622,23 +2741,37 @@ export async function setReportShare(
   token: string | null
 ) {
   const reportRef = db().collection("workspaces").doc(workspaceId).collection("reports").doc(reportId);
-  if (token) {
-    await db().collection("publicReportShares").doc(token).set({
-      workspaceId,
-      reportId,
-      createdAt: now(),
-    });
-    await reportRef.set({ publicShareToken: token, sharedAt: now(), updatedAt: now() }, { merge: true });
-  } else {
-    const report = await getDoc<Report>(reportRef);
-    if (report?.publicShareToken) {
-      await db().collection("publicReportShares").doc(report.publicShareToken).delete().catch(() => {});
+  // Report doc and share mapping are a single authorization state: change
+  // them atomically so a failed mapping delete can never leave a revoked
+  // token serving. Transaction errors propagate — the route must not return
+  // success or write an "unshared" audit on failure.
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(reportRef);
+    const report = readDoc<Report>(snap.id, snap.data());
+    if (!report) throw new Error("report_not_found");
+    const previousToken = report.publicShareToken;
+    if (previousToken && previousToken !== token) {
+      tx.delete(db().collection("publicReportShares").doc(previousToken));
     }
-    await reportRef.set(
-      { publicShareToken: null, sharedAt: null, updatedAt: now() },
-      { merge: true }
-    );
-  }
+    if (token) {
+      tx.set(db().collection("publicReportShares").doc(token), {
+        workspaceId,
+        reportId,
+        createdAt: now(),
+      });
+      tx.set(
+        reportRef,
+        { publicShareToken: token, sharedAt: now(), updatedAt: now() },
+        { merge: true }
+      );
+    } else {
+      tx.set(
+        reportRef,
+        { publicShareToken: null, sharedAt: null, updatedAt: now() },
+        { merge: true }
+      );
+    }
+  });
 }
 
 export async function getInvitationByToken(

@@ -4,6 +4,12 @@ steps:
       - build
       - --file
       - Dockerfile.worker
+      - --build-arg
+      - BUILD_COMMIT_SHA=${_COMMIT_SHA}
+      - --build-arg
+      - RELEASE_ENVIRONMENT=${_ENVIRONMENT}
+      - --build-arg
+      - FIREBASE_PROJECT_ID=${PROJECT_ID}
       - --tag
       - ${_IMAGE}
       - .
@@ -15,3 +21,7 @@ images:
   - ${_IMAGE}
 options:
   logging: CLOUD_LOGGING_ONLY
+
+substitutions:
+  _ENVIRONMENT: staging
+  _COMMIT_SHA: ""

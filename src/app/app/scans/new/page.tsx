@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 import { ArrowRight, Globe, Loader2, Sparkles, AlertCircle, ListChecks } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Input, Label, FieldHint } from "@/components/ui/Input";
@@ -17,6 +17,8 @@ import {
 } from "@/lib/scanner/estimate";
 import { SCAN_INTERACTIVE_STATES } from "@/lib/scanner/types";
 import { cn } from "@/lib/utils";
+import { safePublicScanUrl } from "@/lib/navigation/scan-handoff";
+import { useLanguage } from "@/components/i18n/LanguageProvider";
 
 const SCAN_TYPES = [
   { id: "single", label: "Single page", description: "Scan one URL." },
@@ -26,8 +28,24 @@ const SCAN_TYPES = [
 ] as const;
 
 export default function NewScanPage() {
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this component re-renders on navigation state changes, and
+  // provider-mutated text nodes diverge from React's virtual DOM and throw
+  // hydration #418. data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
+  return (
+    <span data-i18n-skip className="contents">
+      <Suspense fallback={<div className="px-4 py-8 text-sm text-ink-600 lg:px-8">{t("Preparing scan…")}</div>}>
+        <NewScanForm />
+      </Suspense>
+    </span>
+  );
+}
+
+function NewScanForm() {
   const router = useRouter();
-  const [url, setUrl] = useState("");
+  const searchParams = useSearchParams();
+  const [url, setUrl] = useState(() => safePublicScanUrl(searchParams.get("url")) ?? "");
   const [sitemapUrl, setSitemapUrl] = useState("");
   const [manualUrls, setManualUrls] = useState("");
   const [type, setType] = useState<"single" | "multi" | "sitemap" | "manual">("single");
@@ -37,6 +55,11 @@ export default function NewScanPage() {
   const [screenshots, setScreenshots] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Rendered copy goes through React state (never the DOM-mutating i18n
+  // observer): this form re-renders on every keystroke, and provider-mutated
+  // text nodes diverge from React's virtual DOM and throw hydration #418.
+  // data-i18n-skip keeps the observer off this subtree entirely.
+  const { t } = useLanguage();
 
   const parsedManualUrls = manualUrls
     .split(/\r?\n/)
@@ -111,24 +134,23 @@ export default function NewScanPage() {
   }
 
   return (
-    <div className="px-4 lg:px-8 py-8 max-w-3xl">
+    <div className="px-4 lg:px-8 py-8 max-w-3xl" data-i18n-skip>
       <header className="mb-6">
-        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">New scan</p>
-        <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">Start a scan</h1>
+        <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mb-1">{t("New scan")}</p>
+        <h1 className="text-2xl lg:text-3xl font-semibold text-ink-900 tracking-tight">{t("Start a scan")}</h1>
         <p className="text-sm text-ink-600 mt-1 max-w-xl">
-          We&apos;ll run automated accessibility checks and capture findings. Visual evidence
-          screenshots are off by default. AI explanations require workspace consent.
+          {t("We'll run automated accessibility checks and capture findings. Visual evidence screenshots are off by default. AI explanations require workspace consent.")}
         </p>
       </header>
 
       <form onSubmit={onSubmit} className="space-y-5">
         <Card>
           <CardHeader>
-            <CardTitle>What to scan</CardTitle>
+            <CardTitle>{t("What to scan")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
             <div>
-              <Label htmlFor="url" required>Website URL</Label>
+              <Label htmlFor="url" required>{t("Website URL")}</Label>
               <div className="relative">
                 <Globe className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-ink-500" aria-hidden />
                 <Input
@@ -143,18 +165,18 @@ export default function NewScanPage() {
                 />
               </div>
               <FieldHint>
-                Public URL with https:// scheme. We block private and internal addresses.
+                {t("Public URL with https:// scheme. We block private and internal addresses.")}
               </FieldHint>
             </div>
 
             <fieldset>
-              <legend className="block text-sm font-medium text-ink-700 mb-2">Scan type</legend>
+              <legend className="block text-sm font-medium text-ink-700 mb-2">{t("Scan type")}</legend>
               <div className="grid grid-cols-2 gap-2">
-                {SCAN_TYPES.map((t) => {
-                  const active = type === t.id;
+                {SCAN_TYPES.map((scanType) => {
+                  const active = type === scanType.id;
                   return (
                     <label
-                      key={t.id}
+                      key={scanType.id}
                       className={cn(
                         "rounded-md p-3 ring-1 bg-paper transition-colors text-sm",
                         "cursor-pointer",
@@ -166,10 +188,10 @@ export default function NewScanPage() {
                         name="scan-type"
                         className="sr-only"
                         checked={active}
-                        onChange={() => setType(t.id)}
+                        onChange={() => setType(scanType.id)}
                       />
-                      <p className="font-medium text-ink-900">{t.label}</p>
-                      <p className="text-xs text-ink-600 mt-1 leading-snug">{t.description}</p>
+                      <p className="font-medium text-ink-900">{t(scanType.label)}</p>
+                      <p className="text-xs text-ink-600 mt-1 leading-snug">{t(scanType.description)}</p>
                     </label>
                   );
                 })}
@@ -178,7 +200,7 @@ export default function NewScanPage() {
 
             {type === "sitemap" && (
               <div>
-                <Label htmlFor="sitemap-url">Sitemap URL</Label>
+                <Label htmlFor="sitemap-url">{t("Sitemap URL")}</Label>
                 <div className="relative">
                   <ListChecks className="absolute left-3 top-1/2 -translate-y-1/2 size-4 text-ink-500" aria-hidden />
                   <Input
@@ -191,14 +213,14 @@ export default function NewScanPage() {
                   />
                 </div>
                 <FieldHint>
-                  Optional. Leave blank to use /sitemap.xml on the website URL origin.
+                  {t("Optional. Leave blank to use /sitemap.xml on the website URL origin.")}
                 </FieldHint>
               </div>
             )}
 
             {type === "manual" && (
               <div>
-                <Label htmlFor="manual-urls" required>Manual URLs</Label>
+                <Label htmlFor="manual-urls" required>{t("Manual URLs")}</Label>
                 <textarea
                   id="manual-urls"
                   value={manualUrls}
@@ -209,13 +231,13 @@ export default function NewScanPage() {
                   required
                 />
                 <FieldHint>
-                  One URL per line. URLs must be public and on the same origin as the website URL.
+                  {t("One URL per line. URLs must be public and on the same origin as the website URL.")}
                 </FieldHint>
               </div>
             )}
 
             <div>
-              <Label htmlFor="max-pages">Max pages</Label>
+              <Label htmlFor="max-pages">{t("Max pages")}</Label>
               <Input
                 id="max-pages"
                 type="number"
@@ -225,7 +247,7 @@ export default function NewScanPage() {
                 max={1000}
               />
               <FieldHint>
-                Free plan: up to 3 pages. Starter and above raise the cap.
+                {t("Free plan: up to 3 pages. Starter and above raise the cap.")}
               </FieldHint>
             </div>
           </CardContent>
@@ -234,7 +256,7 @@ export default function NewScanPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <Sparkles className="size-4 text-purple-600" aria-hidden /> AI &amp; capture options
+              <Sparkles className="size-4 text-purple-600" aria-hidden /> {t("AI & capture options")}
             </CardTitle>
           </CardHeader>
           <CardContent className="divide-y divide-line">
@@ -242,8 +264,8 @@ export default function NewScanPage() {
               <Switch
                 checked={aiExplain}
                 onChange={(e) => setAiExplain(e.target.checked)}
-                label="AI explanations &amp; remediation"
-                description="Generate plain-language explanations and code fixes for each finding. Requires workspace AI consent."
+                label={t("AI explanations & remediation")}
+                description={t("Generate plain-language explanations and code fixes for each finding. Requires workspace AI consent.")}
               />
             </div>
             <div className="pt-4">
@@ -252,23 +274,23 @@ export default function NewScanPage() {
                 onChange={(e) => setScreenshots(e.target.checked)}
                 label={
                   <span className="flex items-center gap-2">
-                    Capture visual evidence screenshots
+                    {t("Capture visual evidence screenshots")}
                     <span className="text-[10px] uppercase tracking-wider text-amber-700 font-semibold">
-                      Off by default
+                      {t("Off by default")}
                     </span>
                   </span>
                 }
-                description="Screenshots help identify where accessibility issues appear. They may contain visible page content, so enable this only for websites you are authorized to audit."
+                description={t("Screenshots help identify where accessibility issues appear. They may contain visible page content, so enable this only for websites you are authorized to audit.")}
               />
               <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-                {COMPLIANCE_COPY.SCREENSHOT_NOTICE}
+                {t(COMPLIANCE_COPY.SCREENSHOT_NOTICE)}
               </p>
             </div>
           </CardContent>
         </Card>
 
-        <AlertCallout tone="warning" title="Privacy notice">
-          {COMPLIANCE_COPY.SCAN_PRIVACY}
+        <AlertCallout tone="warning" title={t("Privacy notice")}>
+          {t(COMPLIANCE_COPY.SCAN_PRIVACY)}
         </AlertCallout>
 
         <Card>
@@ -276,8 +298,8 @@ export default function NewScanPage() {
             <Checkbox
               checked={permission}
               onChange={(e) => setPermission(e.target.checked)}
-              label={<span className="font-medium">{COMPLIANCE_COPY.SCAN_PERMISSION}</span>}
-              description="By starting this scan you confirm you have authorization from the site owner."
+              label={<span className="font-medium">{t(COMPLIANCE_COPY.SCAN_PERMISSION)}</span>}
+              description={t("By starting this scan you confirm you have authorization from the site owner.")}
             />
           </CardContent>
         </Card>
@@ -285,20 +307,18 @@ export default function NewScanPage() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <ListChecks className="size-4 text-ink-500" aria-hidden /> Estimated scope
+              <ListChecks className="size-4 text-ink-500" aria-hidden /> {t("Estimated scope")}
             </CardTitle>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <ScopeStat label="Pages" value={`${estimatedPages}`} />
-              <ScopeStat label="Viewports" value={`${VIEWPORT_COUNT}`} hint="Desktop · Tablet · Mobile" />
-              <ScopeStat label="Analysis passes" value={`${totalPasses}`} hint={`${passesPerPage}/page`} />
-              <ScopeStat label="Est. time" value={`~${estLabel}`} hint={screenshots ? "incl. screenshots" : undefined} />
+              <ScopeStat t={t} label="Pages" value={`${estimatedPages}`} />
+              <ScopeStat t={t} label="Viewports" value={`${VIEWPORT_COUNT}`} hint={t("Desktop · Tablet · Mobile")} />
+              <ScopeStat t={t} label="Analysis passes" value={`${totalPasses}`} hint={t("{count}/page", { count: passesPerPage })} />
+              <ScopeStat t={t} label="Est. time" value={`~${estLabel}`} hint={screenshots ? t("incl. screenshots") : undefined} />
             </div>
             <p className="text-xs text-ink-500 mt-3 leading-relaxed">
-              Each page is analysed across {VIEWPORT_COUNT} viewports and {SCAN_INTERACTIVE_STATES.length} interactive
-              states ({ANALYSIS_PASSES_PER_VIEWPORT} passes per viewport). Page count may be lower if the crawler
-              finds fewer same-domain links. Time is a rough estimate, not a guarantee.
+              {t("Each page is analysed across")} {VIEWPORT_COUNT} {t("viewports and")} {SCAN_INTERACTIVE_STATES.length} {t("interactive states")} ({ANALYSIS_PASSES_PER_VIEWPORT} {t("passes per viewport")}). {t("Page count may be lower if the crawler finds fewer same-domain links. Time is a rough estimate, not a guarantee.")}
             </p>
           </CardContent>
         </Card>
@@ -306,14 +326,14 @@ export default function NewScanPage() {
         <NoGuaranteeBanner variant="compact" />
 
         {error && (
-          <AlertCallout tone="danger" icon={AlertCircle} title="Couldn't start scan">
-            {error}
+          <AlertCallout tone="danger" icon={AlertCircle} title={t("Couldn't start scan")}>
+            {t(error)}
           </AlertCallout>
         )}
 
         <div className="flex items-center justify-between pt-2">
           <Link href="/app" className="text-sm text-ink-600 hover:text-ink-900">
-            ← Cancel
+            {t("← Cancel")}
           </Link>
           <button
             type="submit"
@@ -327,11 +347,11 @@ export default function NewScanPage() {
           >
             {submitting ? (
               <>
-                <Loader2 className="size-4 animate-spin" aria-hidden /> Starting scan…
+                <Loader2 className="size-4 animate-spin" aria-hidden /> {t("Starting scan…")}
               </>
             ) : (
               <>
-                Start scan <ArrowRight className="size-4" aria-hidden />
+                {t("Start scan")} <ArrowRight className="size-4" aria-hidden />
               </>
             )}
           </button>
@@ -345,15 +365,17 @@ function ScopeStat({
   label,
   value,
   hint,
+  t,
 }: {
   label: string;
   value: string;
   hint?: string;
+  t: (message: string) => string;
 }) {
   return (
-    <div className="rounded-md ring-1 ring-line bg-canvas-2 p-3">
+    <div className="rounded-md ring-1 ring-line bg-canvas-2 p-3" data-i18n-skip>
       <p className="text-lg font-semibold text-ink-900 tabular-nums leading-none">{value}</p>
-      <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mt-1.5">{label}</p>
+      <p className="text-[11px] uppercase tracking-wider text-ink-500 font-semibold mt-1.5">{t(label)}</p>
       {hint && <p className="text-[11px] text-ink-500 mt-0.5">{hint}</p>}
     </div>
   );

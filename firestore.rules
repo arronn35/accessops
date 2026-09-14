@@ -37,6 +37,12 @@ service cloud.firestore {
     // written by the AI routes and read by server components via Admin SDK.
     // No client rule is granted.
 
+    // First-party product analytics are written and read only through the
+    // Admin SDK. Client SDK access is deliberately denied.
+    match /analyticsEvents/{eventId} {
+      allow read, write: if false;
+    }
+
     // Everything else is denied to clients (no catch-all allow).
   }
 }

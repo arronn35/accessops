@@ -19,7 +19,7 @@ import { translateWithCatalog, type TranslationCatalog } from "@/lib/i18n/runtim
 interface LanguageContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
-  t: (message: string) => string;
+  t: (message: string, vars?: Record<string, string | number>) => string;
 }
 
 const LanguageContext = createContext<LanguageContextValue | null>(null);
@@ -200,7 +200,7 @@ export function LanguageProvider({
   const value = useMemo<LanguageContextValue>(() => ({
     locale,
     setLocale,
-    t: (message) => translateWithCatalog(message, locale, catalog),
+    t: (message, vars) => translateWithCatalog(message, locale, catalog, vars),
   }), [catalog, locale, setLocale]);
 
   return <LanguageContext.Provider value={value}>{children}</LanguageContext.Provider>;

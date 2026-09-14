@@ -1,3 +1,4 @@
+import { releaseManifest } from "@/lib/release/manifest";
 /**
  * Percevia AI browser scan worker.
  *
@@ -428,6 +429,7 @@ function startHealthServer(): void {
       JSON.stringify({
         ok,
         service: "percevia-scan-worker",
+        release: releaseManifest(),
         workerId: WORKER_ID,
         inflight: inflight.size,
         shuttingDown,

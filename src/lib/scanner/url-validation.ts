@@ -141,8 +141,9 @@ export function isBlockedIp(ip: string): boolean {
 
 /**
  * Resolve a hostname to IPs and ensure none are blocked.
- * Returns the resolved IPs for the caller to (optionally) pin the
- * Playwright navigation against.
+ * Throws when any resolved address must not be reached. The returned list
+ * is informational only — it is NOT pinned to any later connection, so
+ * callers must re-validate before each fetch/navigation.
  */
 export async function resolveAndCheckHost(host: string): Promise<string[]> {
   // Strip surrounding brackets for IPv6 literals.
@@ -176,7 +177,6 @@ export interface ValidatedUrl {
   normalized: string; // canonical form we'll persist
   host: string;
   origin: string;
-  ips: string[];
 }
 
 /**
@@ -245,9 +245,11 @@ export async function validateUrl(
   parsed.hash = "";
   const normalized = parsed.toString();
 
-  let ips: string[] = [];
   if (opts.resolveDns) {
-    ips = await resolveAndCheckHost(host);
+    // Validation side effect only — the addresses are deliberately not
+    // returned: no caller pins connections to them, and exposing them
+    // would imply a guarantee the code does not provide.
+    await resolveAndCheckHost(host);
   }
 
   return {
@@ -255,7 +257,6 @@ export async function validateUrl(
     normalized,
     host,
     origin: parsed.origin,
-    ips,
   };
 }
 

@@ -174,16 +174,16 @@ export async function GET(
 <body>
   <main class="container">
     <div class="badge">
-      <span class="badge-dot"></span> Verified Audit
+      <span class="badge-dot"></span> Accessibility Work Record
     </div>
     <h1>Accessibility Statement</h1>
     <p>
       <strong>${companyName}</strong> is committed to ensuring digital accessibility for people with disabilities. We are continually improving the user experience for everyone and applying the relevant accessibility standards.
     </p>
 
-    <h2>Conformance Status</h2>
+    <h2>Assessment Scope</h2>
     <p>
-      This website is <strong>partially conformant</strong> with the <strong>${targetStandard}</strong> accessibility guidelines. Conformance was evaluated using automated accessibility scans and manual auditing workflows.
+      This record summarizes automated scan results and guided manual-review progress against the <strong>${targetStandard}</strong> target. It does not, by itself, determine conformance, certification, or legal compliance.
     </p>
 
     <h2>Audit &amp; Scan Summary</h2>
@@ -200,7 +200,7 @@ export async function GET(
     ${contactText}
 
     <footer class="footer">
-      <span>Verified by <a href="https://percevia-chi.vercel.app" target="_blank">Percevia AI</a></span>
+      <span>Work record generated with <a href="https://percevia-chi.vercel.app" target="_blank">Percevia AI</a></span>
       <span>&copy; ${new Date().getFullYear()}</span>
     </footer>
   </main>

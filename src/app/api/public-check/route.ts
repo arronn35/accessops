@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { NextRequest } from "next/server";
 import { z } from "zod";
 import { ApiError, apiError, rateLimitError } from "@/lib/api/context";
-import { checkRateLimit } from "@/lib/api/rate-limit";
+import { anonymousNetworkKey, checkRateLimit } from "@/lib/api/rate-limit";
 import { publicCheckEnabled } from "@/lib/config";
 import {
   PublicCheckUnavailable,
@@ -12,6 +11,8 @@ import {
   UrlValidationFailed,
   validateUrl,
 } from "@/lib/scanner/url-validation";
+import { recordAnalyticsEvent } from "@/lib/analytics/firestore";
+import { afterResponse } from "@/lib/server/after-response";
 
 const MAX_REQUEST_BYTES = 4_096;
 
@@ -33,7 +34,7 @@ export async function POST(req: NextRequest) {
 
     const rateLimit = await checkRateLimit(
       "publicCheck",
-      anonymousVisitorKey(req.headers),
+      anonymousNetworkKey(req.headers),
       { failureMode: "closed" }
     );
     if (!rateLimit.ok) {
@@ -65,6 +66,10 @@ export async function POST(req: NextRequest) {
     // repeats validation with DNS resolution before every outbound fetch.
     await validateUrl(parsed.data.url, { resolveDns: false });
     const result = await runPublicCheck(parsed.data.url);
+    afterResponse(() => recordAnalyticsEvent(
+      { event: "public_scan_completed", properties: { source: "landing" } },
+      { source: "server" }
+    ));
 
     return Response.json(result, {
       headers: {
@@ -116,19 +121,6 @@ async function readBoundedJson(req: NextRequest): Promise<unknown> {
   } catch {
     return {};
   }
-}
-
-/** Store only a short-lived pseudonymous counter key, never the raw address. */
-function anonymousVisitorKey(headers: Headers): string {
-  const forwarded =
-    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ||
-    headers.get("x-real-ip")?.trim() ||
-    "address-unavailable";
-  const userAgent = headers.get("user-agent")?.slice(0, 256) ?? "agent-unavailable";
-  return createHash("sha256")
-    .update(`${forwarded}\n${userAgent}`)
-    .digest("hex")
-    .slice(0, 32);
 }
 
 function publicCheckError(err: unknown): Response {
